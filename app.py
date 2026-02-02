@@ -12,28 +12,30 @@ st.set_page_config(page_title="熵值法 x Gemini 全自動分析", page_icon="�
 st.title("🤖 熵值法選股 & Gemini 全自動戰略分析")
 st.markdown("### 流程： 1. 自動掃描選股 ➡️ 2. Gemini API 即時撰寫報告")
 
-# --- 0. 設定 Gemini API (從 Streamlit Secrets 讀取) ---
-# 這是為了防止使用者忘記設定 Key 時程式崩潰
+# --- 0. 初始化 Session State (讓程式有記憶力) ---
+if 'analysis_results' not in st.session_state:
+    st.session_state['analysis_results'] = {} # 用來存 AI 報告
+if 'active_stock' not in st.session_state:
+    st.session_state['active_stock'] = None   # 用來記住哪一個選單要打開
+
+# --- 1. 設定 Gemini API ---
 api_key = st.secrets.get("GEMINI_API_KEY")
 
 if not api_key:
     st.error("⚠️ 未偵測到 Gemini API Key！請去 Streamlit Cloud 後台的 Settings -> Secrets 設定 `GEMINI_API_KEY`。")
-    st.stop() # 停止執行後續程式
+    st.stop()
 else:
-    # 設定 Google AI
     genai.configure(api_key=api_key)
 
-# 定義呼叫 Gemini 的函數
 def call_gemini_api(prompt):
     try:
-        # 使用免費且快速的 gemini-1.5-flash 模型
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
         return f"❌ AI 分析失敗，原因：{str(e)}"
 
-# --- 定義分析提示詞 (Prompt) ---
+# --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
 【角色設定】
 你現在是華爾街頂尖的避險基金經理人，同時具備會計學教授的嚴謹度。請針對 **[STOCK]** 進行深度投資分析。
@@ -49,99 +51,73 @@ HEDGE_FUND_PROMPT = """
 6. 總結與實戰建議: 給出空手者「安全買點」與持股者「停利停損點」。風險提示。
 """
 
-# --- 1. 數據與清單處理 ---
+# --- 2. 數據與清單處理 ---
 @st.cache_data
 def get_tw_stock_info():
     codes = twstock.codes
     stock_dict = {} 
     industry_dict = {} 
-    
     for code, info in codes.items():
         if info.type == '股票':
             if info.market == '上市': suffix = '.TW'
             elif info.market == '上櫃': suffix = '.TWO'
             else: continue
-            
             full_code = f"{code}{suffix}"
             name = info.name
             industry = info.group
-            
             stock_dict[full_code] = f"{full_code} {name}"
-            
             if industry not in industry_dict:
                 industry_dict[industry] = []
             industry_dict[industry].append(full_code)
-            
     return stock_dict, industry_dict
 
 stock_map, industry_map = get_tw_stock_info()
 
-# --- 2. 側邊欄：掃描模式選擇 ---
+# --- 3. 側邊欄：掃描模式選擇 ---
 with st.sidebar:
     st.header("🎛️ 掃描控制台")
     scan_mode = st.radio("選股模式：", ["自行輸入/多選", "🔥 熱門策略掃描", "🏭 產業類股掃描"])
-    
     target_stocks = []
     
     if scan_mode == "自行輸入/多選":
         default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
-        selected = st.multiselect(
-            "選擇股票:", 
-            options=sorted(list(stock_map.values())),
-            default=[s for s in default_selection if s in stock_map.values()]
-        )
+        selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
         target_stocks = selected
-        
     elif scan_mode == "🔥 熱門策略掃描":
-        strategy = st.selectbox("選擇策略:", [
-            "台灣50成份股 (大型權值)",
-            "中型100成份股 (成長潛力)",
-            "高股息熱門股 (存股族)",
-            "AI 供應鏈概念",
-            "貨櫃航運三雄"
-        ])
-        
+        strategy = st.selectbox("選擇策略:", ["台灣50成份股 (大型權值)", "中型100成份股 (成長潛力)", "高股息熱門股 (存股族)", "AI 供應鏈概念", "貨櫃航運三雄"])
         if strategy == "台灣50成份股 (大型權值)":
             codes = ["2330", "2454", "2317", "2308", "2382", "2303", "2881", "2882", "2891", "1216", "2002", "1301", "1303", "2603", "3008", "3045", "2912", "5880", "2886", "2892", "2207", "1101", "2357", "2395", "3231", "2379", "3034", "2345", "3711", "2885"]
             target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
-            
         elif strategy == "中型100成份股 (成長潛力)":
             codes = ["2344", "2376", "2383", "2368", "3443", "3661", "3529", "3035", "3037", "3017", "2313", "2324", "2352", "2353", "2356", "2327", "2385", "2408", "2409", "2449", "2451", "2474", "2492", "2498", "2542", "2609", "2610", "2615", "2618"]
             target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
-
         elif strategy == "高股息熱門股 (存股族)":
             codes = ["2301", "2324", "2352", "2356", "2382", "2385", "2449", "2454", "2603", "3034", "3037", "3044", "3231", "3702", "3711", "4915", "4938", "4958", "5388", "5483", "6176", "6239", "8131"]
             target_stocks = []
             for c in codes:
                 if f"{c}.TW" in stock_map: target_stocks.append(stock_map[f"{c}.TW"])
                 elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
-
         elif strategy == "AI 供應鏈概念":
             codes = ["2330", "2317", "2382", "3231", "6669", "3443", "3661", "3035", "2376", "2368", "3017", "2301", "2356", "3037", "2308", "2421", "2454", "3034"]
             target_stocks = []
             for c in codes:
                 if f"{c}.TW" in stock_map: target_stocks.append(stock_map[f"{c}.TW"])
                 elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
-                
         elif strategy == "貨櫃航運三雄":
             target_stocks = ["2603.TW 長榮", "2609.TW 陽明", "2615.TW 萬海"]
-        
         st.success(f"已載入 {len(target_stocks)} 檔成分股")
-
     elif scan_mode == "🏭 產業類股掃描":
         all_industries = sorted(list(industry_map.keys()))
         selected_industry = st.selectbox("選擇產業:", all_industries)
-        
         if selected_industry:
             codes = industry_map[selected_industry]
             target_stocks = [stock_map[c] for c in codes if c in stock_map]
             st.success(f"「{selected_industry}」類股共有 {len(target_stocks)} 檔")
-            if len(target_stocks) > 60:
-                st.warning("⚠️ 數量較多，掃描時間可能較長。")
-
+            if len(target_stocks) > 60: st.warning("⚠️ 數量較多，掃描時間可能較長。")
+    
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
-# --- 3. 指標與函數 ---
+# --- 4. 指標與函數 ---
 indicators_config = {
     'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG (估值成長比)'},
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE'},
@@ -156,63 +132,43 @@ def fetch_single_stock(ticker):
         symbol = ticker.split(' ')[0]
         stock = yf.Ticker(symbol)
         info = stock.info 
-        
         peg = info.get('pegRatio', None)
         pe = info.get('trailingPE', None)
         growth = info.get('revenueGrowth', 0) 
-        
         if peg is None and pe is not None and growth > 0:
             peg = pe / (growth * 100)
-        elif peg is None:
-            peg = 2.5 
-            
+        elif peg is None: peg = 2.5 
         price = info.get('currentPrice', info.get('previousClose', 0))
         ma50 = info.get('fiftyDayAverage', price) 
-        
-        if ma50 and ma50 > 0:
-            bias = (price / ma50) - 1
-        else:
-            bias = 0
-            
+        bias = (price / ma50) - 1 if ma50 and ma50 > 0 else 0
         div = info.get('dividendYield', 0)
-        if div is None: div = 0
-        
         return {
             '代號': symbol.replace(".TW", "").replace(".TWO", ""),
             '名稱': info.get('shortName', symbol),
-            'pegRatio': peg,          
-            'priceToMA60': bias,      
-            'priceToBook': info.get('priceToBook', np.nan),
-            'returnOnEquity': info.get('returnOnEquity', np.nan),
-            'profitMargins': info.get('profitMargins', np.nan),
-            'dividendRate': div
+            'pegRatio': peg, 'priceToMA60': bias, 'priceToBook': info.get('priceToBook', np.nan),
+            'returnOnEquity': info.get('returnOnEquity', np.nan), 'profitMargins': info.get('profitMargins', np.nan),
+            'dividendRate': div if div else 0
         }
-    except:
-        return None
+    except: return None
 
 def get_stock_data_concurrent(selected_list):
     data = []
     progress_bar = st.progress(0, text="正在喚醒 AI 掃描引擎...")
-    max_workers = 8 
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         future_to_ticker = {executor.submit(fetch_single_stock, t): t for t in selected_list}
         completed = 0
         total = len(selected_list)
-        
         for future in concurrent.futures.as_completed(future_to_ticker):
             result = future.result()
             if result: data.append(result)
             completed += 1
             progress_bar.progress(completed / total, text=f"已掃描 {completed}/{total} 檔...")
-            
     return pd.DataFrame(data)
 
 def calculate_entropy_score(df, config):
     df = df.dropna().copy()
     if df.empty: return df, None, "有效數據不足"
     df_norm = df.copy()
-    
     for key, cfg in config.items():
         col = cfg['col']
         mn, mx = df[col].min(), df[col].max()
@@ -221,24 +177,19 @@ def calculate_entropy_score(df, config):
         else:
             if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df[col] - mn) / denom
             else: df_norm[f'{col}_n'] = (mx - df[col]) / denom
-            
     m = len(df)
     k = 1 / np.log(m) if m > 1 else 0
     weights = {}
-    
     for key, cfg in config.items():
         col = cfg['col']
         p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum() if df_norm[f'{col}_n'].sum() != 0 else 0
         e = -k * np.sum(p * np.log(p + 1e-9))
         weights[key] = 1 - e 
-        
     tot = sum(weights.values())
     fin_w = {k: v/tot for k, v in weights.items()}
-    
     df['Score'] = 0
     for key, cfg in config.items():
         df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] 
-    
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None
 
@@ -248,11 +199,9 @@ if run_btn:
         st.warning("⚠️ 請先選擇掃描範圍！")
     else:
         raw = get_stock_data_concurrent(target_stocks)
-        
         if not raw.empty:
             st.markdown("---")
             st.write(f"✅ 成功獲取 **{len(raw)}** 檔有效數據，正在進行熵值運算...")
-            
             res, w, err = calculate_entropy_score(raw, indicators_config)
             
             if err: 
@@ -260,22 +209,15 @@ if run_btn:
             else:
                 top_n = 10
                 st.subheader(f"🏆 掃描結果：前 {top_n} 強潛力股")
-                
                 top_stocks = res.head(top_n)
-                
                 st.dataframe(
                     top_stocks[['名稱', '代號', 'Score', 'pegRatio', 'priceToMA60', 'returnOnEquity', 'profitMargins']]
                     .style.background_gradient(subset=['Score'], cmap='Greens')
-                    .format({
-                        'returnOnEquity': '{:.1%}', 
-                        'profitMargins': '{:.1%}', 
-                        'pegRatio': '{:.2f}',
-                        'priceToMA60': '{:.2%}'
-                    }),
+                    .format({'returnOnEquity': '{:.1%}', 'profitMargins': '{:.1%}', 'pegRatio': '{:.2f}', 'priceToMA60': '{:.2%}'}),
                     use_container_width=True
                 )
                 
-                # --- Gemini AI 整合區 ---
+                # --- Gemini AI 整合區 (修復版) ---
                 st.markdown("---")
                 st.header(f"🤖 Gemini AI 深度分析 (點擊按鈕即時生成)")
                 
@@ -284,23 +226,35 @@ if run_btn:
                     stock_name = f"{row['代號']} {row['名稱']}"
                     final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
                     
-                    with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=(i==0)):
-                        # 左右分欄：左邊顯示提示詞(可選)，右邊按鈕
+                    # 【關鍵修正】決定選單是否要打開
+                    # 邏輯：如果是第1名 OR 這檔股票剛剛被點擊過(有資料)，就保持打開
+                    is_expanded = (i == 0) or (stock_name == st.session_state['active_stock']) or (stock_name in st.session_state['analysis_results'])
+                    
+                    with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=is_expanded):
                         col1, col2 = st.columns([4, 1])
-                        
                         with col1:
-                            st.caption("AI 分析核心指令已準備就緒...")
-                        
+                            # 如果 session_state 已經有報告，直接顯示「已完成」，否則顯示「準備就緒」
+                            if stock_name in st.session_state['analysis_results']:
+                                st.success("✅ 分析報告已生成 (請看下方)")
+                            else:
+                                st.caption("AI 分析核心指令已準備就緒...")
                         with col2:
-                            # 獨立的分析按鈕
                             analyze_btn = st.button(f"✨ AI 分析", key=f"btn_{i}", use_container_width=True)
                         
-                        # 按下按鈕後，呼叫 Gemini
+                        # 按鈕邏輯
                         if analyze_btn:
                             with st.spinner(f"Gemini 正在撰寫 {stock_name} 的避險基金報告..."):
                                 analysis_result = call_gemini_api(final_prompt)
-                                st.markdown("### 📝 AI 分析報告")
-                                st.markdown(analysis_result)
-                                st.success("分析完成！")
+                                # 存入記憶體
+                                st.session_state['analysis_results'][stock_name] = analysis_result
+                                st.session_state['active_stock'] = stock_name
+                                # 強制重整頁面，讓選單保持打開
+                                st.rerun()
+
+                        # 顯示報告 (從記憶體讀取)
+                        if stock_name in st.session_state['analysis_results']:
+                            st.markdown("### 📝 AI 分析報告")
+                            st.markdown(st.session_state['analysis_results'][stock_name])
+                            
         else:
             st.error("無法獲取數據，請稍後再試。")
