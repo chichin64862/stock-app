@@ -81,14 +81,25 @@ with st.expander("🔍 步驟一：建立股票池 (可搜尋)", expanded=True):
     run_btn = st.button("🚀 開始熵值運算", type="primary", use_container_width=True)
 
 # --- 3. 指標設定 ---
+# --- 改良版指標設定 ---
 indicators_config = {
-    'Trailing PE': {'col': 'trailingPE', 'direction': '負向', 'name': '本益比 (PE)'},
-    'Price To Book': {'col': 'priceToBook', 'direction': '負向', 'name': '股價淨值比 (PB)'},
-    'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE'},
+    # 【估值面】不只看便宜，更要看成長性 (PEG < 1 代表低估)
+    # 使用 PEG 替代純 PE，避免選到衰退中的便宜股
+    'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG (估值成長比)'},
+    
+    # 【獲利能力】核心指標，維持不變
+    'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE (股東權益報酬)'},
     'Profit Margins': {'col': 'profitMargins', 'direction': '正向', 'name': '淨利率'},
-    'Revenue Growth': {'col': 'revenueGrowth', 'direction': '正向', 'name': '營收成長'},
-    'Dividend Yield': {'col': 'dividendRate', 'direction': '正向', 'name': '殖利率'},
-    'Debt to Equity': {'col': 'debtToEquity', 'direction': '負向', 'name': '負債比'}
+    
+    # 【技術動能】新增：股價相對於季線(60MA)的乖離率
+    # 正值代表多頭排列，負值代表空頭。這能避免選到正在暴跌的股票。
+    'Price vs MA60': {'col': 'priceToMA60', 'direction': '正向', 'name': '季線乖離率 (動能)'},
+    
+    # 【安全邊際】
+    'Price To Book': {'col': 'priceToBook', 'direction': '負向', 'name': '股價淨值比 (PB)'},
+    
+    # 【現金流/防禦】
+    'Dividend Yield': {'col': 'dividendRate', 'direction': '正向', 'name': '殖利率'}
 }
 
 # --- 核心函數：抓取單一股票 ---
@@ -97,17 +108,37 @@ def fetch_single_stock(ticker):
         stock = yf.Ticker(ticker)
         info = stock.info 
         
+        # 1. 處理 PEG (若抓不到，手動用 PE / Growth 計算，或給一個中位數)
+        peg = info.get('pegRatio', None)
+        pe = info.get('trailingPE', None)
+        growth = info.get('revenueGrowth', 0) # 使用營收成長作為替代成長率
+        
+        # 簡易防呆：如果沒有 PEG 數據，嘗試手動算，還是沒有就設為 2 (不便宜也不貴)
+        if peg is None and pe is not None and growth > 0:
+            peg = pe / (growth * 100)
+        elif peg is None:
+            peg = 2.0 # 預設值，避免報錯
+            
+        # 2. 計算季線乖離率 (Price / 60MA - 1)
+        # yfinance 的 info 有時會有 'fiftyDayAverage'，我們用它近似季線
+        price = info.get('currentPrice', info.get('previousClose', 0))
+        ma50 = info.get('fiftyDayAverage', price)
+        if ma50 and ma50 > 0:
+            bias = (price / ma50) - 1
+        else:
+            bias = 0
+            
         div = info.get('dividendYield', 0)
         if div is None: div = 0
         
         return {
             '代號': ticker.replace(".TW", "").replace(".TWO", ""),
             '名稱': info.get('shortName', ticker),
-            'trailingPE': info.get('trailingPE', np.nan),
+            'pegRatio': peg,  # 新指標
+            'priceToMA60': bias, # 新指標
             'priceToBook': info.get('priceToBook', np.nan),
             'returnOnEquity': info.get('returnOnEquity', np.nan),
             'profitMargins': info.get('profitMargins', np.nan),
-            'revenueGrowth': info.get('revenueGrowth', np.nan),
             'dividendRate': div,
             'debtToEquity': info.get('debtToEquity', np.nan)
         }
@@ -219,3 +250,4 @@ if run_btn:
 
         else:
             st.error("無法獲取數據，請稍後再試。")
+
