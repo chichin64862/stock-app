@@ -151,5 +151,4 @@ if run_btn:
                         w_df = pd.DataFrame([{'指標':v['name'], '權重':w[k]} for k,v in indicators_config.items()])
                         st.plotly_chart(px.pie(w_df, values='權重', names='指標'), use_container_width=True)
             else:
-
                 st.error("無法獲取數據")
