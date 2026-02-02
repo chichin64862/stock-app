@@ -81,7 +81,6 @@ with st.expander("🔍 步驟一：建立股票池 (可搜尋)", expanded=True):
     run_btn = st.button("🚀 開始熵值運算 (改良版)", type="primary", use_container_width=True)
 
 # --- 3. 教授級改良版指標設定 ---
-# 移除單純 PE 與 營收成長(避免極端值)，加入 PEG 與 技術面動能
 indicators_config = {
     'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG (估值成長比)'},
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE (股東權益報酬)'},
@@ -97,23 +96,19 @@ def fetch_single_stock(ticker):
         stock = yf.Ticker(ticker)
         info = stock.info 
         
-        # 1. 處理 PEG (若抓不到，手動用 PE / Growth 計算)
         peg = info.get('pegRatio', None)
         pe = info.get('trailingPE', None)
-        # 取得營收成長率 (轉成百分比小數)
         growth = info.get('revenueGrowth', 0) 
         
         # 簡易防呆：如果沒有 PEG 數據，嘗試手動算
         if peg is None and pe is not None and growth > 0:
             peg = pe / (growth * 100)
         elif peg is None:
-            # 如果真的算不出來，給予一個中性懲罰值 (例如 2.5)，避免它因為是 0 而變成第一名
             peg = 2.5 
             
-        # 2. 計算季線乖離率 (Price / 60MA - 1)
-        # yfinance 的 info 有時會有 'fiftyDayAverage'，我們用它近似季線 (約 60 日)
+        # 計算季線乖離率
         price = info.get('currentPrice', info.get('previousClose', 0))
-        ma50 = info.get('fiftyDayAverage', price) # 若抓不到就用現價代替(乖離率=0)
+        ma50 = info.get('fiftyDayAverage', price) 
         
         if ma50 and ma50 > 0:
             bias = (price / ma50) - 1
@@ -126,8 +121,8 @@ def fetch_single_stock(ticker):
         return {
             '代號': ticker.replace(".TW", "").replace(".TWO", ""),
             '名稱': info.get('shortName', ticker),
-            'pegRatio': peg,          # 新指標
-            'priceToMA60': bias,      # 新指標
+            'pegRatio': peg,          
+            'priceToMA60': bias,      
             'priceToBook': info.get('priceToBook', np.nan),
             'returnOnEquity': info.get('returnOnEquity', np.nan),
             'profitMargins': info.get('profitMargins', np.nan),
@@ -162,7 +157,6 @@ def calculate_entropy_score(df, config):
     # 1. 標準化
     for key, cfg in config.items():
         col = cfg['col']
-        # 針對 PEG 或 PE 若為負值或異常大值的簡單處理 (這裡先維持線性標準化)
         mn, mx = df[col].min(), df[col].max()
         denom = mx - mn
         if denom == 0: df_norm[f'{col}_n'] = 0.5
@@ -204,7 +198,7 @@ if run_btn:
             if err: 
                 st.error(err)
             else:
-                # 2. 顯示排名表 (完整顯示)
+                # 2. 顯示排名表
                 st.markdown("---")
                 col_res, col_chart = st.columns([2, 1])
                 
@@ -233,13 +227,14 @@ if run_btn:
                 st.header("🤖 步驟二：AI 深度分析指令 (完整清單)")
                 st.info("👇 點擊下方的「複製按鈕」，直接貼給 ChatGPT / Gemini / Claude 進行分析！")
 
-                for index, row in res.iterrows():
+                # 【修正點】改用 enumerate 強制重新編號 (1, 2, 3...)，不再被原始索引干擾
+                for i, (index, row) in enumerate(res.iterrows()):
                     stock_name = f"{row['代號']} {row['名稱']}"
                     final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
                     
-                    # 第一名預設展開
-                    with st.expander(f"🏆 第 {index+1} 名：{stock_name} (分數: {row['Score']})", expanded=(index==0)):
-                        st.text_area(f"給 AI 的指令 ({stock_name})", value=final_prompt, height=200, key=f"p_{index}")
+                    # 現在這裡會顯示：第 1 名、第 2 名... (i+1)
+                    with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=(i==0)):
+                        st.text_area(f"給 AI 的指令 ({stock_name})", value=final_prompt, height=200, key=f"p_{i}")
                         st.markdown(f"**建議指令：** 複製上方內容，發送給 AI 即可獲得避險基金級報告。")
 
         else:
