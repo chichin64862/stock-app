@@ -5,3 +5,4 @@ numpy
 plotly
 twstock
 lxml
+matplotlib
