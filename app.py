@@ -14,9 +14,11 @@ st.markdown("### 流程： 1. 自動掃描選股 ➡️ 2. Gemini API 即時撰�
 
 # --- 0. 初始化 Session State (讓程式有記憶力) ---
 if 'analysis_results' not in st.session_state:
-    st.session_state['analysis_results'] = {} # 用來存 AI 報告
-if 'active_stock' not in st.session_state:
-    st.session_state['active_stock'] = None   # 用來記住哪一個選單要打開
+    st.session_state['analysis_results'] = {} # 存 AI 報告 {股票名: 報告內容}
+if 'raw_data' not in st.session_state:
+    st.session_state['raw_data'] = None       # 存抓到的股票數據 (避免重跑消失)
+if 'scan_finished' not in st.session_state:
+    st.session_state['scan_finished'] = False # 紀錄是否掃描過
 
 # --- 1. 設定 Gemini API ---
 api_key = st.secrets.get("GEMINI_API_KEY")
@@ -115,7 +117,11 @@ with st.sidebar:
             st.success(f"「{selected_industry}」類股共有 {len(target_stocks)} 檔")
             if len(target_stocks) > 60: st.warning("⚠️ 數量較多，掃描時間可能較長。")
     
-    run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
+    # 這裡的按鈕只負責「觸發數據下載」，不負責顯示
+    if st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True):
+        st.session_state['scan_finished'] = False # 重置
+        st.session_state['raw_data'] = None       # 清空舊資料
+        st.session_state['analysis_results'] = {} # 清空舊報告
 
 # --- 4. 指標與函數 ---
 indicators_config = {
@@ -193,68 +199,72 @@ def calculate_entropy_score(df, config):
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None
 
-# --- 主執行區 ---
-if run_btn:
-    if not target_stocks:
-        st.warning("⚠️ 請先選擇掃描範圍！")
-    else:
-        raw = get_stock_data_concurrent(target_stocks)
-        if not raw.empty:
-            st.markdown("---")
-            st.write(f"✅ 成功獲取 **{len(raw)}** 檔有效數據，正在進行熵值運算...")
-            res, w, err = calculate_entropy_score(raw, indicators_config)
-            
-            if err: 
-                st.error(err)
-            else:
-                top_n = 10
-                st.subheader(f"🏆 掃描結果：前 {top_n} 強潛力股")
-                top_stocks = res.head(top_n)
-                st.dataframe(
-                    top_stocks[['名稱', '代號', 'Score', 'pegRatio', 'priceToMA60', 'returnOnEquity', 'profitMargins']]
-                    .style.background_gradient(subset=['Score'], cmap='Greens')
-                    .format({'returnOnEquity': '{:.1%}', 'profitMargins': '{:.1%}', 'pegRatio': '{:.2f}', 'priceToMA60': '{:.2%}'}),
-                    use_container_width=True
-                )
-                
-                # --- Gemini AI 整合區 (修復版) ---
-                st.markdown("---")
-                st.header(f"🤖 Gemini AI 深度分析 (點擊按鈕即時生成)")
-                
-                # 遍歷前 10 名
-                for i, (index, row) in enumerate(top_stocks.iterrows()):
-                    stock_name = f"{row['代號']} {row['名稱']}"
-                    final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
-                    
-                    # 【關鍵修正】決定選單是否要打開
-                    # 邏輯：如果是第1名 OR 這檔股票剛剛被點擊過(有資料)，就保持打開
-                    is_expanded = (i == 0) or (stock_name == st.session_state['active_stock']) or (stock_name in st.session_state['analysis_results'])
-                    
-                    with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=is_expanded):
-                        col1, col2 = st.columns([4, 1])
-                        with col1:
-                            # 如果 session_state 已經有報告，直接顯示「已完成」，否則顯示「準備就緒」
-                            if stock_name in st.session_state['analysis_results']:
-                                st.success("✅ 分析報告已生成 (請看下方)")
-                            else:
-                                st.caption("AI 分析核心指令已準備就緒...")
-                        with col2:
-                            analyze_btn = st.button(f"✨ AI 分析", key=f"btn_{i}", use_container_width=True)
-                        
-                        # 按鈕邏輯
-                        if analyze_btn:
-                            with st.spinner(f"Gemini 正在撰寫 {stock_name} 的避險基金報告..."):
-                                analysis_result = call_gemini_api(final_prompt)
-                                # 存入記憶體
-                                st.session_state['analysis_results'][stock_name] = analysis_result
-                                st.session_state['active_stock'] = stock_name
-                                # 強制重整頁面，讓選單保持打開
-                                st.rerun()
+# --- 主執行區 (邏輯重構) ---
 
-                        # 顯示報告 (從記憶體讀取)
-                        if stock_name in st.session_state['analysis_results']:
-                            st.markdown("### 📝 AI 分析報告")
-                            st.markdown(st.session_state['analysis_results'][stock_name])
-                            
-        else:
-            st.error("無法獲取數據，請稍後再試。")
+# 1. 如果資料還沒抓，或是使用者剛按了「掃描」按鈕
+if st.session_state['raw_data'] is None and target_stocks:
+    # 這裡只會執行一次
+    raw = get_stock_data_concurrent(target_stocks)
+    if not raw.empty:
+        st.session_state['raw_data'] = raw # 存入記憶體
+        st.session_state['scan_finished'] = True
+        st.rerun() # 強制重整，進入下方顯示邏輯
+
+# 2. 如果資料已經在記憶體中，直接顯示
+if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
+    raw = st.session_state['raw_data']
+    st.markdown("---")
+    
+    res, w, err = calculate_entropy_score(raw, indicators_config)
+    
+    if err: 
+        st.error(err)
+    else:
+        top_n = 10
+        st.subheader(f"🏆 掃描結果：前 {top_n} 強潛力股")
+        top_stocks = res.head(top_n)
+        st.dataframe(
+            top_stocks[['名稱', '代號', 'Score', 'pegRatio', 'priceToMA60', 'returnOnEquity', 'profitMargins']]
+            .style.background_gradient(subset=['Score'], cmap='Greens')
+            .format({'returnOnEquity': '{:.1%}', 'profitMargins': '{:.1%}', 'pegRatio': '{:.2f}', 'priceToMA60': '{:.2%}'}),
+            use_container_width=True
+        )
+        
+        # --- Gemini AI 整合區 ---
+        st.markdown("---")
+        st.header(f"🤖 Gemini AI 深度分析 (點擊按鈕即時生成)")
+        
+        # 遍歷前 10 名
+        for i, (index, row) in enumerate(top_stocks.iterrows()):
+            stock_name = f"{row['代號']} {row['名稱']}"
+            final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
+            
+            # 使用 callback 函數來處理按鈕點擊，保證資料寫入 session_state
+            def analyze_callback(s_name=stock_name, prompt=final_prompt):
+                # 執行分析
+                result = call_gemini_api(prompt)
+                # 寫入記憶體
+                st.session_state['analysis_results'][s_name] = result
+            
+            # 判斷是否要展開：如果是第1名，或者該股票已經有報告了，就展開
+            is_expanded = (i==0) or (stock_name in st.session_state['analysis_results'])
+            
+            with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=is_expanded):
+                col1, col2 = st.columns([4, 1])
+                
+                with col1:
+                    if stock_name in st.session_state['analysis_results']:
+                        st.success("✅ 分析報告已生成")
+                    else:
+                        st.caption("AI 分析核心指令已準備就緒...")
+                        
+                with col2:
+                    # 當按鈕被按下時，執行 callback
+                    st.button(f"✨ AI 分析", key=f"btn_{i}", on_click=analyze_callback, use_container_width=True)
+
+                # 顯示報告區域 (從記憶體讀取)
+                if stock_name in st.session_state['analysis_results']:
+                    st.markdown("### 📝 AI 分析報告")
+                    st.markdown(st.session_state['analysis_results'][stock_name])
+elif not target_stocks:
+    st.info("👈 請從左側側邊欄選擇掃描模式與股票，然後點擊「啟動全自動掃描」。")
