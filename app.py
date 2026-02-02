@@ -30,37 +30,37 @@ if not api_key:
 else:
     genai.configure(api_key=api_key)
 
-# 【核心優化】參考 main_app.py 的模型鏈策略 (僅保留 1.5 穩定版)
+# 【核心優化】除錯模式：顯示每個模型的失敗原因
 def call_gemini_api(prompt):
-    # 定義模型優先順序清單 (Model Chain)
-    # 我們只使用目前 Google 官方支援度最高的 1.5 系列，剔除會報錯的 pro (1.0) 和 exp (實驗版)
+    # 只使用最標準的兩個模型，確保相容性
     model_chain = [
-        'gemini-1.5-flash',      # 首選：速度快、免費額度最高 (Google 建議預設)
-        'gemini-1.5-pro',        # 次選：能力強，若 Flash 忙碌或失敗時接手
-        'gemini-1.5-flash-002'   # 備援：Flash 的更新版本
+        'gemini-1.5-flash',      # 首選：速度快、免費額度最高
+        'gemini-1.5-pro',        # 次選：能力強
     ]
     
-    last_error = None
+    error_log = [] # 用來記錄每個模型的錯誤
     
     for model_name in model_chain:
         try:
             # 嘗試建立模型
             model = genai.GenerativeModel(model_name)
-            # 呼叫生成 (加入 retry 機制避免瞬間網路問題)
+            # 呼叫生成
             response = model.generate_content(prompt)
             
             # 若成功則回傳
             return response.text
             
         except Exception as e:
-            # 記錄錯誤 (可在後台 log 查看)，並嘗試下一個模型
-            print(f"⚠️ Model {model_name} failed: {e}")
-            last_error = e
-            time.sleep(1) # 稍微暫停一下再試下一個
+            # 記錄詳細錯誤原因
+            error_msg = str(e)
+            error_log.append(f"❌ {model_name}: {error_msg}")
+            print(f"Model {model_name} failed: {error_msg}")
+            time.sleep(1) # 暫停一秒再試
             continue
             
-    # 如果全部失敗，回傳詳細錯誤供除錯
-    return f"❌ AI 分析失敗 (已嘗試 1.5-flash 與 1.5-pro)。\n原因：{str(last_error)}\n請檢查 API Key 是否正確或額度是否已滿。"
+    # 如果全部失敗，回傳完整的錯誤日誌給使用者看
+    all_errors = "\n".join(error_log)
+    return f"⚠️ 分析失敗，請檢查以下錯誤訊息：\n\n{all_errors}\n\n(常見原因：API Key 無效、Google Cloud 專案未啟用 API、或免費額度已達上限 429 Resource Exhausted)"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
