@@ -30,34 +30,14 @@ if not api_key:
 else:
     genai.configure(api_key=api_key)
 
-# 【核心優化】穩定版模型鏈策略 (移除實驗版)
 def call_gemini_api(prompt):
-    # 定義模型優先順序清單 (只保留穩定版)
-    model_chain = [
-        'gemini-1.5-flash',     # 首選：速度快、且是目前預設的免費版主力
-        'gemini-1.5-pro',       # 次選：邏輯強，若 Flash 失敗則嘗試這個
-        'gemini-pro'            # 保底：最舊但最穩定的 1.0 版本
-    ]
-    
-    last_error = None
-    
-    for model_name in model_chain:
-        try:
-            # 嘗試建立模型並生成內容
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            
-            # 成功則回傳
-            return response.text
-            
-        except Exception as e:
-            # 記錄錯誤，繼續嘗試下一個
-            print(f"Model {model_name} failed: {e}")
-            last_error = e
-            continue
-            
-    # 如果全部失敗
-    return f"❌ AI 分析失敗。已嘗試 gemini-1.5-flash 與 gemini-pro 皆無回應。\n原因：{str(last_error)}"
+    try:
+        # 【修正重點】改用最穩定的 'gemini-pro' 模型，解決 404 錯誤
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"❌ AI 分析失敗，原因：{str(e)}"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
@@ -139,6 +119,7 @@ with st.sidebar:
             st.success(f"「{selected_industry}」類股共有 {len(target_stocks)} 檔")
             if len(target_stocks) > 60: st.warning("⚠️ 數量較多，掃描時間可能較長。")
     
+    # 這裡的按鈕只負責「觸發數據下載」
     if st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False 
         st.session_state['raw_data'] = None      
