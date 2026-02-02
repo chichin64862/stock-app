@@ -37,8 +37,7 @@ def call_gemini_api(prompt):
     model_chain = [
         'gemini-1.5-pro',       # 第一順位：邏輯最強，最適合寫深度報告
         'gemini-1.5-flash',     # 第二順位：速度快，如果 Pro 掛了就用這個
-        'gemini-2.0-flash-exp', # 第三順位：Google 最新實驗版
-        'gemini-pro'            # 第四順位：舊版保底
+        'gemini-2.0-flash-exp'  # 第三順位：Google 最新實驗版
     ]
     
     last_error = None
