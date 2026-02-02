@@ -30,31 +30,33 @@ if not api_key:
 else:
     genai.configure(api_key=api_key)
 
-# 【核心優化】導入 main_app.py 的模型鏈策略
+# 【核心優化】導入 main_app.py 的模型鏈策略 (Model Chain Strategy)
 def call_gemini_api(prompt):
-    # 定義模型優先順序清單 (Model Chain)
-    # 策略：優先使用強大模型 -> 失敗則轉用快速模型 -> 最後用舊版穩定模型
+    # 定義模型優先順序清單
+    # 參考您的事故調查程式，我們依序嘗試這些模型，直到成功為止
     model_chain = [
-        'gemini-1.5-pro',       # 優點：邏輯最強，適合深度分析
-        'gemini-1.5-flash',     # 優點：速度最快，省 Token
-        'gemini-1.0-pro',       # 優點：最穩定 (即 gemini-pro)
+        'gemini-1.5-pro',       # 第一順位：邏輯最強，最適合寫深度報告
+        'gemini-1.5-flash',     # 第二順位：速度快，如果 Pro 掛了就用這個
+        'gemini-2.0-flash-exp', # 第三順位：Google 最新實驗版
+        'gemini-pro'            # 第四順位：舊版保底
     ]
     
     last_error = None
     
     for model_name in model_chain:
         try:
-            # 嘗試建立模型
+            # 嘗試建立模型並生成內容
             model = genai.GenerativeModel(model_name)
-            # 生成內容
             response = model.generate_content(prompt)
             
-            # 如果成功，回傳結果 (並可選擇性提示使用者目前用哪個模型)
-            # st.toast(f"已使用 {model_name} 完成分析", icon="⚡") 
+            # 如果成功，直接回傳結果，並跳出迴圈
+            # (可選) 可以在後台印出成功使用的模型
+            print(f"Success with model: {model_name}") 
             return response.text
             
         except Exception as e:
             # 記錄錯誤，並讓迴圈繼續嘗試下一個模型
+            print(f"Model {model_name} failed: {e}")
             last_error = e
             continue
             
