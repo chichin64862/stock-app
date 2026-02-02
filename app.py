@@ -5,21 +5,42 @@ import numpy as np
 import plotly.express as px
 import twstock
 import concurrent.futures
-import time
+import google.generativeai as genai
 
 # --- 介面設定 ---
-st.set_page_config(page_title="熵值法全自動掃描", page_icon="📡", layout="wide", initial_sidebar_state="expanded")
-st.title("📡 熵值法全自動選股系統 (類股/策略掃描)")
-st.markdown("### 不需輸入代號，選擇「板塊」即可自動找出該族群最強潛力股！")
+st.set_page_config(page_title="熵值法 x Gemini 全自動分析", page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
+st.title("🤖 熵值法選股 & Gemini 全自動戰略分析")
+st.markdown("### 流程： 1. 自動掃描選股 ➡️ 2. Gemini API 即時撰寫報告")
 
-# --- 0. 定義分析提示詞 ---
+# --- 0. 設定 Gemini API (從 Streamlit Secrets 讀取) ---
+# 這是為了防止使用者忘記設定 Key 時程式崩潰
+api_key = st.secrets.get("GEMINI_API_KEY")
+
+if not api_key:
+    st.error("⚠️ 未偵測到 Gemini API Key！請去 Streamlit Cloud 後台的 Settings -> Secrets 設定 `GEMINI_API_KEY`。")
+    st.stop() # 停止執行後續程式
+else:
+    # 設定 Google AI
+    genai.configure(api_key=api_key)
+
+# 定義呼叫 Gemini 的函數
+def call_gemini_api(prompt):
+    try:
+        # 使用免費且快速的 gemini-1.5-flash 模型
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"❌ AI 分析失敗，原因：{str(e)}"
+
+# --- 定義分析提示詞 (Prompt) ---
 HEDGE_FUND_PROMPT = """
 【角色設定】
 你現在是華爾街頂尖的避險基金經理人，同時具備會計學教授的嚴謹度。請針對 **[STOCK]** 進行深度投資分析。
 
 【分析維度】
 1. 產業護城河與前景 (Industry & Moat): 預測未來 6-12 個月供需。比較同業優劣。
-2. 籌碼面深度解讀 (Chip Analysis): 外資投信動向、融資融券變化。
+2. 籌碼面深度解讀 (Chip Analysis): 外資投信動向、融資融券變化(若無具體數據請根據股價型態推論)。
 3. 技術面狙擊 (Technical Analysis): 季線乖離率(MA60)、KD/MACD 背離、成交量結構。
 4. 財務基本面 (Fundamental): 合約負債變化、營運現金流vs淨利、三率趨勢、存貨週轉。
 5. 估值 (Valuation): 本益比/股價淨值比歷史區間、PEG 評估。
@@ -31,10 +52,9 @@ HEDGE_FUND_PROMPT = """
 # --- 1. 數據與清單處理 ---
 @st.cache_data
 def get_tw_stock_info():
-    """建立台股代號與產業分類的字典"""
     codes = twstock.codes
-    stock_dict = {} # 代號 -> 名稱
-    industry_dict = {} # 產業 -> [代號清單]
+    stock_dict = {} 
+    industry_dict = {} 
     
     for code, info in codes.items():
         if info.type == '股票':
@@ -59,13 +79,12 @@ stock_map, industry_map = get_tw_stock_info()
 # --- 2. 側邊欄：掃描模式選擇 ---
 with st.sidebar:
     st.header("🎛️ 掃描控制台")
-    scan_mode = st.radio("請選擇選股模式：", ["自行輸入/多選", "🔥 熱門策略掃描", "🏭 產業類股掃描"])
+    scan_mode = st.radio("選股模式：", ["自行輸入/多選", "🔥 熱門策略掃描", "🏭 產業類股掃描"])
     
     target_stocks = []
     
     if scan_mode == "自行輸入/多選":
-        st.info("適合已有關注名單，想進行排名比較的投資人。")
-        default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海", "2603.TW 長榮"]
+        default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
         selected = st.multiselect(
             "選擇股票:", 
             options=sorted(list(stock_map.values())),
@@ -74,25 +93,22 @@ with st.sidebar:
         target_stocks = selected
         
     elif scan_mode == "🔥 熱門策略掃描":
-        st.info("針對特定主題進行全自動篩選。")
         strategy = st.selectbox("選擇策略:", [
             "台灣50成份股 (大型權值)",
             "中型100成份股 (成長潛力)",
             "高股息熱門股 (存股族)",
-            "AI 供應鏈概念 (自訂)",
+            "AI 供應鏈概念",
             "貨櫃航運三雄"
         ])
         
-        # 這裡預先定義好一些熱門 ETF 或概念股清單 (可隨時擴充)
         if strategy == "台灣50成份股 (大型權值)":
-            # 範例清單，實務上可透過爬蟲更新，這裡列出部分代表
             codes = ["2330", "2454", "2317", "2308", "2382", "2303", "2881", "2882", "2891", "1216", "2002", "1301", "1303", "2603", "3008", "3045", "2912", "5880", "2886", "2892", "2207", "1101", "2357", "2395", "3231", "2379", "3034", "2345", "3711", "2885"]
             target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
             
         elif strategy == "中型100成份股 (成長潛力)":
             codes = ["2344", "2376", "2383", "2368", "3443", "3661", "3529", "3035", "3037", "3017", "2313", "2324", "2352", "2353", "2356", "2327", "2385", "2408", "2409", "2449", "2451", "2474", "2492", "2498", "2542", "2609", "2610", "2615", "2618"]
             target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
-            
+
         elif strategy == "高股息熱門股 (存股族)":
             codes = ["2301", "2324", "2352", "2356", "2382", "2385", "2449", "2454", "2603", "3034", "3037", "3044", "3231", "3702", "3711", "4915", "4938", "4958", "5388", "5483", "6176", "6239", "8131"]
             target_stocks = []
@@ -100,7 +116,7 @@ with st.sidebar:
                 if f"{c}.TW" in stock_map: target_stocks.append(stock_map[f"{c}.TW"])
                 elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
 
-        elif strategy == "AI 供應鏈概念 (自訂)":
+        elif strategy == "AI 供應鏈概念":
             codes = ["2330", "2317", "2382", "3231", "6669", "3443", "3661", "3035", "2376", "2368", "3017", "2301", "2356", "3037", "2308", "2421", "2454", "3034"]
             target_stocks = []
             for c in codes:
@@ -109,27 +125,23 @@ with st.sidebar:
                 
         elif strategy == "貨櫃航運三雄":
             target_stocks = ["2603.TW 長榮", "2609.TW 陽明", "2615.TW 萬海"]
-
+        
         st.success(f"已載入 {len(target_stocks)} 檔成分股")
 
     elif scan_mode == "🏭 產業類股掃描":
-        st.info("選擇特定產業，掃描該產業所有股票。")
         all_industries = sorted(list(industry_map.keys()))
         selected_industry = st.selectbox("選擇產業:", all_industries)
         
-        # 取得該產業所有股票代號
         if selected_industry:
             codes = industry_map[selected_industry]
-            # 限制數量以免超時 (例如只取前 50 檔，或全部)
             target_stocks = [stock_map[c] for c in codes if c in stock_map]
             st.success(f"「{selected_industry}」類股共有 {len(target_stocks)} 檔")
-            
             if len(target_stocks) > 60:
-                st.warning("⚠️ 股票數量較多，掃描時間可能超過 1 分鐘，請耐心等待。")
+                st.warning("⚠️ 數量較多，掃描時間可能較長。")
 
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
-# --- 3. 指標與函數 (維持教授改良版) ---
+# --- 3. 指標與函數 ---
 indicators_config = {
     'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG (估值成長比)'},
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE'},
@@ -141,7 +153,6 @@ indicators_config = {
 
 def fetch_single_stock(ticker):
     try:
-        # 只取代號部分
         symbol = ticker.split(' ')[0]
         stock = yf.Ticker(symbol)
         info = stock.info 
@@ -180,13 +191,8 @@ def fetch_single_stock(ticker):
         return None
 
 def get_stock_data_concurrent(selected_list):
-    # 如果是從 stock_map 來的，格式是 "2330.TW 台積電"，如果是代號列表則需要處理
     data = []
-    
-    # 進度條
     progress_bar = st.progress(0, text="正在喚醒 AI 掃描引擎...")
-    
-    # 限制最大並發數，避免被 Yahoo 封鎖
     max_workers = 8 
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -241,7 +247,6 @@ if run_btn:
     if not target_stocks:
         st.warning("⚠️ 請先選擇掃描範圍！")
     else:
-        # 1. 執行掃描
         raw = get_stock_data_concurrent(target_stocks)
         
         if not raw.empty:
@@ -253,7 +258,6 @@ if run_btn:
             if err: 
                 st.error(err)
             else:
-                # 只取前 10 名顯示，避免版面太亂 (但可保留完整資料)
                 top_n = 10
                 st.subheader(f"🏆 掃描結果：前 {top_n} 強潛力股")
                 
@@ -271,15 +275,32 @@ if run_btn:
                     use_container_width=True
                 )
                 
-                # 3. 生成 AI 指令
+                # --- Gemini AI 整合區 ---
                 st.markdown("---")
-                st.header(f"🤖 AI 深度分析指令 (Top {top_n})")
+                st.header(f"🤖 Gemini AI 深度分析 (點擊按鈕即時生成)")
                 
+                # 遍歷前 10 名
                 for i, (index, row) in enumerate(top_stocks.iterrows()):
                     stock_name = f"{row['代號']} {row['名稱']}"
                     final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
                     
                     with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=(i==0)):
-                        st.text_area(f"指令 ({stock_name})", value=final_prompt, height=150, key=f"p_{i}")
+                        # 左右分欄：左邊顯示提示詞(可選)，右邊按鈕
+                        col1, col2 = st.columns([4, 1])
+                        
+                        with col1:
+                            st.caption("AI 分析核心指令已準備就緒...")
+                        
+                        with col2:
+                            # 獨立的分析按鈕
+                            analyze_btn = st.button(f"✨ AI 分析", key=f"btn_{i}", use_container_width=True)
+                        
+                        # 按下按鈕後，呼叫 Gemini
+                        if analyze_btn:
+                            with st.spinner(f"Gemini 正在撰寫 {stock_name} 的避險基金報告..."):
+                                analysis_result = call_gemini_api(final_prompt)
+                                st.markdown("### 📝 AI 分析報告")
+                                st.markdown(analysis_result)
+                                st.success("分析完成！")
         else:
-            st.error("無法獲取數據，可能是網路問題或 Yahoo 暫時阻擋，請稍後再試。")
+            st.error("無法獲取數據，請稍後再試。")
