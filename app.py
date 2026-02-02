@@ -5,108 +5,156 @@ import numpy as np
 import plotly.express as px
 import twstock
 import concurrent.futures
+import time
 
 # --- 介面設定 ---
-st.set_page_config(page_title="熵值法選股 x AI深度分析 (教授改良版)", page_icon="🎓", layout="wide", initial_sidebar_state="collapsed")
-st.title("🎓 熵值法智能選股 & AI 戰略分析 (教授改良版)")
-st.markdown("### 核心邏輯： 1. 量化數據篩選 (PEG + 動能) ➡️ 2. 生成避險基金級提示詞")
+st.set_page_config(page_title="熵值法全自動掃描", page_icon="📡", layout="wide", initial_sidebar_state="expanded")
+st.title("📡 熵值法全自動選股系統 (類股/策略掃描)")
+st.markdown("### 不需輸入代號，選擇「板塊」即可自動找出該族群最強潛力股！")
 
-# --- 0. 定義您的超級提示詞模板 ---
+# --- 0. 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
 【角色設定】
-你現在是華爾街頂尖的避險基金經理人，同時具備會計學教授的嚴謹度。請針對 **[STOCK]** 進行深度投資分析。請注意，我不想要模糊的建議，我需要數據支撐的邏輯推演。
+你現在是華爾街頂尖的避險基金經理人，同時具備會計學教授的嚴謹度。請針對 **[STOCK]** 進行深度投資分析。
 
 【分析維度】
-請依序進行以下面向的分析，若需要最新數據請進行聯網搜索：
+1. 產業護城河與前景 (Industry & Moat): 預測未來 6-12 個月供需。比較同業優劣。
+2. 籌碼面深度解讀 (Chip Analysis): 外資投信動向、融資融券變化。
+3. 技術面狙擊 (Technical Analysis): 季線乖離率(MA60)、KD/MACD 背離、成交量結構。
+4. 財務基本面 (Fundamental): 合約負債變化、營運現金流vs淨利、三率趨勢、存貨週轉。
+5. 估值 (Valuation): 本益比/股價淨值比歷史區間、PEG 評估。
 
-1. 產業護城河與前景 (Industry & Moat):
-綜合最新的大摩、小摩、高盛或台灣本土券商(如富邦、凱基)研究報告，預測該產業未來 6-12 個月的供需狀況。
-同業比較 (關鍵)： 比較該公司與同產業競爭對手（列舉 1-2 家）的優劣勢。
-
-2. 籌碼面深度解讀 (Chip Analysis) - 台股極重要:
-法人動向： 近期外資與投信（Investment Trust）是連續買超還是賣超？是否有「土洋對作」的情況？
-散戶指標： 分析「融資餘額」變化（散戶是否套牢）與「借券賣出餘額」（空軍是否回補）。
-大戶持股： 若有數據，請簡述 400 張或 1000 張以上大戶持股比例的趨勢。
-
-3. 技術面狙擊 (Technical Analysis):
-趨勢判讀： 結合 K 線型態與均線排列（特別關注季線與月線的乖離率 BIAS）。
-關鍵指標：
-KD & MACD： 判斷目前是處於背離、鈍化還是黃金/死亡交叉階段？
-布林通道： 目前股價位於通道的哪個位置？帶寬 (Bandwidth) 是在壓縮準備變盤，還是已經發散？
-成交量結構： 是否出現「價漲量增」的攻擊量，或是「價跌量增」的出貨量？
-
-4. 財務基本面 (Fundamental Deep Dive):
-領先指標 - 合約負債： 檢視最新財報「合約負債」或「預收款項」，與 YoY 及 QoQ 相比的變化。
-獲利品質： 檢視「營業現金流」是否大於「稅後淨利」？
-三率分析： 毛利率、營益率、淨利率的近三季趨勢是向上還是向下？
-存貨狀況： 存貨週轉天數是否異常增加？
-
-5. 估值與合理價 (Valuation):
-歷史位階： 比較目前的本益比 (PE) 與股價淨值比 (PB) 處於過去 5 年的哪個區間？
-PEG 修正： 若為成長股，請評估 PEG (PE / 預估EPS成長率)，PEG < 1 為低估。
-
-【綜合決策與行動指南】
-6. 綜合評述 (Executive Summary):
-請用一段話總結該股目前的多空力道對比。
-
-7. 實戰操作建議 (Action Plan):
-情境 A (空手者)： 若目前想進場，建議的「安全買點」區間在哪裡？(需具體說明回測哪條均線或技術指標位置)
-情境 B (持股者)： 建議的「停利點」或「停損點」應設在哪個技術關卡？
-風險提示： 未來 3 個月最大的下檔風險是什麼？
+【綜合決策】
+6. 總結與實戰建議: 給出空手者「安全買點」與持股者「停利停損點」。風險提示。
 """
 
-# --- 1. 自動建立台股清單 ---
+# --- 1. 數據與清單處理 ---
 @st.cache_data
-def get_tw_stock_list():
+def get_tw_stock_info():
+    """建立台股代號與產業分類的字典"""
     codes = twstock.codes
-    stock_list = []
+    stock_dict = {} # 代號 -> 名稱
+    industry_dict = {} # 產業 -> [代號清單]
+    
     for code, info in codes.items():
         if info.type == '股票':
             if info.market == '上市': suffix = '.TW'
             elif info.market == '上櫃': suffix = '.TWO'
             else: continue
-            stock_list.append(f"{code}{suffix} {info.name}")
-    return sorted(stock_list)
+            
+            full_code = f"{code}{suffix}"
+            name = info.name
+            industry = info.group
+            
+            stock_dict[full_code] = f"{full_code} {name}"
+            
+            if industry not in industry_dict:
+                industry_dict[industry] = []
+            industry_dict[industry].append(full_code)
+            
+    return stock_dict, industry_dict
 
-all_stocks = get_tw_stock_list()
+stock_map, industry_map = get_tw_stock_info()
 
-# --- 2. 設定區 ---
-with st.expander("🔍 步驟一：建立股票池 (可搜尋)", expanded=True):
-    default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海", "2603.TW 長榮", "3034.TW 聯詠", "2382.TW 廣達", "3231.TW 緯創"]
-    selected_items = st.multiselect(
-        "選擇要分析的股票 (建議選 10-20 檔進行排名):",
-        options=all_stocks,
-        default=[s for s in default_selection if s in all_stocks]
-    )
-    run_btn = st.button("🚀 開始熵值運算 (改良版)", type="primary", use_container_width=True)
+# --- 2. 側邊欄：掃描模式選擇 ---
+with st.sidebar:
+    st.header("🎛️ 掃描控制台")
+    scan_mode = st.radio("請選擇選股模式：", ["自行輸入/多選", "🔥 熱門策略掃描", "🏭 產業類股掃描"])
+    
+    target_stocks = []
+    
+    if scan_mode == "自行輸入/多選":
+        st.info("適合已有關注名單，想進行排名比較的投資人。")
+        default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海", "2603.TW 長榮"]
+        selected = st.multiselect(
+            "選擇股票:", 
+            options=sorted(list(stock_map.values())),
+            default=[s for s in default_selection if s in stock_map.values()]
+        )
+        target_stocks = selected
+        
+    elif scan_mode == "🔥 熱門策略掃描":
+        st.info("針對特定主題進行全自動篩選。")
+        strategy = st.selectbox("選擇策略:", [
+            "台灣50成份股 (大型權值)",
+            "中型100成份股 (成長潛力)",
+            "高股息熱門股 (存股族)",
+            "AI 供應鏈概念 (自訂)",
+            "貨櫃航運三雄"
+        ])
+        
+        # 這裡預先定義好一些熱門 ETF 或概念股清單 (可隨時擴充)
+        if strategy == "台灣50成份股 (大型權值)":
+            # 範例清單，實務上可透過爬蟲更新，這裡列出部分代表
+            codes = ["2330", "2454", "2317", "2308", "2382", "2303", "2881", "2882", "2891", "1216", "2002", "1301", "1303", "2603", "3008", "3045", "2912", "5880", "2886", "2892", "2207", "1101", "2357", "2395", "3231", "2379", "3034", "2345", "3711", "2885"]
+            target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
+            
+        elif strategy == "中型100成份股 (成長潛力)":
+            codes = ["2344", "2376", "2383", "2368", "3443", "3661", "3529", "3035", "3037", "3017", "2313", "2324", "2352", "2353", "2356", "2327", "2385", "2408", "2409", "2449", "2451", "2474", "2492", "2498", "2542", "2609", "2610", "2615", "2618"]
+            target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
+            
+        elif strategy == "高股息熱門股 (存股族)":
+            codes = ["2301", "2324", "2352", "2356", "2382", "2385", "2449", "2454", "2603", "3034", "3037", "3044", "3231", "3702", "3711", "4915", "4938", "4958", "5388", "5483", "6176", "6239", "8131"]
+            target_stocks = []
+            for c in codes:
+                if f"{c}.TW" in stock_map: target_stocks.append(stock_map[f"{c}.TW"])
+                elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
 
-# --- 3. 教授級改良版指標設定 ---
+        elif strategy == "AI 供應鏈概念 (自訂)":
+            codes = ["2330", "2317", "2382", "3231", "6669", "3443", "3661", "3035", "2376", "2368", "3017", "2301", "2356", "3037", "2308", "2421", "2454", "3034"]
+            target_stocks = []
+            for c in codes:
+                if f"{c}.TW" in stock_map: target_stocks.append(stock_map[f"{c}.TW"])
+                elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
+                
+        elif strategy == "貨櫃航運三雄":
+            target_stocks = ["2603.TW 長榮", "2609.TW 陽明", "2615.TW 萬海"]
+
+        st.success(f"已載入 {len(target_stocks)} 檔成分股")
+
+    elif scan_mode == "🏭 產業類股掃描":
+        st.info("選擇特定產業，掃描該產業所有股票。")
+        all_industries = sorted(list(industry_map.keys()))
+        selected_industry = st.selectbox("選擇產業:", all_industries)
+        
+        # 取得該產業所有股票代號
+        if selected_industry:
+            codes = industry_map[selected_industry]
+            # 限制數量以免超時 (例如只取前 50 檔，或全部)
+            target_stocks = [stock_map[c] for c in codes if c in stock_map]
+            st.success(f"「{selected_industry}」類股共有 {len(target_stocks)} 檔")
+            
+            if len(target_stocks) > 60:
+                st.warning("⚠️ 股票數量較多，掃描時間可能超過 1 分鐘，請耐心等待。")
+
+    run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
+
+# --- 3. 指標與函數 (維持教授改良版) ---
 indicators_config = {
     'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG (估值成長比)'},
-    'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE (股東權益報酬)'},
+    'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE'},
     'Profit Margins': {'col': 'profitMargins', 'direction': '正向', 'name': '淨利率'},
-    'Price vs MA60': {'col': 'priceToMA60', 'direction': '正向', 'name': '季線乖離率 (動能)'},
-    'Price To Book': {'col': 'priceToBook', 'direction': '負向', 'name': '股價淨值比 (PB)'},
+    'Price vs MA60': {'col': 'priceToMA60', 'direction': '正向', 'name': '季線乖離率'},
+    'Price To Book': {'col': 'priceToBook', 'direction': '負向', 'name': 'PB'},
     'Dividend Yield': {'col': 'dividendRate', 'direction': '正向', 'name': '殖利率'}
 }
 
-# --- 核心函數：抓取單一股票 (含計算 PEG 與 乖離率) ---
 def fetch_single_stock(ticker):
     try:
-        stock = yf.Ticker(ticker)
+        # 只取代號部分
+        symbol = ticker.split(' ')[0]
+        stock = yf.Ticker(symbol)
         info = stock.info 
         
         peg = info.get('pegRatio', None)
         pe = info.get('trailingPE', None)
         growth = info.get('revenueGrowth', 0) 
         
-        # 簡易防呆：如果沒有 PEG 數據，嘗試手動算
         if peg is None and pe is not None and growth > 0:
             peg = pe / (growth * 100)
         elif peg is None:
             peg = 2.5 
             
-        # 計算季線乖離率
         price = info.get('currentPrice', info.get('previousClose', 0))
         ma50 = info.get('fiftyDayAverage', price) 
         
@@ -119,8 +167,8 @@ def fetch_single_stock(ticker):
         if div is None: div = 0
         
         return {
-            '代號': ticker.replace(".TW", "").replace(".TWO", ""),
-            '名稱': info.get('shortName', ticker),
+            '代號': symbol.replace(".TW", "").replace(".TWO", ""),
+            '名稱': info.get('shortName', symbol),
             'pegRatio': peg,          
             'priceToMA60': bias,      
             'priceToBook': info.get('priceToBook', np.nan),
@@ -131,30 +179,34 @@ def fetch_single_stock(ticker):
     except:
         return None
 
-# --- 多工抓取 ---
 def get_stock_data_concurrent(selected_list):
-    tickers = [item.split(' ')[0] for item in selected_list]
+    # 如果是從 stock_map 來的，格式是 "2330.TW 台積電"，如果是代號列表則需要處理
     data = []
-    progress_bar = st.progress(0, text="啟動多工引擎，下載數據中...")
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_ticker = {executor.submit(fetch_single_stock, t): t for t in tickers}
+    # 進度條
+    progress_bar = st.progress(0, text="正在喚醒 AI 掃描引擎...")
+    
+    # 限制最大並發數，避免被 Yahoo 封鎖
+    max_workers = 8 
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_ticker = {executor.submit(fetch_single_stock, t): t for t in selected_list}
         completed = 0
+        total = len(selected_list)
+        
         for future in concurrent.futures.as_completed(future_to_ticker):
             result = future.result()
             if result: data.append(result)
             completed += 1
-            progress_bar.progress(completed / len(tickers), text=f"已下載 {completed}/{len(tickers)}")
+            progress_bar.progress(completed / total, text=f"已掃描 {completed}/{total} 檔...")
             
     return pd.DataFrame(data)
 
-# --- 熵值計算 ---
 def calculate_entropy_score(df, config):
     df = df.dropna().copy()
-    if df.empty: return df, None, "有效數據不足 (可能有缺漏值)"
+    if df.empty: return df, None, "有效數據不足"
     df_norm = df.copy()
     
-    # 1. 標準化
     for key, cfg in config.items():
         col = cfg['col']
         mn, mx = df[col].min(), df[col].max()
@@ -168,7 +220,6 @@ def calculate_entropy_score(df, config):
     k = 1 / np.log(m) if m > 1 else 0
     weights = {}
     
-    # 2. 計算權重
     for key, cfg in config.items():
         col = cfg['col']
         p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum() if df_norm[f'{col}_n'].sum() != 0 else 0
@@ -178,7 +229,6 @@ def calculate_entropy_score(df, config):
     tot = sum(weights.values())
     fin_w = {k: v/tot for k, v in weights.items()}
     
-    # 3. 計算總分
     df['Score'] = 0
     for key, cfg in config.items():
         df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] 
@@ -188,54 +238,48 @@ def calculate_entropy_score(df, config):
 
 # --- 主執行區 ---
 if run_btn:
-    if not selected_items:
-        st.warning("⚠️ 請先選擇股票！")
+    if not target_stocks:
+        st.warning("⚠️ 請先選擇掃描範圍！")
     else:
-        # 1. 計算排名
-        raw = get_stock_data_concurrent(selected_items)
+        # 1. 執行掃描
+        raw = get_stock_data_concurrent(target_stocks)
+        
         if not raw.empty:
+            st.markdown("---")
+            st.write(f"✅ 成功獲取 **{len(raw)}** 檔有效數據，正在進行熵值運算...")
+            
             res, w, err = calculate_entropy_score(raw, indicators_config)
+            
             if err: 
                 st.error(err)
             else:
-                # 2. 顯示排名表
-                st.markdown("---")
-                col_res, col_chart = st.columns([2, 1])
+                # 只取前 10 名顯示，避免版面太亂 (但可保留完整資料)
+                top_n = 10
+                st.subheader(f"🏆 掃描結果：前 {top_n} 強潛力股")
                 
-                with col_res:
-                    st.subheader("📊 熵值法綜合排名 (教授改良版)")
-                    st.dataframe(
-                        res[['名稱', '代號', 'Score', 'pegRatio', 'priceToMA60', 'returnOnEquity', 'profitMargins']]
-                        .style.background_gradient(subset=['Score'], cmap='Greens')
-                        .format({
-                            'returnOnEquity': '{:.1%}', 
-                            'profitMargins': '{:.1%}', 
-                            'pegRatio': '{:.2f}',
-                            'priceToMA60': '{:.2%}'
-                        }),
-                        use_container_width=True
-                    )
-                    st.caption("* PEG < 1 代表低估且高成長 | 季線乖離率 > 0 代表技術面強勢")
+                top_stocks = res.head(top_n)
                 
-                with col_chart:
-                    st.subheader("⚖️ AI 權重計算結果")
-                    w_df = pd.DataFrame([{'指標':v['name'], '權重':w[k]} for k,v in indicators_config.items()])
-                    st.plotly_chart(px.pie(w_df, values='權重', names='指標'), use_container_width=True)
-
-                # 3. 生成深度分析提示詞
+                st.dataframe(
+                    top_stocks[['名稱', '代號', 'Score', 'pegRatio', 'priceToMA60', 'returnOnEquity', 'profitMargins']]
+                    .style.background_gradient(subset=['Score'], cmap='Greens')
+                    .format({
+                        'returnOnEquity': '{:.1%}', 
+                        'profitMargins': '{:.1%}', 
+                        'pegRatio': '{:.2f}',
+                        'priceToMA60': '{:.2%}'
+                    }),
+                    use_container_width=True
+                )
+                
+                # 3. 生成 AI 指令
                 st.markdown("---")
-                st.header("🤖 步驟二：AI 深度分析指令 (完整清單)")
-                st.info("👇 點擊下方的「複製按鈕」，直接貼給 ChatGPT / Gemini / Claude 進行分析！")
-
-                # 【修正點】改用 enumerate 強制重新編號 (1, 2, 3...)，不再被原始索引干擾
-                for i, (index, row) in enumerate(res.iterrows()):
+                st.header(f"🤖 AI 深度分析指令 (Top {top_n})")
+                
+                for i, (index, row) in enumerate(top_stocks.iterrows()):
                     stock_name = f"{row['代號']} {row['名稱']}"
                     final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
                     
-                    # 現在這裡會顯示：第 1 名、第 2 名... (i+1)
                     with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=(i==0)):
-                        st.text_area(f"給 AI 的指令 ({stock_name})", value=final_prompt, height=200, key=f"p_{i}")
-                        st.markdown(f"**建議指令：** 複製上方內容，發送給 AI 即可獲得避險基金級報告。")
-
+                        st.text_area(f"指令 ({stock_name})", value=final_prompt, height=150, key=f"p_{i}")
         else:
-            st.error("無法獲取數據，請稍後再試。")
+            st.error("無法獲取數據，可能是網路問題或 Yahoo 暫時阻擋，請稍後再試。")
