@@ -6,19 +6,20 @@ import plotly.express as px
 import twstock
 import concurrent.futures
 import google.generativeai as genai
+import time
 
 # --- 介面設定 ---
 st.set_page_config(page_title="熵值法 x Gemini 全自動分析", page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
 st.title("🤖 熵值法選股 & Gemini 全自動戰略分析")
 st.markdown("### 流程： 1. 自動掃描選股 ➡️ 2. Gemini API 即時撰寫報告")
 
-# --- 0. 初始化 Session State (讓程式有記憶力) ---
+# --- 0. 初始化 Session State ---
 if 'analysis_results' not in st.session_state:
-    st.session_state['analysis_results'] = {} # 存 AI 報告 {股票名: 報告內容}
+    st.session_state['analysis_results'] = {}
 if 'raw_data' not in st.session_state:
-    st.session_state['raw_data'] = None       # 存抓到的股票數據 (避免重跑消失)
+    st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state:
-    st.session_state['scan_finished'] = False # 紀錄是否掃描過
+    st.session_state['scan_finished'] = False
 
 # --- 1. 設定 Gemini API ---
 api_key = st.secrets.get("GEMINI_API_KEY")
@@ -29,13 +30,36 @@ if not api_key:
 else:
     genai.configure(api_key=api_key)
 
+# 【核心優化】導入 main_app.py 的模型鏈策略
 def call_gemini_api(prompt):
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"❌ AI 分析失敗，原因：{str(e)}"
+    # 定義模型優先順序清單 (Model Chain)
+    # 策略：優先使用強大模型 -> 失敗則轉用快速模型 -> 最後用舊版穩定模型
+    model_chain = [
+        'gemini-1.5-pro',       # 優點：邏輯最強，適合深度分析
+        'gemini-1.5-flash',     # 優點：速度最快，省 Token
+        'gemini-1.0-pro',       # 優點：最穩定 (即 gemini-pro)
+    ]
+    
+    last_error = None
+    
+    for model_name in model_chain:
+        try:
+            # 嘗試建立模型
+            model = genai.GenerativeModel(model_name)
+            # 生成內容
+            response = model.generate_content(prompt)
+            
+            # 如果成功，回傳結果 (並可選擇性提示使用者目前用哪個模型)
+            # st.toast(f"已使用 {model_name} 完成分析", icon="⚡") 
+            return response.text
+            
+        except Exception as e:
+            # 記錄錯誤，並讓迴圈繼續嘗試下一個模型
+            last_error = e
+            continue
+            
+    # 如果清單中的模型全部失敗
+    return f"❌ AI 分析失敗 (已嘗試多種模型)，原因：{str(last_error)}"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
@@ -117,11 +141,10 @@ with st.sidebar:
             st.success(f"「{selected_industry}」類股共有 {len(target_stocks)} 檔")
             if len(target_stocks) > 60: st.warning("⚠️ 數量較多，掃描時間可能較長。")
     
-    # 這裡的按鈕只負責「觸發數據下載」，不負責顯示
     if st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True):
-        st.session_state['scan_finished'] = False # 重置
-        st.session_state['raw_data'] = None       # 清空舊資料
-        st.session_state['analysis_results'] = {} # 清空舊報告
+        st.session_state['scan_finished'] = False 
+        st.session_state['raw_data'] = None      
+        st.session_state['analysis_results'] = {} 
 
 # --- 4. 指標與函數 ---
 indicators_config = {
@@ -199,18 +222,17 @@ def calculate_entropy_score(df, config):
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None
 
-# --- 主執行區 (邏輯重構) ---
+# --- 主執行區 ---
 
-# 1. 如果資料還沒抓，或是使用者剛按了「掃描」按鈕
+# 1. 抓取資料
 if st.session_state['raw_data'] is None and target_stocks:
-    # 這裡只會執行一次
     raw = get_stock_data_concurrent(target_stocks)
     if not raw.empty:
-        st.session_state['raw_data'] = raw # 存入記憶體
+        st.session_state['raw_data'] = raw
         st.session_state['scan_finished'] = True
-        st.rerun() # 強制重整，進入下方顯示邏輯
+        st.rerun()
 
-# 2. 如果資料已經在記憶體中，直接顯示
+# 2. 顯示結果與互動
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     raw = st.session_state['raw_data']
     st.markdown("---")
@@ -234,19 +256,14 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         st.markdown("---")
         st.header(f"🤖 Gemini AI 深度分析 (點擊按鈕即時生成)")
         
-        # 遍歷前 10 名
         for i, (index, row) in enumerate(top_stocks.iterrows()):
             stock_name = f"{row['代號']} {row['名稱']}"
             final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
             
-            # 使用 callback 函數來處理按鈕點擊，保證資料寫入 session_state
             def analyze_callback(s_name=stock_name, prompt=final_prompt):
-                # 執行分析
                 result = call_gemini_api(prompt)
-                # 寫入記憶體
                 st.session_state['analysis_results'][s_name] = result
             
-            # 判斷是否要展開：如果是第1名，或者該股票已經有報告了，就展開
             is_expanded = (i==0) or (stock_name in st.session_state['analysis_results'])
             
             with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=is_expanded):
@@ -259,10 +276,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.caption("AI 分析核心指令已準備就緒...")
                         
                 with col2:
-                    # 當按鈕被按下時，執行 callback
                     st.button(f"✨ AI 分析", key=f"btn_{i}", on_click=analyze_callback, use_container_width=True)
 
-                # 顯示報告區域 (從記憶體讀取)
                 if stock_name in st.session_state['analysis_results']:
                     st.markdown("### 📝 AI 分析報告")
                     st.markdown(st.session_state['analysis_results'][stock_name])
