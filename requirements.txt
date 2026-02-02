@@ -5,4 +5,5 @@ numpy
 plotly
 twstock
 lxml
-matplotlib
+google-generativeai
+
