@@ -7,9 +7,9 @@ import twstock
 import concurrent.futures
 
 # --- 介面設定 ---
-st.set_page_config(page_title="熵值法選股 x AI深度分析", page_icon="🧠", layout="wide", initial_sidebar_state="collapsed")
-st.title("🧠 熵值法智能選股 & AI 戰略分析生成器")
-st.markdown("### 流程： 1. 量化數據篩選 (Entropy) ➡️ 2. 生成避險基金級提示詞 (Prompt)")
+st.set_page_config(page_title="熵值法選股 x AI深度分析 (教授改良版)", page_icon="🎓", layout="wide", initial_sidebar_state="collapsed")
+st.title("🎓 熵值法智能選股 & AI 戰略分析 (教授改良版)")
+st.markdown("### 核心邏輯： 1. 量化數據篩選 (PEG + 動能) ➡️ 2. 生成避險基金級提示詞")
 
 # --- 0. 定義您的超級提示詞模板 ---
 HEDGE_FUND_PROMPT = """
@@ -78,51 +78,43 @@ with st.expander("🔍 步驟一：建立股票池 (可搜尋)", expanded=True):
         options=all_stocks,
         default=[s for s in default_selection if s in all_stocks]
     )
-    run_btn = st.button("🚀 開始熵值運算", type="primary", use_container_width=True)
+    run_btn = st.button("🚀 開始熵值運算 (改良版)", type="primary", use_container_width=True)
 
-# --- 3. 指標設定 ---
-# --- 改良版指標設定 ---
+# --- 3. 教授級改良版指標設定 ---
+# 移除單純 PE 與 營收成長(避免極端值)，加入 PEG 與 技術面動能
 indicators_config = {
-    # 【估值面】不只看便宜，更要看成長性 (PEG < 1 代表低估)
-    # 使用 PEG 替代純 PE，避免選到衰退中的便宜股
     'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG (估值成長比)'},
-    
-    # 【獲利能力】核心指標，維持不變
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE (股東權益報酬)'},
     'Profit Margins': {'col': 'profitMargins', 'direction': '正向', 'name': '淨利率'},
-    
-    # 【技術動能】新增：股價相對於季線(60MA)的乖離率
-    # 正值代表多頭排列，負值代表空頭。這能避免選到正在暴跌的股票。
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '正向', 'name': '季線乖離率 (動能)'},
-    
-    # 【安全邊際】
     'Price To Book': {'col': 'priceToBook', 'direction': '負向', 'name': '股價淨值比 (PB)'},
-    
-    # 【現金流/防禦】
     'Dividend Yield': {'col': 'dividendRate', 'direction': '正向', 'name': '殖利率'}
 }
 
-# --- 核心函數：抓取單一股票 ---
+# --- 核心函數：抓取單一股票 (含計算 PEG 與 乖離率) ---
 def fetch_single_stock(ticker):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info 
         
-        # 1. 處理 PEG (若抓不到，手動用 PE / Growth 計算，或給一個中位數)
+        # 1. 處理 PEG (若抓不到，手動用 PE / Growth 計算)
         peg = info.get('pegRatio', None)
         pe = info.get('trailingPE', None)
-        growth = info.get('revenueGrowth', 0) # 使用營收成長作為替代成長率
+        # 取得營收成長率 (轉成百分比小數)
+        growth = info.get('revenueGrowth', 0) 
         
-        # 簡易防呆：如果沒有 PEG 數據，嘗試手動算，還是沒有就設為 2 (不便宜也不貴)
+        # 簡易防呆：如果沒有 PEG 數據，嘗試手動算
         if peg is None and pe is not None and growth > 0:
             peg = pe / (growth * 100)
         elif peg is None:
-            peg = 2.0 # 預設值，避免報錯
+            # 如果真的算不出來，給予一個中性懲罰值 (例如 2.5)，避免它因為是 0 而變成第一名
+            peg = 2.5 
             
         # 2. 計算季線乖離率 (Price / 60MA - 1)
-        # yfinance 的 info 有時會有 'fiftyDayAverage'，我們用它近似季線
+        # yfinance 的 info 有時會有 'fiftyDayAverage'，我們用它近似季線 (約 60 日)
         price = info.get('currentPrice', info.get('previousClose', 0))
-        ma50 = info.get('fiftyDayAverage', price)
+        ma50 = info.get('fiftyDayAverage', price) # 若抓不到就用現價代替(乖離率=0)
+        
         if ma50 and ma50 > 0:
             bias = (price / ma50) - 1
         else:
@@ -134,13 +126,12 @@ def fetch_single_stock(ticker):
         return {
             '代號': ticker.replace(".TW", "").replace(".TWO", ""),
             '名稱': info.get('shortName', ticker),
-            'pegRatio': peg,  # 新指標
-            'priceToMA60': bias, # 新指標
+            'pegRatio': peg,          # 新指標
+            'priceToMA60': bias,      # 新指標
             'priceToBook': info.get('priceToBook', np.nan),
             'returnOnEquity': info.get('returnOnEquity', np.nan),
             'profitMargins': info.get('profitMargins', np.nan),
-            'dividendRate': div,
-            'debtToEquity': info.get('debtToEquity', np.nan)
+            'dividendRate': div
         }
     except:
         return None
@@ -171,8 +162,7 @@ def calculate_entropy_score(df, config):
     # 1. 標準化
     for key, cfg in config.items():
         col = cfg['col']
-        if col == 'trailingPE': df[col] = df[col].apply(lambda x: x if x > 0 else df[col].max())
-        
+        # 針對 PEG 或 PE 若為負值或異常大值的簡單處理 (這裡先維持線性標準化)
         mn, mx = df[col].min(), df[col].max()
         denom = mx - mn
         if denom == 0: df_norm[f'{col}_n'] = 0.5
@@ -214,40 +204,43 @@ if run_btn:
             if err: 
                 st.error(err)
             else:
-                # 2. 顯示排名表 (已改為顯示全部)
+                # 2. 顯示排名表 (完整顯示)
                 st.markdown("---")
                 col_res, col_chart = st.columns([2, 1])
                 
                 with col_res:
-                    st.subheader("📊 熵值法綜合排名 (完整榜單)")
-                    # 這裡直接使用 res，不再取 .head(5)
+                    st.subheader("📊 熵值法綜合排名 (教授改良版)")
                     st.dataframe(
-                        res[['名稱', '代號', 'Score', 'trailingPE', 'priceToBook', 'returnOnEquity', 'profitMargins']]
+                        res[['名稱', '代號', 'Score', 'pegRatio', 'priceToMA60', 'returnOnEquity', 'profitMargins']]
                         .style.background_gradient(subset=['Score'], cmap='Greens')
-                        .format({'returnOnEquity': '{:.1%}', 'profitMargins': '{:.1%}', 'priceToBook': '{:.2f}'}),
+                        .format({
+                            'returnOnEquity': '{:.1%}', 
+                            'profitMargins': '{:.1%}', 
+                            'pegRatio': '{:.2f}',
+                            'priceToMA60': '{:.2%}'
+                        }),
                         use_container_width=True
                     )
+                    st.caption("* PEG < 1 代表低估且高成長 | 季線乖離率 > 0 代表技術面強勢")
                 
                 with col_chart:
                     st.subheader("⚖️ AI 權重計算結果")
                     w_df = pd.DataFrame([{'指標':v['name'], '權重':w[k]} for k,v in indicators_config.items()])
                     st.plotly_chart(px.pie(w_df, values='權重', names='指標'), use_container_width=True)
 
-                # 3. 生成深度分析提示詞 (已改為生成全部)
+                # 3. 生成深度分析提示詞
                 st.markdown("---")
                 st.header("🤖 步驟二：AI 深度分析指令 (完整清單)")
                 st.info("👇 點擊下方的「複製按鈕」，直接貼給 ChatGPT / Gemini / Claude 進行分析！")
 
-                # 這裡改為迴圈遍歷整個 res
                 for index, row in res.iterrows():
                     stock_name = f"{row['代號']} {row['名稱']}"
                     final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
                     
-                    # 第一名預設展開，其他收合，避免畫面太長
+                    # 第一名預設展開
                     with st.expander(f"🏆 第 {index+1} 名：{stock_name} (分數: {row['Score']})", expanded=(index==0)):
                         st.text_area(f"給 AI 的指令 ({stock_name})", value=final_prompt, height=200, key=f"p_{index}")
                         st.markdown(f"**建議指令：** 複製上方內容，發送給 AI 即可獲得避險基金級報告。")
 
         else:
             st.error("無法獲取數據，請稍後再試。")
-
