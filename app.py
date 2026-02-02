@@ -30,14 +30,37 @@ if not api_key:
 else:
     genai.configure(api_key=api_key)
 
+# 【核心優化】參考 main_app.py 的模型鏈策略 (僅保留 1.5 穩定版)
 def call_gemini_api(prompt):
-    try:
-        # 【修正重點】改用最穩定的 'gemini-pro' 模型，解決 404 錯誤
-        model = genai.GenerativeModel('gemini-pro')
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"❌ AI 分析失敗，原因：{str(e)}"
+    # 定義模型優先順序清單 (Model Chain)
+    # 我們只使用目前 Google 官方支援度最高的 1.5 系列，剔除會報錯的 pro (1.0) 和 exp (實驗版)
+    model_chain = [
+        'gemini-1.5-flash',      # 首選：速度快、免費額度最高 (Google 建議預設)
+        'gemini-1.5-pro',        # 次選：能力強，若 Flash 忙碌或失敗時接手
+        'gemini-1.5-flash-002'   # 備援：Flash 的更新版本
+    ]
+    
+    last_error = None
+    
+    for model_name in model_chain:
+        try:
+            # 嘗試建立模型
+            model = genai.GenerativeModel(model_name)
+            # 呼叫生成 (加入 retry 機制避免瞬間網路問題)
+            response = model.generate_content(prompt)
+            
+            # 若成功則回傳
+            return response.text
+            
+        except Exception as e:
+            # 記錄錯誤 (可在後台 log 查看)，並嘗試下一個模型
+            print(f"⚠️ Model {model_name} failed: {e}")
+            last_error = e
+            time.sleep(1) # 稍微暫停一下再試下一個
+            continue
+            
+    # 如果全部失敗，回傳詳細錯誤供除錯
+    return f"❌ AI 分析失敗 (已嘗試 1.5-flash 與 1.5-pro)。\n原因：{str(last_error)}\n請檢查 API Key 是否正確或額度是否已滿。"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
@@ -119,7 +142,6 @@ with st.sidebar:
             st.success(f"「{selected_industry}」類股共有 {len(target_stocks)} 檔")
             if len(target_stocks) > 60: st.warning("⚠️ 數量較多，掃描時間可能較長。")
     
-    # 這裡的按鈕只負責「觸發數據下載」
     if st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False 
         st.session_state['raw_data'] = None      
