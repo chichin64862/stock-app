@@ -131,7 +131,7 @@ def get_stock_data_concurrent(selected_list):
             
     return pd.DataFrame(data)
 
-# --- 熵值計算 (已修正 KeyError) ---
+# --- 熵值計算 ---
 def calculate_entropy_score(df, config):
     df = df.dropna().copy()
     if df.empty: return df, None, "有效數據不足 (可能有缺漏值)"
@@ -153,12 +153,12 @@ def calculate_entropy_score(df, config):
     k = 1 / np.log(m) if m > 1 else 0
     weights = {}
     
-    # 2. 計算權重 (Key 統一使用 config key，例如 'Trailing PE')
+    # 2. 計算權重
     for key, cfg in config.items():
         col = cfg['col']
         p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum() if df_norm[f'{col}_n'].sum() != 0 else 0
         e = -k * np.sum(p * np.log(p + 1e-9))
-        weights[key] = 1 - e  # <--- 修正點：使用 key 而不是 col
+        weights[key] = 1 - e 
         
     tot = sum(weights.values())
     fin_w = {k: v/tot for k, v in weights.items()}
@@ -166,7 +166,7 @@ def calculate_entropy_score(df, config):
     # 3. 計算總分
     df['Score'] = 0
     for key, cfg in config.items():
-        df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] # <--- 修正點：使用 fin_w[key]
+        df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] 
     
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None
@@ -183,15 +183,15 @@ if run_btn:
             if err: 
                 st.error(err)
             else:
-                # 2. 顯示排名表
+                # 2. 顯示排名表 (已改為顯示全部)
                 st.markdown("---")
                 col_res, col_chart = st.columns([2, 1])
                 
                 with col_res:
-                    st.subheader("📊 熵值法綜合排名 (前 5 名)")
-                    top_5 = res.head(5)
+                    st.subheader("📊 熵值法綜合排名 (完整榜單)")
+                    # 這裡直接使用 res，不再取 .head(5)
                     st.dataframe(
-                        top_5[['名稱', '代號', 'Score', 'trailingPE', 'priceToBook', 'returnOnEquity', 'profitMargins']]
+                        res[['名稱', '代號', 'Score', 'trailingPE', 'priceToBook', 'returnOnEquity', 'profitMargins']]
                         .style.background_gradient(subset=['Score'], cmap='Greens')
                         .format({'returnOnEquity': '{:.1%}', 'profitMargins': '{:.1%}', 'priceToBook': '{:.2f}'}),
                         use_container_width=True
@@ -199,20 +199,21 @@ if run_btn:
                 
                 with col_chart:
                     st.subheader("⚖️ AI 權重計算結果")
-                    # 這裡 w[k] 現在可以正確運作了，因為 w 的 key 已經修正為 config key
                     w_df = pd.DataFrame([{'指標':v['name'], '權重':w[k]} for k,v in indicators_config.items()])
                     st.plotly_chart(px.pie(w_df, values='權重', names='指標'), use_container_width=True)
 
-                # 3. 生成深度分析提示詞
+                # 3. 生成深度分析提示詞 (已改為生成全部)
                 st.markdown("---")
-                st.header("🤖 步驟二：AI 深度分析指令 (Top 5)")
+                st.header("🤖 步驟二：AI 深度分析指令 (完整清單)")
                 st.info("👇 點擊下方的「複製按鈕」，直接貼給 ChatGPT / Gemini / Claude 進行分析！")
 
-                for index, row in top_5.iterrows():
+                # 這裡改為迴圈遍歷整個 res
+                for index, row in res.iterrows():
                     stock_name = f"{row['代號']} {row['名稱']}"
                     final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
                     
-                    with st.expander(f"🏆 第 {index+1} 名：{stock_name} (點擊展開複製)", expanded=(index==0)):
+                    # 第一名預設展開，其他收合，避免畫面太長
+                    with st.expander(f"🏆 第 {index+1} 名：{stock_name} (分數: {row['Score']})", expanded=(index==0)):
                         st.text_area(f"給 AI 的指令 ({stock_name})", value=final_prompt, height=200, key=f"p_{index}")
                         st.markdown(f"**建議指令：** 複製上方內容，發送給 AI 即可獲得避險基金級報告。")
 
