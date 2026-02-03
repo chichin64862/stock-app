@@ -127,16 +127,13 @@ def generate_radar_img_mpl(radar_data):
 
 def generate_trend_img_mpl(full_symbol, ma_bias):
     try:
-        # 只嘗試 Yahoo，因為 twstock 歷史數據抓取太慢且易錯
         stock_hist = yf.Ticker(full_symbol).history(period="6mo")
         if stock_hist.empty: return None
-        
         dates = stock_hist.index
         prices = stock_hist['Close']
         fig, ax = plt.subplots(figsize=(5, 3))
         ax.plot(dates, prices, color='#29b6f6', linewidth=2)
         ax.scatter(dates[-1], prices.iloc[-1], color='#00e676', s=50, zorder=5)
-        
         if pd.isna(ma_bias): ma_bias = 0
         trend_status = "Overheated" if ma_bias > 0.15 else ("Value Zone" if ma_bias < -0.05 else "Momentum")
         ax.set_title(f"Trend: {trend_status}", color='black', fontsize=12)
@@ -169,16 +166,13 @@ def plot_trend_chart_ui(full_symbol, ma_bias):
     try:
         stock_hist = yf.Ticker(full_symbol).history(period="6mo")
         if stock_hist.empty: return None
-        
         fig_trend = go.Figure()
         fig_trend.add_trace(go.Scatter(x=stock_hist.index, y=stock_hist['Close'], mode='lines', name='Price', line=dict(color='#29b6f6', width=2)))
         last_price = stock_hist['Close'].iloc[-1]
         fig_trend.add_trace(go.Scatter(x=[stock_hist.index[-1]], y=[last_price], mode='markers', marker=dict(color='#00e676', size=10), name='Current'))
-        
         if pd.isna(ma_bias): ma_bias = 0
         timing_msg = "Value Zone" if ma_bias < -0.05 else "Momentum"
         if ma_bias > 0.15: timing_msg = "Overheated"
-        
         fig_trend.update_layout(
             title=dict(text=timing_msg, font=dict(size=14, color='#e6e6e6')),
             xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#30363d'),
@@ -240,11 +234,8 @@ def create_pdf(stock_data_list):
         story.append(Spacer(1, 15))
 
         radar = stock.get('radar_data', {})
-        try:
-            ma_bias_val = float(stock.get('ma_bias', '0').strip('%')) / 100
-        except:
-            ma_bias_val = 0
-            
+        try: ma_bias_val = float(stock.get('ma_bias', '0').strip('%')) / 100
+        except: ma_bias_val = 0
         full_symbol = stock.get('full_symbol', '')
         
         charts_row = []
@@ -360,62 +351,56 @@ indicators_config = {
     'FCF Yield': {'col': 'fcfYield', 'direction': '正向', 'name': 'FCF收益率', 'category': '財報'},
 }
 
-# --- 【核心修改】終極雙引擎 (Ultimate Dual-Engine) ---
-
+# --- 數據獲取核心 (混合引擎 + 快取) ---
 def fetch_twse_batch(tickers_list):
-    """
-    TWSE 批量救援模式：一次性查詢多檔股票
-    適用於 Yahoo 全面封鎖時的最後防線
-    """
+    """TWSE 批量救援模式"""
     try:
-        # 取出純代號 (e.g., '2330', '2881')
-        codes = [t.split(' ')[0].split('.')[0] for t in tickers_list]
+        # 去除重複並提取代碼
+        codes = sorted(list(set([t.split(' ')[0].split('.')[0] for t in tickers_list])))
         
-        # 使用 twstock 的 realtime.get 批量查詢
-        # 注意：這個 API 有請求數量限制，但比迴圈安全得多
-        realtime_data = twstock.realtime.get(codes)
-        
+        # 1. 使用 realtime.get 一次抓所有 (注意：若數量>100，最好分批)
+        # 這裡簡單做個分批，每批 50 檔
+        batch_size = 50
         results = []
-        if realtime_data and realtime_data['success']:
-            for code, data in realtime_data.items():
-                if data['success']:
-                    try:
-                        latest_price = data['realtime'].get('latest_trade_price', '-')
-                        if latest_price == '-' or latest_price is None:
-                            latest_price = data['realtime'].get('best_bid_price', [None])[0]
-                        
-                        if latest_price and latest_price != '-':
-                            price = float(latest_price)
+        
+        for i in range(0, len(codes), batch_size):
+            chunk = codes[i:i+batch_size]
+            try:
+                realtime_data = twstock.realtime.get(chunk)
+                if realtime_data and realtime_data['success']:
+                    for code, data in realtime_data.items():
+                        if data['success'] and data['realtime']:
+                            latest = data['realtime'].get('latest_trade_price', '-')
+                            if latest == '-' or not latest:
+                                latest = data['realtime'].get('best_bid_price', [None])[0]
                             
-                            # 嘗試找回原始 full_symbol
-                            full_symbol = next((t for t in tickers_list if code in t), f"{code}.TW")
-                            
-                            results.append({
-                                '代號': code,
-                                'full_symbol': full_symbol,
-                                '名稱': data['info']['name'],
-                                'close_price': price,
-                                'pegRatio': np.nan, 'priceToMA60': np.nan, 'volumeRatio': 1.0,
-                                'priceToBook': np.nan, 'returnOnEquity': np.nan, 'debtToEquity': np.nan,
-                                'fcfYield': np.nan, 'beta': 1.0
-                            })
-                    except: continue
+                            if latest and latest != '-':
+                                price = float(latest)
+                                full_symbol = next((t for t in tickers_list if code in t), f"{code}.TW")
+                                results.append({
+                                    '代號': code,
+                                    'full_symbol': full_symbol,
+                                    '名稱': data['info']['name'],
+                                    'close_price': price,
+                                    'pegRatio': np.nan, 'priceToMA60': 0, 'volumeRatio': 1.0,
+                                    'priceToBook': np.nan, 'returnOnEquity': np.nan, 
+                                    'debtToEquity': np.nan, 'fcfYield': np.nan, 'beta': 1.0
+                                })
+                time.sleep(1) # 批次間休息
+            except: continue
+            
         return pd.DataFrame(results)
     except:
-        return pd.DataFrame() # 真的盡力了
+        return pd.DataFrame()
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_hybrid_data(tickers_list):
-    """
-    混合引擎：Yahoo Batch (優先) -> TWSE Batch (救援)
-    """
     # 1. 嘗試 Yahoo Batch
     yahoo_success = False
     results = []
     
     try:
         symbols = [t.split(' ')[0] for t in tickers_list]
-        # 強制單執行緒，減少被擋機率
         data = yf.download(symbols, period="1d", group_by='ticker', progress=False, threads=False)
         
         if not data.empty:
@@ -423,19 +408,16 @@ def fetch_hybrid_data(tickers_list):
                 parts = ticker_full.split(' ')
                 symbol = parts[0]
                 name = parts[1] if len(parts) > 1 else symbol
-                
                 try:
                     df = data if len(symbols) == 1 else (data[symbol] if symbol in data else pd.DataFrame())
                     if not df.empty and 'Close' in df.columns:
                         price = df['Close'].iloc[-1]
                         if not pd.isna(price):
-                            # Yahoo 成功抓到
                             results.append({
                                 '代號': symbol.split('.')[0],
                                 'full_symbol': symbol,
                                 '名稱': name,
                                 'close_price': float(price),
-                                # 這裡簡化，Yahoo Batch 模式下財報先略過，避免 request 爆炸
                                 'pegRatio': np.nan, 'priceToMA60': 0, 'volumeRatio': 1.0,
                                 'priceToBook': np.nan, 'returnOnEquity': np.nan, 
                                 'debtToEquity': np.nan, 'fcfYield': np.nan, 'beta': 1.0
@@ -444,9 +426,9 @@ def fetch_hybrid_data(tickers_list):
                 except: pass
     except: pass
 
-    # 2. 如果 Yahoo 徹底失敗 (results 為空)，啟動 TWSE 批量救援
+    # 2. Yahoo 失敗則用 TWSE 救援
     if not results:
-        st.toast("⚠️ Yahoo 連線逾時，切換至 TWSE 證交所官方通道...", icon="🛡️")
+        # st.toast("Yahoo 忙碌，切換至 TWSE 官方通道...", icon="🛡️")
         twse_df = fetch_twse_batch(tickers_list)
         if not twse_df.empty:
             return twse_df
@@ -481,7 +463,6 @@ def calculate_entropy_score(df, config):
     tot = sum(weights.values())
     if tot == 0: fin_w = {k: 1/len(weights) for k in weights}
     else: fin_w = {k: v/tot for k, v in weights.items()}
-        
     df['Score'] = 0
     for key, cfg in config.items():
         if f'{cfg["col"]}_n' in df_norm.columns:
@@ -492,6 +473,15 @@ def calculate_entropy_score(df, config):
 # --- 12. 主儀表板與流程 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
+    st.markdown("---")
+    
+    # 【關鍵新增】清除快取按鈕
+    if st.button("🔴 清除快取並重置", use_container_width=True):
+        st.cache_data.clear()
+        if 'raw_data' in st.session_state: del st.session_state['raw_data']
+        if 'scan_finished' in st.session_state: del st.session_state['scan_finished']
+        st.rerun()
+        
     st.markdown("---")
     scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
     target_stocks = []
@@ -561,12 +551,12 @@ if run_btn:
             st.session_state['scan_finished'] = True
             st.rerun()
         else:
-            st.error("❌ 掃描失敗：Yahoo 與 TWSE 皆無回應，請稍後再試。")
+            st.error("❌ 掃描失敗：所有來源皆無回應，請點擊左側「清除快取並重置」後稍後再試。")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     required_cols = ['fcfYield', 'debtToEquity']
     if not all(col in st.session_state['raw_data'].columns for col in required_cols):
-        st.toast("⚠️ 偵測到系統升級，正在重新抓取最新財報數據...", icon="🔄")
+        # 靜默修復
         st.session_state['raw_data'] = None
         st.rerun()
 
@@ -695,7 +685,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     if fig_trend:
                         st.plotly_chart(fig_trend, use_container_width=True)
                     else:
-                        st.warning("⚠️ 無法取得歷史數據")
+                        st.warning("⚠️ 無法取得歷史數據 (Yahoo/TWSE 來源皆無回應)")
 
                 col_btn, col_dl = st.columns([3, 1])
                 
