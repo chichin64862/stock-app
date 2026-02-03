@@ -12,14 +12,17 @@ import time
 import os
 import io
 import re
+import random
 from datetime import datetime
+import matplotlib.pyplot as plt
+from math import pi
 
 # --- PDF 生成庫檢查 ---
 try:
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
 except ImportError:
@@ -44,14 +47,14 @@ st.markdown("""
         font-family: 'Roboto', sans-serif;
     }
 
-    /* 2. DataFrame 右上角配置選單 (白底黑字修復) */
+    /* 2. DataFrame 右上角配置選單 */
     div[role="menu"] div, div[role="menu"] span, div[role="menu"] label {
         color: #31333F !important;
         font-weight: 500 !important;
     }
     div[role="menu"] label { color: #31333F !important; }
 
-    /* 3. 下拉選單 (白底黑字) */
+    /* 3. 下拉選單 */
     div[data-baseweb="select"] > div {
         background-color: #262730 !important;
         border-color: #4b4b4b !important;
@@ -73,7 +76,7 @@ st.markdown("""
         color: #ffffff !important;
     }
 
-    /* 4. 下載按鈕 (不換行優化) */
+    /* 4. 下載按鈕 */
     .stDownloadButton button {
         background-color: #1f2937 !important;
         color: #ffffff !important;
@@ -90,7 +93,7 @@ st.markdown("""
     }
     .stDownloadButton p { color: inherit !important; font-size: 1rem !important; }
 
-    /* 5. Toolbar (強制深色) */
+    /* 5. Toolbar */
     [data-testid="stElementToolbar"] {
         background-color: #262730 !important;
         border: 1px solid #4b4b4b !important;
@@ -103,7 +106,7 @@ st.markdown("""
         background-color: #4b4b4b !important;
     }
 
-    /* 6. 輸入框優化 */
+    /* 6. 輸入框 */
     input { 
         color: #ffffff !important; 
         caret-color: #ffffff !important;
@@ -168,7 +171,97 @@ def register_chinese_font():
 
 font_ready = register_chinese_font()
 
-# --- 7. PDF 生成引擎 ---
+# --- 7. Matplotlib 靜態繪圖函數 ---
+def generate_radar_img_mpl(radar_data):
+    try:
+        categories = list(radar_data.keys())
+        values = list(radar_data.values())
+        values += values[:1]
+        N = len(categories)
+        angles = [n / float(N) * 2 * pi for n in range(N)]
+        angles += angles[:1]
+        
+        plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans'] 
+        
+        fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
+        ax.plot(angles, values, linewidth=2, linestyle='solid', color='#00e676')
+        ax.fill(angles, values, '#00e676', alpha=0.25)
+        plt.xticks(angles[:-1], categories, color='black', size=10)
+        ax.set_rlabel_position(0)
+        plt.yticks([25, 50, 75], ["25", "50", "75"], color="grey", size=7)
+        plt.ylim(0, 100)
+        
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', transparent=True)
+        buf.seek(0)
+        plt.close(fig)
+        return buf
+    except Exception as e:
+        return None
+
+def generate_trend_img_mpl(full_symbol, ma_bias):
+    try:
+        stock_hist = yf.Ticker(full_symbol).history(period="6mo")
+        if stock_hist.empty: return None
+        
+        dates = stock_hist.index
+        prices = stock_hist['Close']
+        
+        fig, ax = plt.subplots(figsize=(5, 3))
+        ax.plot(dates, prices, color='#29b6f6', linewidth=2)
+        ax.scatter(dates[-1], prices.iloc[-1], color='#00e676', s=50, zorder=5)
+        
+        trend_status = "Overheated" if ma_bias > 0.15 else ("Value Zone" if ma_bias < -0.05 else "Momentum")
+        ax.set_title(f"Trend: {trend_status}", color='black', fontsize=12)
+        ax.grid(True, linestyle='--', alpha=0.3)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', transparent=True)
+        buf.seek(0)
+        plt.close(fig)
+        return buf
+    except: return None
+
+# --- 8. UI 互動式繪圖函數 ---
+def plot_radar_chart_ui(row_name, radar_data):
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=list(radar_data.values()), theta=list(radar_data.keys()),
+        fill='toself', name=row_name, line_color='#00e676', fillcolor='rgba(0, 230, 118, 0.2)'
+    ))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100], color='#8b949e'), bgcolor='rgba(0,0,0,0)'),
+        showlegend=False, margin=dict(t=20, b=20, l=20, r=20),
+        paper_bgcolor='rgba(0,0,0,0)', font=dict(color='#e6e6e6', size=12), height=250
+    )
+    return fig
+
+def plot_trend_chart_ui(full_symbol, ma_bias):
+    try:
+        stock_hist = yf.Ticker(full_symbol).history(period="6mo")
+        if stock_hist.empty: return None
+        
+        fig_trend = go.Figure()
+        fig_trend.add_trace(go.Scatter(x=stock_hist.index, y=stock_hist['Close'], mode='lines', name='Price', line=dict(color='#29b6f6', width=2)))
+        last_price = stock_hist['Close'].iloc[-1]
+        fig_trend.add_trace(go.Scatter(x=[stock_hist.index[-1]], y=[last_price], mode='markers', marker=dict(color='#00e676', size=10), name='Current'))
+        
+        timing_msg = "Value Zone" if ma_bias < -0.05 else "Momentum"
+        if ma_bias > 0.15: timing_msg = "Overheated"
+        
+        fig_trend.update_layout(
+            title=dict(text=timing_msg, font=dict(size=14, color='#e6e6e6')),
+            xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#30363d'),
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=0,r=0,t=30,b=0), height=250, showlegend=False,
+            font=dict(color='#e6e6e6')
+        )
+        return fig_trend
+    except: return None
+
+# --- 9. PDF 生成引擎 ---
 def create_pdf(stock_data_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -198,7 +291,6 @@ def create_pdf(stock_data_list):
         story.append(Spacer(1, 10))
 
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
-        # 數據容錯處理
         peg = stock.get('peg', 'N/A')
         if peg is None or peg == 'nan': peg = 'N/A'
         
@@ -222,20 +314,25 @@ def create_pdf(stock_data_list):
         story.append(Spacer(1, 15))
 
         radar = stock.get('radar_data', {})
-        if radar:
-            story.append(Paragraph("⚡ 四大因子貢獻度", h3_style))
-            best_factor = max(radar, key=radar.get)
-            story.append(Paragraph(f"🚀 主力優勢: <b>{best_factor} ({radar[best_factor]:.1f}%)</b>", normal_style))
-            r_data = [[k, f"{v:.1f}%"] for k, v in radar.items()]
-            r_table = Table([["因子面向", "得分 (0-100)"]] + r_data, colWidths=[200, 100], hAlign='LEFT')
-            r_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#16A085")),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('FONTNAME', (0, 0), (-1, -1), font_name),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
-            ]))
-            story.append(r_table)
-            story.append(Spacer(1, 15))
+        ma_bias_val = float(stock.get('ma_bias', '0').strip('%')) / 100
+        full_symbol = stock.get('full_symbol', '')
+        
+        charts_row = []
+        radar_buf = generate_radar_img_mpl(radar)
+        if radar_buf:
+            charts_row.append(Image(radar_buf, width=200, height=200))
+            
+        trend_buf = generate_trend_img_mpl(full_symbol, ma_bias_val)
+        if trend_buf:
+            charts_row.append(Image(trend_buf, width=250, height=150))
+            
+        if charts_row:
+            story.append(Paragraph("📈 戰略因子與趨勢分析", h3_style))
+            col_w = 460 / len(charts_row)
+            c_table = Table([charts_row], colWidths=[col_w] * len(charts_row))
+            c_table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
+            story.append(c_table)
+            story.append(Spacer(1, 10))
 
         analysis = stock.get('analysis')
         if analysis:
@@ -256,7 +353,7 @@ def create_pdf(stock_data_list):
     buffer.seek(0)
     return buffer
 
-# --- 8. Gemini API ---
+# --- 10. Gemini API ---
 def get_available_model(key):
     default_model = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
@@ -305,7 +402,7 @@ HEDGE_FUND_PROMPT = """
 [DATA_CONTEXT]
 """
 
-# --- 9. 數據處理 ---
+# --- 11. 數據處理 ---
 @st.cache_data
 def get_tw_stock_info():
     codes = twstock.codes
@@ -337,6 +434,14 @@ indicators_config = {
     'FCF Yield': {'col': 'fcfYield', 'direction': '正向', 'name': 'FCF收益率', 'category': '財報'},
 }
 
+# 【關鍵修復】: 創建一個偽裝的 Session
+def get_session():
+    s = requests.Session()
+    s.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    return s
+
 def fetch_single_stock(ticker):
     try:
         ticker = ticker.strip()
@@ -353,21 +458,34 @@ def fetch_single_stock(ticker):
                 symbol += '.TW'
         
         display_code = symbol.split('.')[0]
-        stock = yf.Ticker(symbol)
         
-        # 雙重抓取機制
-        info = stock.info
-        price = info.get('currentPrice', info.get('previousClose', None))
+        # 【關鍵修復】: 傳入 session 並加入重試邏輯 (Retry Logic)
+        session = get_session()
+        stock = yf.Ticker(symbol, session=session)
         
-        if price is None:
+        info = None
+        price = None
+        
+        # 嘗試最多 3 次
+        for attempt in range(3):
             try:
-                price = stock.fast_info.last_price
-                if price:
-                    info['currentPrice'] = price
-                    info['marketCap'] = stock.fast_info.market_cap
-                    info['previousClose'] = stock.fast_info.previous_close
-            except: pass
-        
+                info = stock.info
+                price = info.get('currentPrice', info.get('previousClose', None))
+                
+                # 雙重檢查
+                if price is None:
+                    price = stock.fast_info.last_price
+                    if price:
+                        info['currentPrice'] = price
+                        info['marketCap'] = stock.fast_info.market_cap
+                        info['previousClose'] = stock.fast_info.previous_close
+                
+                if price is not None:
+                    break # 成功抓到，跳出迴圈
+                
+            except Exception:
+                time.sleep(random.uniform(1, 2)) # 失敗等待隨機秒數
+                
         if price is None: return None
 
         name_en = info.get('shortName', '')
@@ -416,7 +534,7 @@ def get_stock_data_concurrent(selected_list):
     failed_stocks = []
     progress_bar = st.progress(0, text="初始化平台資料庫...")
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor: # 降低併發數以防被鎖
         future_to_ticker = {executor.submit(fetch_single_stock, t): t for t in selected_list}
         completed = 0
         total = len(selected_list)
@@ -430,36 +548,35 @@ def get_stock_data_concurrent(selected_list):
                     failed_stocks.append(ticker)
             except:
                 failed_stocks.append(ticker)
+            
+            # 隨機延遲，模擬人類行為
+            time.sleep(random.uniform(0.1, 0.3)) 
             completed += 1
             progress_bar.progress(completed / total, text=f"正在掃描市場數據: {completed}/{total}...")
             
     progress_bar.empty()
     if failed_stocks:
-        st.warning(f"⚠️ 部分股票數據抓取失敗: {', '.join(failed_stocks)}")
+        st.warning(f"⚠️ 部分股票數據抓取失敗 (可能是 Yahoo Finance 連線阻擋): {', '.join(failed_stocks)}")
     return pd.DataFrame(data)
 
 def calculate_entropy_score(df, config):
-    # 【關鍵修復】: 不使用 dropna()，改用填補策略
     if df.empty: return df, None, "數據抓取為空，請檢查代號是否正確。", None
     
     df_norm = df.copy()
     
-    # 填充缺失值 (Imputation Strategy)
-    # 正向指標缺值補最小值 (懲罰)，負向指標缺值補最大值 (懲罰)
     for key, cfg in config.items():
         col = cfg['col']
         if col not in df.columns:
-            df[col] = np.nan # 若欄位完全缺失，先補 NaN
+            df[col] = np.nan 
             
         if cfg['direction'] == '正向':
             fill_val = df[col].min() if df[col].notna().any() else 0
         else:
-            fill_val = df[col].max() if df[col].notna().any() else 100 # 假設 100 為很高
+            fill_val = df[col].max() if df[col].notna().any() else 100
             
-        df[col] = df[col].fillna(fill_val) # 填補
-        df_norm[col] = df[col] # 同步到 norm
+        df[col] = df[col].fillna(fill_val)
+        df_norm[col] = df[col]
 
-        # Winsorization
         q_low = df[col].quantile(0.05)
         q_high = df[col].quantile(0.95)
         df_norm[col] = df[col].clip(lower=q_low, upper=q_high)
@@ -520,19 +637,6 @@ def get_radar_data(df_norm_row, config):
             categories[cat].append(score)
     return {k: np.mean(v) if v else 0 for k, v in categories.items()}
 
-def plot_radar_chart(row_name, radar_data):
-    fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(
-        r=list(radar_data.values()), theta=list(radar_data.keys()),
-        fill='toself', name=row_name, line_color='#00e676', fillcolor='rgba(0, 230, 118, 0.2)'
-    ))
-    fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 100], color='#8b949e'), bgcolor='rgba(0,0,0,0)'),
-        showlegend=False, margin=dict(t=20, b=20, l=20, r=20),
-        paper_bgcolor='rgba(0,0,0,0)', font=dict(color='#e6e6e6', size=12), height=250
-    )
-    return fig
-
 def render_factor_bars(radar_data):
     html = ""
     colors = {'技術': '#29b6f6', '籌碼': '#ab47bc', '財報': '#ffca28', '估值': '#ef5350'}
@@ -543,7 +647,7 @@ def render_factor_bars(radar_data):
         html += f"""<div style="margin-bottom: 8px;"><div style="display:flex; justify-content:space-between; font-size:0.85rem; color:#e6e6e6;"><span><span style="color:{color};">●</span> {cat}</span><span>{score:.0f}%</span></div><div style="font-family: monospace; color:{color}; letter-spacing: 2px;">{visual_bar}</div></div>"""
     return html
 
-# --- 11. 側邊欄與執行 ---
+# --- 12. 主儀表板與流程 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
     st.markdown("---")
@@ -591,7 +695,6 @@ with st.sidebar:
     st.markdown("---")
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
-# --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
     st.title("⚡ 熵值決策選股及AI深度分析平台")
@@ -699,7 +802,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 'ma_bias': f"{row['priceToMA60']:.2%}",
                                 'radar_data': radar,
                                 'analysis': analysis_text,
-                                'action': row['Action Plan']
+                                'action': row['Action Plan'],
+                                'full_symbol': row['full_symbol']
                             })
                     
                     if bulk_data_final:
@@ -730,7 +834,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     radar_data = get_radar_data(norm_row, indicators_config)
                 
                     with c1:
-                        fig_radar = plot_radar_chart(row['名稱'], radar_data)
+                        fig_radar = plot_radar_chart_ui(row['名稱'], radar_data)
                         st.plotly_chart(fig_radar, use_container_width=True)
                     
                     with c2:
@@ -739,27 +843,11 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 with c3:
                     st.markdown("**配置時機判定 (Trend vs Value)**")
-                    ticker_for_chart = row['full_symbol']
-                    try:
-                        stock_hist = yf.Ticker(ticker_for_chart).history(period="6mo")
-                        if not stock_hist.empty:
-                            fig_trend = go.Figure()
-                            fig_trend.add_trace(go.Scatter(x=stock_hist.index, y=stock_hist['Close'], mode='lines', name='Price', line=dict(color='#29b6f6', width=2)))
-                            last_price = stock_hist['Close'].iloc[-1]
-                            fig_trend.add_trace(go.Scatter(x=[stock_hist.index[-1]], y=[last_price], mode='markers', marker=dict(color='#00e676', size=10), name='Current'))
-                            
-                            timing_msg = "🟢 最佳佈局點 (Value Zone)" if row['priceToMA60'] < 0 else "🟡 持有/觀察 (Momentum)"
-                            if row['priceToMA60'] > 0.15: timing_msg = "🔴 留意過熱 (Overheated)"
-                            
-                            fig_trend.update_layout(
-                                title=dict(text=timing_msg, font=dict(size=14, color='#e6e6e6')),
-                                xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#30363d'),
-                                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                                margin=dict(l=0,r=0,t=30,b=0), height=250, showlegend=False
-                            )
-                            st.plotly_chart(fig_trend, use_container_width=True)
-                        else: st.warning("⚠️ 無法取得歷史數據")
-                    except Exception as e: st.error("圖表載入失敗")
+                    fig_trend = plot_trend_chart_ui(row['full_symbol'], row['priceToMA60'])
+                    if fig_trend:
+                        st.plotly_chart(fig_trend, use_container_width=True)
+                    else:
+                        st.warning("⚠️ 無法取得歷史數據")
 
                 col_btn, col_dl = st.columns([3, 1])
                 
@@ -794,7 +882,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         'ma_bias': f"{row['priceToMA60']:.2%}",
                         'radar_data': radar_data,
                         'analysis': st.session_state['analysis_results'].get(stock_name, None),
-                        'action': row['Action Plan']
+                        'action': row['Action Plan'],
+                        'full_symbol': row['full_symbol']
                     }]
                     pdf_data = create_pdf(single_data)
                     st.download_button(
