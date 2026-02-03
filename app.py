@@ -8,6 +8,7 @@ import concurrent.futures
 import requests
 import json
 import time
+import os
 
 # --- 介面設定 ---
 st.set_page_config(page_title="熵值法 x Gemini 全自動分析", page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
@@ -23,20 +24,28 @@ if 'scan_finished' not in st.session_state:
     st.session_state['scan_finished'] = False
 
 # --- 1. 設定 Gemini API ---
+# 優先讀取 Secrets，若無則讀取環境變數 (模擬 main_app.py 的邏輯)
 api_key = st.secrets.get("GEMINI_API_KEY")
 
+# 如果 Secrets 沒設定，您可以暫時在此填入那把「備用鑰匙」測試
+# if not api_key: api_key = "AIzaSyCGDrlpjbfUFejbGNWbrmLTkb-H-c1BYVM" 
+
 if not api_key:
-    st.error("⚠️ 未偵測到 Gemini API Key！請去 Streamlit Cloud 後台的 Settings -> Secrets 設定 `GEMINI_API_KEY`。")
+    st.error("⚠️ 未偵測到 Gemini API Key！請去 Streamlit Cloud 後台設定 `GEMINI_API_KEY`。")
     st.stop()
 
-# 【核心優化】移植 main_app.py 的強韌模型鏈 + 詳細除錯
+# --- 2. Proxy 設定 (完全復刻 main_app.py) ---
+proxies = {}
+if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
+if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
+
+# 【核心優化】使用 main_app.py 同款的 requests 呼叫法
 def call_gemini_api(prompt):
-    # 參考您的事故調查平台，使用多重備援策略
-    # 順序：先試最快的 Flash -> 再試最新的 2.0 -> 最後用最強的 1.5 Pro
+    # 使用 main_app.py 證實可用的模型清單
     model_chain = [
-        'gemini-1.5-flash',      # 首選：速度最快、穩定
-        'gemini-2.0-flash-exp',  # 次選：Google 最新實驗版 (您另一支程式用這個)
-        'gemini-1.5-pro',        # 保底：邏輯最強
+        'gemini-1.5-flash',      # 首選
+        'gemini-1.5-pro',        # 次選
+        'gemini-2.0-flash-exp',  # 實驗版
     ]
     
     headers = {'Content-Type': 'application/json'}
@@ -45,32 +54,28 @@ def call_gemini_api(prompt):
         "generationConfig": {"temperature": 0.2}
     }
     
-    error_log = [] # 收集所有失敗原因
+    error_log = []
     
     for model_name in model_chain:
+        # URL 結構與 main_app.py 完全一致
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         
         try:
-            # 延長超時時間到 60 秒，避免太快放棄
-            response = requests.post(url, headers=headers, json=data, timeout=60)
+            # 加入 proxies 參數 (關鍵差異)
+            response = requests.post(url, headers=headers, json=data, proxies=proxies, timeout=60)
             
             if response.status_code == 200:
-                # 成功！
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
-                # 失敗，記錄詳細原因
                 try:
-                    err_json = response.json()
-                    err_msg = err_json.get('error', {}).get('message', response.text)
-                    err_status = err_json.get('error', {}).get('status', response.status_code)
+                    err_msg = response.json().get('error', {}).get('message', response.text)
                 except:
                     err_msg = response.text
-                    err_status = response.status_code
-                    
-                log_entry = f"❌ {model_name} (Code {err_status}): {err_msg}"
-                print(log_entry) # 寫入後台 Log
+                
+                log_entry = f"❌ {model_name} (Status {response.status_code}): {err_msg}"
+                print(log_entry)
                 error_log.append(log_entry)
-                time.sleep(1) # 休息一下再切換下一個模型
+                time.sleep(1)
                 continue
                 
         except Exception as e:
@@ -78,9 +83,8 @@ def call_gemini_api(prompt):
             error_log.append(log_entry)
             continue
 
-    # 如果全部失敗，顯示完整錯誤清單，讓我們知道第一關發生什麼事
     full_report = "\n\n".join(error_log)
-    return f"⚠️ AI 分析失敗。已嘗試 {len(model_chain)} 種模型皆無回應。\n\n🔍 **錯誤診斷報告：**\n{full_report}"
+    return f"⚠️ AI 分析失敗。已嘗試所有模型。\n\n🔍 **錯誤診斷：**\n{full_report}\n\n💡 **提示：** 如果事故平台能跑，請嘗試將那把 AIzaSyCG... 開頭的備用鑰匙貼到您的 Secrets 試試看。"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
@@ -126,9 +130,7 @@ with st.sidebar:
     scan_mode = st.radio("選股模式：", ["自行輸入/多選", "🔥 熱門策略掃描", "🏭 產業類股掃描"])
     target_stocks = []
     
-    # 這裡只負責「準備名單」，絕對不觸發執行
     if scan_mode == "自行輸入/多選":
-        # 預設值僅作為 UI 顯示
         default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
         selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
         target_stocks = selected
@@ -168,7 +170,6 @@ with st.sidebar:
             st.info(f"已鎖定【{selected_industry}】，共 {len(target_stocks)} 檔。請點擊下方按鈕開始分析。")
             if len(target_stocks) > 60: st.warning("⚠️ 數量較多，掃描時間可能較長。")
     
-    # 【關鍵按鈕】這是唯一的執行入口
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
 # --- 4. 指標與函數 ---
@@ -247,25 +248,19 @@ def calculate_entropy_score(df, config):
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None
 
-# --- 主執行區 (邏輯重構：只有按下按鈕才會執行) ---
-
-# 1. 只有當按鈕「真的被按下」時，才執行數據抓取
+# --- 主執行區 ---
 if run_btn:
     if not target_stocks:
         st.warning("⚠️ 請先選擇至少一檔股票或一個策略！")
     else:
-        # 重置舊資料
         st.session_state['analysis_results'] = {}
         st.session_state['raw_data'] = None
-        
-        # 執行抓取
         raw = get_stock_data_concurrent(target_stocks)
         if not raw.empty:
             st.session_state['raw_data'] = raw
             st.session_state['scan_finished'] = True
-            st.rerun() # 強制刷新頁面來顯示結果
+            st.rerun()
 
-# 2. 顯示結果 (只在 scan_finished 為 True 時顯示)
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     raw = st.session_state['raw_data']
     st.markdown("---")
@@ -285,7 +280,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             use_container_width=True
         )
         
-        # --- Gemini AI 整合區 ---
         st.markdown("---")
         st.header(f"🤖 Gemini AI 深度分析 (點擊按鈕即時生成)")
         
@@ -301,13 +295,11 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             
             with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=is_expanded):
                 col1, col2 = st.columns([4, 1])
-                
                 with col1:
                     if stock_name in st.session_state['analysis_results']:
                         st.success("✅ 分析報告已生成")
                     else:
                         st.caption("AI 分析核心指令已準備就緒...")
-                        
                 with col2:
                     st.button(f"✨ AI 分析", key=f"btn_{i}", on_click=analyze_callback, use_container_width=True)
 
@@ -315,6 +307,5 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     st.markdown("### 📝 AI 分析報告")
                     st.markdown(st.session_state['analysis_results'][stock_name])
 
-# 3. 如果還沒開始掃描，顯示提示
 elif not st.session_state['scan_finished']:
     st.info("👈 請在左側選擇選股模式與範圍，確認無誤後點擊「啟動全自動掃描」按鈕。")
