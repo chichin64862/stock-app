@@ -25,52 +25,77 @@ except ImportError:
     st.error("⚠️ 缺少 reportlab 套件。請在 requirements.txt 中加入 `reportlab`")
     st.stop()
 
-# --- 1. 介面設定 ---
+# --- 1. 介面設定 (更名為 AlphaCore) ---
 st.set_page_config(
-    page_title="QuantAlpha | 熵值法 x Gemini 戰略分析", 
+    page_title="AlphaCore | 智能量化戰略終端", 
     page_icon="⚡", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 全域視覺優化 (High Contrast Dark Mode) ---
+# --- 2. CSS 終極修復 (針對 Popover, Toolbar, Button) ---
 st.markdown("""
 <style>
-    /* 1. 基底：強制全域黑底白字 */
-    .stApp {
-        background-color: #0e1117 !important;
-    }
-    h1, h2, h3, h4, h5, h6, p, div, span, label, li {
+    /* =========================================
+       1. 全局深色模式強制鎖定
+       ========================================= */
+    .stApp { background-color: #0e1117 !important; }
+    
+    body, h1, h2, h3, h4, h5, h6, p, div, span, label, li {
         color: #e6e6e6 !important;
-        font-family: 'Roboto', sans-serif;
+        font-family: 'Roboto', 'Helvetica Neue', sans-serif;
     }
 
-    /* 2. 【核心修復】表格工具列 (右上角) */
+    /* =========================================
+       2. 【修復】DataFrame 右上角工具列
+       ========================================= */
     [data-testid="stElementToolbar"] {
         background-color: #262730 !important;
         border: 1px solid #4b4b4b !important;
         border-radius: 6px !important;
-        opacity: 1 !important;
-        z-index: 1000 !important;
+        z-index: 99999 !important;
     }
     [data-testid="stElementToolbar"] button {
         border: none !important;
         background: transparent !important;
-        color: #ffffff !important;
     }
-    /* 強制 SVG 圖示變白 */
     [data-testid="stElementToolbar"] svg {
         fill: #ffffff !important;
         color: #ffffff !important;
     }
-    /* 滑鼠懸停變色 */
     [data-testid="stElementToolbar"] button:hover {
         background-color: #4b4b4b !important;
     }
 
-    /* 3. 【核心修復】下載按鈕 (stDownloadButton) */
+    /* =========================================
+       3. 【修復】Show/hide columns 等彈出選單 (Popover)
+       這是解決「白底白字」的關鍵！
+       ========================================= */
+    div[data-baseweb="popover"], 
+    div[data-baseweb="popover"] > div,
+    ul[data-baseweb="menu"] {
+        background-color: #1f2937 !important; /* 深灰背景 */
+        border: 1px solid #4b4b4b !important;
+    }
+    
+    /* 選單內的文字 */
+    div[data-baseweb="popover"] li, 
+    div[data-baseweb="popover"] div {
+        color: #e6e6e6 !important;
+    }
+    
+    /* 滑鼠懸停選項 */
+    li[role="option"]:hover, 
+    li[role="option"][aria-selected="true"] {
+        background-color: #238636 !important; /* 綠色高亮 */
+        color: white !important;
+    }
+
+    /* =========================================
+       4. 【修復】下載按鈕 (stDownloadButton)
+       ========================================= */
     [data-testid="stDownloadButton"] button {
-        background-color: #262730 !important;
+        background-color: #1f2937 !important;
         color: #ffffff !important;
         border: 1px solid #4b4b4b !important;
         transition: all 0.3s ease;
@@ -78,24 +103,16 @@ st.markdown("""
     [data-testid="stDownloadButton"] button:hover {
         border-color: #58a6ff !important;
         color: #58a6ff !important;
-        background-color: #1f1f1f !important;
+        background-color: #262730 !important;
     }
-    /* 強制文字顏色 */
-    [data-testid="stDownloadButton"] p {
+    [data-testid="stDownloadButton"] button p {
         color: inherit !important;
     }
-    
-    /* 4. 普通按鈕 (生成分析) */
-    .stButton > button {
-        background-color: #238636 !important;
-        color: white !important;
-        border: none !important;
-    }
-    .stButton > button:hover {
-        background-color: #2ea043 !important;
-    }
 
-    /* 5. 輸入框與下拉選單 */
+    /* =========================================
+       5. 輸入框與其他元件
+       ========================================= */
+    /* 下拉選單 Input */
     div[data-baseweb="select"] > div {
         background-color: #21262d !important;
         border-color: #30363d !important;
@@ -105,24 +122,14 @@ st.markdown("""
         color: #ffffff !important;
         caret-color: #ffffff !important;
     }
-    div[data-baseweb="popover"] div {
-        background-color: #161b22 !important;
-        color: #e6e6e6 !important;
-    }
-    div[data-baseweb="popover"] li:hover {
-        background-color: #30363d !important;
-    }
-    div[data-baseweb="tag"] {
-        background-color: #30363d !important;
-    }
-
-    /* 6. 側邊欄 */
+    
+    /* 側邊欄 */
     [data-testid="stSidebar"] {
         background-color: #161b22 !important;
         border-right: 1px solid #30363d;
     }
-
-    /* 7. 卡片樣式 */
+    
+    /* 卡片與報告中心 */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
@@ -130,15 +137,15 @@ st.markdown("""
         border: 1px solid #30363d; 
         margin-bottom: 15px;
     }
-    
-    /* 8. PDF 下載中心 */
     .pdf-center {
         background-color: #1f2937;
-        padding: 15px;
-        border-radius: 8px;
+        padding: 20px;
+        border-radius: 10px;
         border-left: 5px solid #238636;
-        margin-bottom: 20px;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
+    .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -195,7 +202,7 @@ def create_pdf(stock_data_list):
     h3_style = ParagraphStyle('Heading3', parent=styles['Heading3'], fontName=font_name, fontSize=12, spaceBefore=10, textColor=colors.HexColor("#16A085"))
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=16, spaceAfter=5)
     
-    story.append(Paragraph(f"QuantAlpha 深度投資戰略報告", title_style))
+    story.append(Paragraph(f"AlphaCore 深度投資戰略報告", title_style))
     story.append(Paragraph(f"生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 20))
 
@@ -207,7 +214,6 @@ def create_pdf(stock_data_list):
         story.append(Paragraph("_" * 60, normal_style))
         story.append(Spacer(1, 10))
         
-        # 數據表
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
         t_data = [
             ["指標", "數值", "指標", "數值"],
@@ -227,7 +233,6 @@ def create_pdf(stock_data_list):
         story.append(t)
         story.append(Spacer(1, 15))
 
-        # 因子分析
         radar = stock.get('radar_data', {})
         if radar:
             story.append(Paragraph("⚡ 四大因子貢獻度", h3_style))
@@ -244,7 +249,6 @@ def create_pdf(stock_data_list):
             story.append(r_table)
             story.append(Spacer(1, 15))
 
-        # AI 分析
         analysis = stock.get('analysis')
         if analysis:
             story.append(Paragraph("🤖 Gemini AI 戰略解讀", h3_style))
@@ -467,7 +471,7 @@ def render_factor_bars(radar_data):
 
 # --- 11. 側邊欄與執行 ---
 with st.sidebar:
-    st.title("🎛️ QuantAlpha 控制台")
+    st.title("🎛️ AlphaCore 控制台")
     st.markdown("---")
     scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
     target_stocks = []
@@ -556,7 +560,7 @@ with st.sidebar:
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ QuantAlpha 戰略儀表板 3.5")
+    st.title("⚡ AlphaCore 智能量化戰略終端 4.0")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -594,14 +598,18 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         top_stocks = res.head(top_n)
 
         st.markdown("### 🏆 Top 10 潛力標的 (Entropy Ranking)")
+        # --- 欄位標題中英對照優化 ---
         st.dataframe(
-            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'Trend']],
+            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'beta', 'Trend']],
             column_config={
-                "Score": st.column_config.ProgressColumn("Entropy Score", format="%.1f", min_value=0, max_value=100),
-                "close_price": st.column_config.NumberColumn("Price", format="%.2f"),
-                "pegRatio": st.column_config.NumberColumn("PEG", format="%.2f"),
-                "priceToMA60": st.column_config.NumberColumn("MA Bias", format="%.2%"),
-                "Trend": st.column_config.TextColumn("配置時機", help="基於季線乖離率判定"),
+                "代號": st.column_config.TextColumn("代號 (Code)"),
+                "名稱": st.column_config.TextColumn("名稱 (Name)"),
+                "close_price": st.column_config.NumberColumn("收盤價 (Price)", format="%.2f"),
+                "Score": st.column_config.ProgressColumn("熵值評分 (Entropy Score)", format="%.1f", min_value=0, max_value=100),
+                "pegRatio": st.column_config.NumberColumn("PEG (Valuation)", format="%.2f"),
+                "priceToMA60": st.column_config.NumberColumn("乖離率 (MA Bias)", format="%.2%"),
+                "beta": st.column_config.NumberColumn("Beta (Risk)", format="%.2f"),
+                "Trend": st.column_config.TextColumn("配置時機 (Actionable Timing)"),
             },
             hide_index=True, use_container_width=True
         )
@@ -618,16 +626,19 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 c1, c2, c3 = st.columns([1.5, 1.2, 2])
                 
-                norm_row = df_norm.loc[index]
-                radar_data = get_radar_data(norm_row, indicators_config)
+                # 安全獲取 norm_row
+                code_match = df_norm[df_norm['代號'] == row['代號']]
+                if not code_match.empty:
+                    norm_row = code_match.iloc[0]
+                    radar_data = get_radar_data(norm_row, indicators_config)
                 
-                with c1:
-                    fig_radar = plot_radar_chart(row['名稱'], radar_data)
-                    st.plotly_chart(fig_radar, use_container_width=True)
-                
-                with c2:
-                    st.markdown("**因子貢獻解析**")
-                    st.markdown(render_factor_bars(radar_data), unsafe_allow_html=True)
+                    with c1:
+                        fig_radar = plot_radar_chart(row['名稱'], radar_data)
+                        st.plotly_chart(fig_radar, use_container_width=True)
+                    
+                    with c2:
+                        st.markdown("**因子貢獻解析**")
+                        st.markdown(render_factor_bars(radar_data), unsafe_allow_html=True)
                 
                 with c3:
                     st.markdown("**配置時機判定 (Trend vs Value)**")
@@ -653,6 +664,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         else: st.warning("⚠️ 無法取得歷史數據")
                     except Exception as e: st.error("圖表載入失敗")
 
+                # 按鈕區 (AI 生成 + 個股下載)
                 col_btn, col_dl = st.columns([3, 1])
                 
                 with col_btn:
@@ -671,6 +683,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 st.session_state['analysis_results'][stock_name] = result
                                 st.rerun()
                 
+                # 個股 PDF 下載 (永遠顯示)
                 with col_dl:
                     single_data = [{
                         'name': stock_name,
