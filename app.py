@@ -103,11 +103,11 @@ st.markdown("""
         background-color: #4b4b4b !important;
     }
 
-    /* 6. 輸入框優化 (解決白底看不到字) */
+    /* 6. 輸入框優化 */
     input { 
         color: #ffffff !important; 
         caret-color: #ffffff !important;
-        background-color: #262730 !important; /* 確保輸入框背景深色 */
+        background-color: #262730 !important; 
     }
     
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
@@ -198,10 +198,14 @@ def create_pdf(stock_data_list):
         story.append(Spacer(1, 10))
 
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
+        # 數據容錯處理
+        peg = stock.get('peg', 'N/A')
+        if peg is None or peg == 'nan': peg = 'N/A'
+        
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
-            [f"PEG Ratio", f"{stock.get('peg', 'N/A')}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
+            [f"PEG Ratio", f"{peg}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
             [f"負債權益比", f"{stock.get('debt_eq', 'N/A')}", f"FCF Yield (現金流)", f"{stock.get('fcf_yield', 'N/A')}"],
             [f"合約負債", f"{stock.get('cl_val', '尚未讀取')}", f"Beta", f"{stock.get('beta', 'N/A')}"],
         ]
@@ -344,49 +348,40 @@ def fetch_single_stock(ticker):
         else:
             name_zh = symbol 
         
-        # 智慧補全代碼後綴
         if not (symbol.endswith('.TW') or symbol.endswith('.TWO')):
             if symbol.isdigit() and len(symbol) == 4:
-                symbol += '.TW' # 預設補上市
+                symbol += '.TW'
         
         display_code = symbol.split('.')[0]
         stock = yf.Ticker(symbol)
         
-        # 【關鍵修復】雙重抓取機制 (Double-Check)
-        # 1. 先嘗試標準 info
+        # 雙重抓取機制
         info = stock.info
         price = info.get('currentPrice', info.get('previousClose', None))
         
-        # 2. 若 info 失敗 (常見於台玻 1802)，嘗試 fast_info
         if price is None:
             try:
                 price = stock.fast_info.last_price
                 if price:
-                    # 手動補齊缺少的 info 欄位，避免報錯
                     info['currentPrice'] = price
                     info['marketCap'] = stock.fast_info.market_cap
                     info['previousClose'] = stock.fast_info.previous_close
-            except:
-                pass
+            except: pass
         
-        # 若兩者都失敗，回傳 None (讓主程式知道這檔抓不到)
-        if price is None:
-            return None
+        if price is None: return None
 
         name_en = info.get('shortName', '')
         final_name = f"{name_zh} ({name_en})" if name_en else name_zh
 
-        # 數值容錯處理 (若無數據則設為 None 或 預設值)
         peg = info.get('pegRatio', None)
         beta = info.get('beta', 1.0)
         
         ma50 = info.get('fiftyDayAverage', price) 
         bias = (price / ma50) - 1 if ma50 and ma50 > 0 else 0
         
-        # 嘗試計算量能
         vol_curr = info.get('volume', 0)
         vol_avg = info.get('averageVolume', 0)
-        if vol_curr == 0: # 嘗試從 history 補救
+        if vol_curr == 0:
              try:
                 hist = stock.history(period="5d")
                 if not hist.empty:
@@ -395,7 +390,6 @@ def fetch_single_stock(ticker):
              except: pass
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
         
-        # FCF
         fcf = info.get('freeCashflow', 0)
         mkt_cap = info.get('marketCap', 1)
         if mkt_cap is None: mkt_cap = 1
@@ -436,50 +430,53 @@ def get_stock_data_concurrent(selected_list):
                     failed_stocks.append(ticker)
             except:
                 failed_stocks.append(ticker)
-                
             completed += 1
             progress_bar.progress(completed / total, text=f"正在掃描市場數據: {completed}/{total}...")
             
     progress_bar.empty()
-    
-    # 【關鍵修復】如果抓取失敗，顯示警告
     if failed_stocks:
-        st.warning(f"⚠️ 部分股票數據抓取失敗 (可能是 Yahoo Finance 連線問題或代號錯誤): {', '.join(failed_stocks)}")
-        
+        st.warning(f"⚠️ 部分股票數據抓取失敗: {', '.join(failed_stocks)}")
     return pd.DataFrame(data)
 
 def calculate_entropy_score(df, config):
-    df = df.dropna().copy()
-    if df.empty: return df, None, "有效數據不足 (可能因基本面數據缺失或過濾後無標的)", None
+    # 【關鍵修復】: 不使用 dropna()，改用填補策略
+    if df.empty: return df, None, "數據抓取為空，請檢查代號是否正確。", None
     
-    # 剛性過濾
-    if 'returnOnEquity' in df.columns:
-        df = df[df['returnOnEquity'] > 0]
-        
-    if df.empty: return df, None, "所有股票皆未通過剛性過濾 (ROE > 0)", None
-
     df_norm = df.copy()
     
+    # 填充缺失值 (Imputation Strategy)
+    # 正向指標缺值補最小值 (懲罰)，負向指標缺值補最大值 (懲罰)
     for key, cfg in config.items():
         col = cfg['col']
-        if col in df.columns:
-            q_low = df[col].quantile(0.05)
-            q_high = df[col].quantile(0.95)
-            df_norm[col] = df[col].clip(lower=q_low, upper=q_high)
+        if col not in df.columns:
+            df[col] = np.nan # 若欄位完全缺失，先補 NaN
             
-            mn, mx = df_norm[col].min(), df_norm[col].max()
-            denom = mx - mn
-            if denom == 0: df_norm[f'{col}_n'] = 0.5
-            else:
-                if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df_norm[col] - mn) / denom
-                else: df_norm[f'{col}_n'] = (mx - df_norm[col]) / denom
+        if cfg['direction'] == '正向':
+            fill_val = df[col].min() if df[col].notna().any() else 0
+        else:
+            fill_val = df[col].max() if df[col].notna().any() else 100 # 假設 100 為很高
+            
+        df[col] = df[col].fillna(fill_val) # 填補
+        df_norm[col] = df[col] # 同步到 norm
+
+        # Winsorization
+        q_low = df[col].quantile(0.05)
+        q_high = df[col].quantile(0.95)
+        df_norm[col] = df[col].clip(lower=q_low, upper=q_high)
+        
+        mn, mx = df_norm[col].min(), df_norm[col].max()
+        denom = mx - mn
+        if denom == 0: df_norm[f'{col}_n'] = 0.5
+        else:
+            if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df_norm[col] - mn) / denom
+            else: df_norm[f'{col}_n'] = (mx - df_norm[col]) / denom
             
     m = len(df)
     k = 1 / np.log(m) if m > 1 else 0
     weights = {}
     for key, cfg in config.items():
         col = cfg['col']
-        if col in df_norm.columns and f'{col}_n' in df_norm.columns:
+        if f'{col}_n' in df_norm.columns:
             p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum() if df_norm[f'{col}_n'].sum() != 0 else 0
             e = -k * np.sum(p * np.log(p + 1e-9))
             weights[key] = 1 - e 
@@ -553,12 +550,11 @@ with st.sidebar:
     scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
     target_stocks = []
     
-    # 手動輸入框 (白色字體修復)
     st.caption("🔍 若找不到股票，請直接輸入代號 (如 1802):")
     manual_input = st.text_input("手動輸入代號:", placeholder="例如: 1802 或 2330", label_visibility="collapsed")
     
     if scan_mode == "自行輸入/多選":
-        default_selection = ["2330.TW 台積電", "2454.TW 聯發科"]
+        default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
         selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
         target_stocks = selected
     elif scan_mode == "🔥 熱門策略掃描":
@@ -628,30 +624,31 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
 
     raw = st.session_state['raw_data']
     res, w, err, df_norm = calculate_entropy_score(raw, indicators_config)
-    st.session_state['df_norm'] = df_norm 
-    
-    def get_trend_label(bias):
-        if bias < -0.05: return "🟢 超跌/買點"
-        elif bias > 0.15: return "🔴 過熱/賣點"
-        else: return "🟡 盤整/持有"
-        
-    def determine_action_plan(row):
-        score = row['Score']
-        bias = row['priceToMA60']
-        if score >= 75:
-            if bias < -0.05: return "🚀 強力抄底 (Deep Value Buy)"
-            elif bias > 0.15: return "👀 拉回買進 (Buy on Dip)"
-            else: return "🔥 強力買進 (Strong Buy)"
-        elif score >= 50:
-            if bias < -0.1: return "🟢 超跌反彈 (Rebound)"
-            elif bias > 0.2: return "🔴 高檔調節 (Take Profit)"
-            else: return "🟡 持有續抱 (Hold)"
-        else:
-            return "⛔ 觀望/賣出 (Avoid/Sell)"
     
     if err:
         st.error(err)
     else:
+        st.session_state['df_norm'] = df_norm 
+        
+        def get_trend_label(bias):
+            if bias < -0.05: return "🟢 超跌/買點"
+            elif bias > 0.15: return "🔴 過熱/賣點"
+            else: return "🟡 盤整/持有"
+            
+        def determine_action_plan(row):
+            score = row['Score']
+            bias = row['priceToMA60']
+            if score >= 75:
+                if bias < -0.05: return "🚀 強力抄底 (Deep Value Buy)"
+                elif bias > 0.15: return "👀 拉回買進 (Buy on Dip)"
+                else: return "🔥 強力買進 (Strong Buy)"
+            elif score >= 50:
+                if bias < -0.1: return "🟢 超跌反彈 (Rebound)"
+                elif bias > 0.2: return "🔴 高檔調節 (Take Profit)"
+                else: return "🟡 持有續抱 (Hold)"
+            else:
+                return "⛔ 觀望/賣出 (Avoid/Sell)"
+        
         res['Trend'] = res['priceToMA60'].apply(get_trend_label)
         res['Action Plan'] = res.apply(determine_action_plan, axis=1)
         top_n = 10
