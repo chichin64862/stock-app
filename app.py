@@ -33,62 +33,65 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 強制修正 (針對 Toolbar 與 Input) ---
+# --- 2. CSS 終極修復 (針對 Toolbar, Input, 與全局配色) ---
 st.markdown("""
 <style>
-    /* 全局文字顏色修正 */
-    body, .stApp, p, h1, h2, h3, h4, h5, h6, span, div {
+    /* 1. 全局文字與背景 */
+    body, .stApp, p, h1, h2, h3, h4, h5, h6, span, div, label {
         color: #e6e6e6 !important;
         font-family: 'Roboto', 'Helvetica Neue', sans-serif;
     }
     .stApp { background-color: #0e1117; }
     [data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
-    
-    /* --- DataFrame 工具列 (右上角眼睛、下載) --- */
-    div[data-testid="stElementToolbar"] {
+
+    /* 2. 【核彈級修復】DataFrame 工具列 (右上角) */
+    /* 針對工具列容器 */
+    [data-testid="stElementToolbar"] {
         background-color: #262730 !important;
         border: 1px solid #4b4b4b !important;
         border-radius: 8px !important;
-        opacity: 1 !important;
+        z-index: 999 !important;
     }
-    div[data-testid="stElementToolbar"] button {
+    /* 針對工具列按鈕 */
+    [data-testid="stElementToolbar"] button {
+        border: none !important;
+        background: transparent !important;
         color: #ffffff !important;
-        background-color: transparent !important;
     }
-    div[data-testid="stElementToolbar"] svg {
+    /* 針對 SVG 圖示 (強制填色) */
+    [data-testid="stElementToolbar"] svg {
         fill: #ffffff !important;
-        color: #ffffff !important;
+        stroke: #ffffff !important;
     }
-    div[data-testid="stElementToolbar"] button:hover {
+    /* 滑鼠懸停效果 */
+    [data-testid="stElementToolbar"] button:hover {
         background-color: #4b4b4b !important;
-        color: #58a6ff !important;
-    }
-    div[data-testid="stElementToolbar"] button:hover svg {
-        fill: #58a6ff !important;
     }
 
-    /* --- 搜尋輸入框 (Input) --- */
+    /* 3. 搜尋輸入框與下拉選單 */
     div[data-baseweb="select"] > div {
         background-color: #21262d !important;
         border-color: #30363d !important;
     }
     input[aria-autocomplete="list"] {
         color: #ffffff !important;
-        caret-color: #ffffff !important;
+        caret-color: #ffffff !important; /* 游標顏色 */
         -webkit-text-fill-color: #ffffff !important;
     }
+    /* 下拉選單選項背景 */
     div[data-baseweb="popover"] div {
         background-color: #161b22 !important;
         color: #e6e6e6 !important;
     }
-    li[role="option"]:hover, li[role="option"][aria-selected="true"] {
+    div[data-baseweb="popover"] li:hover {
         background-color: #30363d !important;
     }
+    /* 多選標籤 */
     div[data-baseweb="tag"] {
         background-color: #30363d !important;
     }
 
-    /* --- 其他樣式 --- */
+    /* 4. 卡片與其他元件 */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
@@ -100,7 +103,7 @@ st.markdown("""
     .stock-card:hover { border-color: #58a6ff; }
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
     
-    /* PDF 下載中心樣式 */
+    /* PDF 下載中心 */
     .pdf-center {
         background-color: #1f2937;
         padding: 15px;
@@ -117,19 +120,19 @@ if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
 if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
 
-# --- 4. 安全讀取 API Key ---
+# --- 4. API Key ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
     st.error("⚠️ 系統偵測不到 API Key！請確認您已在 Streamlit Cloud > Settings > Secrets 中設定 `GEMINI_API_KEY`。")
     st.stop()
 
-# --- 5. 環境與連線設定 ---
+# --- 5. 環境設定 ---
 proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
 
-# --- 6. 字型下載與註冊 ---
+# --- 6. 字型下載 (PDF 中文支援) ---
 @st.cache_resource
 def register_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -150,7 +153,7 @@ def register_chinese_font():
 
 font_ready = register_chinese_font()
 
-# --- 7. PDF 生成引擎 ---
+# --- 7. 雙軌 PDF 生成引擎 ---
 def create_pdf(stock_data_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -159,56 +162,91 @@ def create_pdf(stock_data_list):
     styles = getSampleStyleSheet()
     font_name = 'ChineseFont' if font_ready else 'Helvetica'
     
-    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, spaceAfter=20, alignment=1, textColor=colors.HexColor("#2C3E50"))
-    h2_style = ParagraphStyle('Heading2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=15, spaceAfter=10, textColor=colors.HexColor("#2980B9"))
-    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=16, spaceAfter=10)
-    meta_style = ParagraphStyle('Meta', parent=styles['Normal'], fontName=font_name, fontSize=9, textColor=colors.gray)
-
+    # 定義樣式
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=22, spaceAfter=20, alignment=1, textColor=colors.HexColor("#2C3E50"))
+    h2_style = ParagraphStyle('Heading2', parent=styles['Heading2'], fontName=font_name, fontSize=16, spaceBefore=15, spaceAfter=10, textColor=colors.HexColor("#2980B9"))
+    h3_style = ParagraphStyle('Heading3', parent=styles['Heading3'], fontName=font_name, fontSize=12, spaceBefore=10, textColor=colors.HexColor("#16A085"))
+    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=16, spaceAfter=5)
+    
+    # 報告標題
     story.append(Paragraph(f"QuantAlpha 深度投資戰略報告", title_style))
-    story.append(Paragraph(f"生成日期: {datetime.now().strftime('%Y-%m-%d %H:%M')}", meta_style))
+    story.append(Paragraph(f"生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 20))
 
     for idx, stock in enumerate(stock_data_list):
         if idx > 0: story.append(PageBreak()) 
-        name = stock['name']
-        price = stock['price']
-        score = stock['score']
-        analysis = stock['analysis']
         
+        name = stock['name']
+        
+        # 標題區
         story.append(Paragraph(f"🎯 {name}", h2_style))
-        data = [
-            [f"最新價格: {price}", f"Entropy Score: {score}"],
-            [f"PEG Ratio: {stock.get('peg', 'N/A')}", f"Beta: {stock.get('beta', 'N/A')}"]
+        story.append(Paragraph("_" * 60, normal_style))
+        story.append(Spacer(1, 10))
+        
+        # 1. 核心數據表 (Table)
+        story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
+        
+        # 準備表格數據
+        radar = stock.get('radar_data', {})
+        t_data = [
+            ["指標", "數值", "指標", "數值"],
+            [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
+            [f"PEG Ratio", f"{stock.get('peg', 'N/A')}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
+            [f"Beta (風險)", f"{stock.get('beta', 'N/A')}", f"合約負債", f"{stock.get('cl_val', '尚未讀取')}"],
         ]
-        t = Table(data, colWidths=[230, 230])
+        
+        t = Table(t_data, colWidths=[100, 130, 100, 130])
         t.setStyle(TableStyle([
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, -1), font_name),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('BACKGROUND', (0, 0), (-1, -1), colors.whitesmoke),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),
         ]))
         story.append(t)
         story.append(Spacer(1, 15))
 
+        # 2. 因子貢獻分析 (模擬雷達圖數據)
+        if radar:
+            story.append(Paragraph("⚡ 四大因子貢獻度 (Factor Contribution)", h3_style))
+            # 找出最強因子
+            best_factor = max(radar, key=radar.get)
+            story.append(Paragraph(f"🚀 主力優勢: <b>{best_factor} ({radar[best_factor]:.1f}%)</b>", normal_style))
+            
+            r_data = [[k, f"{v:.1f}%"] for k, v in radar.items()]
+            r_table = Table([["因子面向", "得分 (0-100)"]] + r_data, colWidths=[200, 100], hAlign='LEFT')
+            r_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#16A085")),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, -1), font_name),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
+            ]))
+            story.append(r_table)
+            story.append(Spacer(1, 15))
+
+        # 3. AI 深度分析 (如果有)
+        analysis = stock.get('analysis')
         if analysis:
-            formatted_analysis = analysis.replace("\n", "<br/>").replace("**", "<b>").replace("**", "</b>").replace("- ", "&bull; ").replace("#", "")
-            story.append(Paragraph(formatted_analysis, normal_style))
+            story.append(Paragraph("🤖 Gemini AI 戰略解讀", h3_style))
+            # 格式化
+            formatted = analysis.replace("\n", "<br/>").replace("**", "<b>").replace("**", "</b>")
+            formatted = formatted.replace("###", "").replace("#", "")
+            story.append(Paragraph(formatted, normal_style))
         else:
-            story.append(Paragraph("（尚未生成 AI 分析報告）", meta_style))
+            story.append(Paragraph("💡 (此份報告僅包含量化數據，尚未執行 AI 深度解讀)", normal_style))
             
     try: doc.build(story)
     except Exception as e:
         buffer = io.BytesIO()
         c = SimpleDocTemplate(buffer)
-        story = [Paragraph(f"PDF Error: {str(e)}", styles['Normal'])]
+        story = [Paragraph(f"PDF Error: {str(e)}", getSampleStyleSheet()['Normal'])]
         c.build(story)
 
     buffer.seek(0)
     return buffer
 
-# --- 8. 模型呼叫 ---
+# --- 8. Gemini API ---
 def get_available_model(key):
     default_model = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
@@ -232,7 +270,6 @@ def call_gemini_api(prompt):
         else: return f"❌ 分析失敗 (Code {response.status_code})"
     except Exception as e: return f"❌ 連線逾時或錯誤: {str(e)}"
 
-# --- 9. 提示詞 ---
 HEDGE_FUND_PROMPT = """
 【角色設定】
 你現在是華爾街頂尖的避險基金經理人。請針對 **[STOCK]** 進行深度投資分析。
@@ -249,7 +286,7 @@ HEDGE_FUND_PROMPT = """
 3. 綜合決策: 給出「持有」、「買進」或「觀望」建議。
 """
 
-# --- 10. 數據處理 ---
+# --- 9. 數據處理 ---
 @st.cache_data
 def get_tw_stock_info():
     codes = twstock.codes
@@ -381,32 +418,26 @@ def get_contract_liabilities_safe(symbol_code):
         else: return "無合約負債數據"
     except: return "讀取失敗"
 
-def plot_radar_chart(row, df_norm_row, config):
+def get_radar_data(df_norm_row, config):
     categories = {'技術': [], '籌碼': [], '財報': [], '估值': []}
     for key, cfg in config.items():
         cat = cfg['category']
         score = df_norm_row[f"{cfg['col']}_n"] * 100
         categories[cat].append(score)
-    radar_data = {k: np.mean(v) for k, v in categories.items()}
-    
+    return {k: np.mean(v) for k, v in categories.items()}
+
+def plot_radar_chart(row_name, radar_data):
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
-        r=list(radar_data.values()),
-        theta=list(radar_data.keys()),
-        fill='toself',
-        name=row['名稱'],
-        line_color='#00e676',
-        fillcolor='rgba(0, 230, 118, 0.2)'
+        r=list(radar_data.values()), theta=list(radar_data.keys()),
+        fill='toself', name=row_name, line_color='#00e676', fillcolor='rgba(0, 230, 118, 0.2)'
     ))
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, 100], color='#8b949e'), bgcolor='rgba(0,0,0,0)'),
-        showlegend=False,
-        margin=dict(t=20, b=20, l=20, r=20),
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#e6e6e6', size=12),
-        height=250
+        showlegend=False, margin=dict(t=20, b=20, l=20, r=20),
+        paper_bgcolor='rgba(0,0,0,0)', font=dict(color='#e6e6e6', size=12), height=250
     )
-    return fig, radar_data
+    return fig
 
 def render_factor_bars(radar_data):
     html = ""
@@ -415,14 +446,7 @@ def render_factor_bars(radar_data):
         color = colors.get(cat, '#8b949e')
         blocks = int(score / 10)
         visual_bar = "■" * blocks + "░" * (10 - blocks)
-        html += f"""
-        <div style="margin-bottom: 8px;">
-            <div style="display:flex; justify-content:space-between; font-size:0.85rem; color:#e6e6e6;">
-                <span><span style="color:{color};">●</span> {cat}</span>
-                <span>{score:.0f}%</span>
-            </div>
-            <div style="font-family: monospace; color:{color}; letter-spacing: 2px;">{visual_bar}</div>
-        </div>"""
+        html += f"""<div style="margin-bottom: 8px;"><div style="display:flex; justify-content:space-between; font-size:0.85rem; color:#e6e6e6;"><span><span style="color:{color};">●</span> {cat}</span><span>{score:.0f}%</span></div><div style="font-family: monospace; color:{color}; letter-spacing: 2px;">{visual_bar}</div></div>"""
     return html
 
 # --- 11. 側邊欄與執行 ---
@@ -467,10 +491,52 @@ with st.sidebar:
     st.markdown("---")
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
+    # --- 批次下載 PDF (基本數據版) ---
+    if st.session_state['scan_finished'] and st.session_state['df_norm'] is not None:
+        st.markdown("---")
+        st.markdown("### 📥 報告下載中心")
+        
+        # 準備數據
+        bulk_data = []
+        raw = st.session_state['raw_data']
+        res = st.session_state['df_norm'] # 用於計算雷達
+        
+        for idx, row in raw.iterrows():
+            code = row['代號']
+            stock_name = f"{row['代號']} {row['名稱']}"
+            
+            # 從結果表找分數
+            norm_row = res.iloc[idx]
+            radar = get_radar_data(norm_row, indicators_config)
+            
+            # 檢查是否有 AI 分析
+            analysis_text = st.session_state['analysis_results'].get(stock_name, None)
+            
+            bulk_data.append({
+                'name': stock_name,
+                'price': row['close_price'],
+                'score': row['Score'],
+                'peg': row['pegRatio'],
+                'beta': row['beta'],
+                'ma_bias': f"{row['priceToMA60']:.2%}",
+                'radar_data': radar,
+                'analysis': analysis_text
+            })
+            
+        if bulk_data:
+            pdf_data = create_pdf(bulk_data)
+            st.download_button(
+                label="📄 下載所有分析報告 (PDF)",
+                data=pdf_data,
+                file_name=f"QuantAlpha_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ QuantAlpha 戰略儀表板 2.5")
+    st.title("⚡ QuantAlpha 戰略儀表板 3.0")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -492,7 +558,7 @@ if run_btn:
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     raw = st.session_state['raw_data']
     res, w, err, df_norm = calculate_entropy_score(raw, indicators_config)
-    st.session_state['df_norm'] = df_norm
+    st.session_state['df_norm'] = df_norm # 儲存供雷達圖與 PDF 使用
     
     if err: st.error(err)
     else:
@@ -511,50 +577,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         )
 
         st.markdown("---")
-        
-        # --- 全局下載按鈕 (PDF 中心) ---
-        st.markdown("### 📥 戰略報告下載中心 (All-in-One Reports)")
-        
-        with st.container():
-            st.markdown('<div class="pdf-center">', unsafe_allow_html=True)
-            
-            if len(st.session_state['analysis_results']) > 0:
-                col_info, col_main_dl = st.columns([3, 1])
-                with col_info:
-                    st.success(f"✅ 已生成 {len(st.session_state['analysis_results'])} 份個股分析報告，準備就緒。")
-                with col_main_dl:
-                    bulk_data = []
-                    # 【關鍵修正】：遍歷已分析的結果，並從 res (已算分) 的表中找數據
-                    for stock_name, analysis in st.session_state['analysis_results'].items():
-                        code = stock_name.split(" ")[0]
-                        # 這裡改用 res，確保有 'Score' 欄位
-                        match_rows = res[res['代號'] == code]
-                        if not match_rows.empty:
-                            row = match_rows.iloc[0]
-                            bulk_data.append({
-                                'name': stock_name,
-                                'price': row['close_price'],
-                                'score': row['Score'],
-                                'peg': row['pegRatio'],
-                                'beta': row['beta'],
-                                'analysis': analysis
-                            })
-                    
-                    if bulk_data:
-                        pdf_data = create_pdf(bulk_data)
-                        st.download_button(
-                            label="📑 立即下載全部 PDF",
-                            data=pdf_data,
-                            file_name=f"QuantAlpha_Strategy_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
-                            mime="application/pdf",
-                            use_container_width=True
-                        )
-            else:
-                st.info("⚠️ **PDF 產生器待命**：請先點擊下方各別股票的「✨ 生成分析報告」按鈕，AI 完成分析後，此處將自動出現合併下載按鈕。")
-                
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        st.markdown("---")
         st.markdown("### 🎯 深度戰略分析 (Strategic Deep Dive)")
         
         for i, (index, row) in enumerate(top_stocks.iterrows()):
@@ -565,9 +587,13 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 st.markdown(f"""<div class="stock-card"><h3>{stock_name} <span style="font-size:0.6em;color:#8b949e">NT$ {row['close_price']}</span></h3>""", unsafe_allow_html=True)
                 
                 c1, c2, c3 = st.columns([1.5, 1.2, 2])
+                
+                # 計算雷達圖數據
+                norm_row = df_norm.loc[index]
+                radar_data = get_radar_data(norm_row, indicators_config)
+                
                 with c1:
-                    norm_row = df_norm.loc[index]
-                    fig_radar, radar_data = plot_radar_chart(row, norm_row, indicators_config)
+                    fig_radar = plot_radar_chart(row['名稱'], radar_data)
                     st.plotly_chart(fig_radar, use_container_width=True)
                 
                 with c2:
@@ -598,7 +624,9 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         else: st.warning("⚠️ 無法取得歷史數據")
                     except Exception as e: st.error("圖表載入失敗")
 
+                # 按鈕區 (AI 生成 + 個股下載)
                 col_btn, col_dl = st.columns([3, 1])
+                
                 with col_btn:
                      if st.button(f"✨ 生成分析報告", key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
                          if not is_analyzed:
@@ -615,25 +643,28 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 st.session_state['analysis_results'][stock_name] = result
                                 st.rerun()
                 
+                # 個股 PDF 下載 (永遠顯示)
                 with col_dl:
-                    if is_analyzed:
-                        single_data = [{
-                            'name': stock_name,
-                            'price': row['close_price'],
-                            'score': row['Score'],
-                            'peg': row['pegRatio'],
-                            'beta': row['beta'],
-                            'analysis': st.session_state['analysis_results'][stock_name]
-                        }]
-                        pdf_data = create_pdf(single_data)
-                        st.download_button(
-                            label="📥 下載個股 PDF",
-                            data=pdf_data,
-                            file_name=f"{stock_name}_Report.pdf",
-                            mime="application/pdf",
-                            key=f"dl_{i}",
-                            use_container_width=True
-                        )
+                    # 準備這檔股票的數據
+                    single_data = [{
+                        'name': stock_name,
+                        'price': row['close_price'],
+                        'score': row['Score'],
+                        'peg': row['pegRatio'],
+                        'beta': row['beta'],
+                        'ma_bias': f"{row['priceToMA60']:.2%}",
+                        'radar_data': radar_data,
+                        'analysis': st.session_state['analysis_results'].get(stock_name, None) # 可能為 None
+                    }]
+                    pdf_data = create_pdf(single_data)
+                    st.download_button(
+                        label="📥 下載個股 PDF",
+                        data=pdf_data,
+                        file_name=f"{stock_name}_Report.pdf",
+                        mime="application/pdf",
+                        key=f"dl_{i}",
+                        use_container_width=True
+                    )
 
                 if is_analyzed:
                     st.markdown("<div class='ai-header'>🏛️ Hedge Fund Manager Insight</div>", unsafe_allow_html=True)
