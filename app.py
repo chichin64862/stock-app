@@ -33,114 +33,73 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 暴力修正 (針對您提出的三個痛點) ---
+# --- 2. CSS 全域視覺優化 ---
 st.markdown("""
 <style>
-    /* =========================================
-       1. 基底：強制全域黑底白字
-       ========================================= */
+    /* 1. 基底：強制全域黑底白字 */
     .stApp { background-color: #0e1117 !important; }
     body, h1, h2, h3, h4, h5, h6, p, div, span, label, li {
         color: #e6e6e6 !important;
         font-family: 'Roboto', sans-serif;
     }
 
-    /* =========================================
-       2. 【痛點修復】選擇產業/下拉選單 (圖1問題)
-       ========================================= */
-    /* 修正選單本體的背景 */
+    /* 2. 右上角工具列與選單 (白底黑字) */
+    div[role="menu"] div, div[role="menu"] span, div[role="menu"] label {
+        color: #31333F !important;
+        font-weight: 500 !important;
+    }
+    
+    /* 3. 下拉選單 (保持黑底) */
     div[data-baseweb="select"] > div {
         background-color: #262730 !important;
         border-color: #4b4b4b !important;
         color: white !important;
     }
-    
-    /* 修正「彈出列表」的背景 (最關鍵的修正) */
-    ul[data-baseweb="menu"], 
-    div[data-baseweb="popover-content"],
-    div[data-baseweb="popover"] {
-        background-color: #1f2937 !important; /* 深灰背景 */
+    div[data-baseweb="popover"], ul[data-baseweb="menu"] {
+        background-color: #1f2937 !important;
         border: 1px solid #4b4b4b !important;
     }
-    
-    /* 修正列表內的選項文字 */
-    li[role="option"] {
-        color: #ffffff !important; /* 白字 */
+    div[data-baseweb="popover"] li, div[data-baseweb="popover"] div {
+        color: #e6e6e6 !important;
     }
-    
-    /* 修正滑鼠懸停時的顏色 */
     li[role="option"]:hover, li[role="option"][aria-selected="true"] {
-        background-color: #238636 !important; /* 綠色背景 */
-        color: #ffffff !important;
+        background-color: #238636 !important;
+        color: white !important;
     }
 
-    /* =========================================
-       3. 【痛點修復】表格右上角工具列 (圖3問題)
-       ========================================= */
-    /* 強制定位並覆蓋背景色 */
+    /* 4. 下載按鈕 (深色風格) */
+    .stDownloadButton button {
+        background-color: #1f2937 !important;
+        color: #ffffff !important;
+        border: 1px solid #238636 !important;
+        white-space: nowrap !important;
+        min-width: 180px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    .stDownloadButton button:hover {
+        border-color: #58a6ff !important;
+        color: #58a6ff !important;
+    }
+    .stDownloadButton p { color: inherit !important; }
+
+    /* 5. Toolbar */
     [data-testid="stElementToolbar"] {
-        background-color: #262730 !important; /* 深色背景 */
+        background-color: #262730 !important;
         border: 1px solid #4b4b4b !important;
-        color: #ffffff !important;
     }
-    
-    /* 覆蓋按鈕樣式 */
-    [data-testid="stElementToolbar"] button {
-        background-color: transparent !important;
-        border: none !important;
-        color: #ffffff !important;
-    }
-    
-    /* 強制 SVG 圖示變白 */
     [data-testid="stElementToolbar"] svg {
         fill: #ffffff !important;
-        stroke: #ffffff !important;
+        color: #ffffff !important;
     }
-    
-    /* 滑鼠懸停效果 */
     [data-testid="stElementToolbar"] button:hover {
         background-color: #4b4b4b !important;
     }
 
-    /* =========================================
-       4. 【痛點修復】下載按鈕與排版 (圖2問題)
-       ========================================= */
-    /* 強制按鈕文字不換行 */
-    .stDownloadButton button {
-        white-space: nowrap !important;
-        width: 100% !important;
-        background-color: #1f2937 !important;
-        border: 1px solid #238636 !important;
-        color: white !important;
-    }
-    .stDownloadButton button:hover {
-        background-color: #238636 !important;
-        border-color: #ffffff !important;
-        color: white !important;
-    }
-    
-    /* PDF 中心容器優化 */
-    .pdf-center {
-        background-color: #1f2937;
-        padding: 15px 20px;
-        border-radius: 8px;
-        border-left: 5px solid #238636;
-        margin-bottom: 20px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-    }
-
-    /* =========================================
-       5. 其他元件優化
-       ========================================= */
-    /* 輸入框文字 */
+    /* 6. 其他 */
     input { color: #ffffff !important; caret-color: #ffffff !important; }
-    
-    /* 側邊欄 */
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
-    
-    /* 卡片 */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
@@ -148,11 +107,18 @@ st.markdown("""
         border: 1px solid #30363d; 
         margin-bottom: 15px;
     }
+    .pdf-center {
+        background-color: #1f2937;
+        padding: 20px;
+        border-radius: 8px;
+        border-left: 5px solid #238636;
+        margin-bottom: 20px;
+    }
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 初始化 Session State ---
+# --- 3. Session State ---
 if 'analysis_results' not in st.session_state: st.session_state['analysis_results'] = {}
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
@@ -170,7 +136,7 @@ proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
 
-# --- 6. 字型下載 ---
+# --- 6. Font ---
 @st.cache_resource
 def register_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -191,7 +157,7 @@ def register_chinese_font():
 
 font_ready = register_chinese_font()
 
-# --- 7. PDF 生成引擎 ---
+# --- 7. PDF 生成 ---
 def create_pdf(stock_data_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -211,7 +177,6 @@ def create_pdf(stock_data_list):
 
     for idx, stock in enumerate(stock_data_list):
         if idx > 0: story.append(PageBreak()) 
-        
         name = stock['name']
         story.append(Paragraph(f"🎯 {name}", h2_style))
         story.append(Paragraph("_" * 60, normal_style))
@@ -222,7 +187,7 @@ def create_pdf(stock_data_list):
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
             [f"PEG Ratio", f"{stock.get('peg', 'N/A')}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
-            [f"Beta (風險)", f"{stock.get('beta', 'N/A')}", f"合約負債", f"{stock.get('cl_val', '尚未讀取')}"],
+            [f"負債權益比", f"{stock.get('debt_eq', 'N/A')}", f"合約負債", f"{stock.get('cl_val', '尚未讀取')}"],
         ]
         t = Table(t_data, colWidths=[100, 130, 100, 130])
         t.setStyle(TableStyle([
@@ -330,14 +295,16 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
+# 【專家級優化】指標配置：移除 Profit Margins (共線性)，新增 DebtToEquity (避險)
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
-    'Beta': {'col': 'beta', 'direction': '負向', 'name': 'Beta係數', 'category': '技術'},
+    # 'Beta': 移除 Beta 以避免與動能策略衝突
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
     'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG', 'category': '估值'},
     'Price To Book': {'col': 'priceToBook', 'direction': '負向', 'name': 'PB比', 'category': '估值'},
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE', 'category': '財報'},
-    'Profit Margins': {'col': 'profitMargins', 'direction': '正向', 'name': '淨利率', 'category': '財報'},
+    # 'Profit Margins': 移除，因與 ROE 高度共線性
+    'Debt To Equity': {'col': 'debtToEquity', 'direction': '負向', 'name': '負債權益比', 'category': '財報'},
 }
 
 def fetch_single_stock(ticker):
@@ -357,11 +324,11 @@ def fetch_single_stock(ticker):
         growth = info.get('revenueGrowth', 0) 
         if peg is None and pe is not None and growth > 0: peg = pe / (growth * 100)
         elif peg is None: peg = 2.5 
+        
         price = info.get('currentPrice', info.get('previousClose', 0))
         ma50 = info.get('fiftyDayAverage', price) 
         bias = (price / ma50) - 1 if ma50 and ma50 > 0 else 0
-        beta = info.get('beta', 1.0)
-        if beta is None: beta = 1.0
+        
         vol_avg = info.get('averageVolume', 0)
         vol_curr = info.get('volume', 0)
         if vol_curr == 0 or vol_avg == 0:
@@ -372,6 +339,7 @@ def fetch_single_stock(ticker):
                     vol_avg = hist['Volume'].mean()
             except: pass
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
+        
         return {
             '代號': display_code,
             'full_symbol': symbol,
@@ -379,17 +347,16 @@ def fetch_single_stock(ticker):
             'close_price': price, 
             'pegRatio': peg, 
             'priceToMA60': bias, 
-            'beta': beta,
             'volumeRatio': vol_ratio,
             'priceToBook': info.get('priceToBook', np.nan),
             'returnOnEquity': info.get('returnOnEquity', np.nan), 
-            'profitMargins': info.get('profitMargins', np.nan),
+            'debtToEquity': info.get('debtToEquity', np.nan), # 新增指標
         }
     except: return None
 
 def get_stock_data_concurrent(selected_list):
     data = []
-    progress_bar = st.progress(0, text="Initializing Quantitative Scanner...")
+    progress_bar = st.progress(0, text="Initializing AlphaCore Scanner...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         future_to_ticker = {executor.submit(fetch_single_stock, t): t for t in selected_list}
         completed = 0
@@ -405,15 +372,34 @@ def get_stock_data_concurrent(selected_list):
 def calculate_entropy_score(df, config):
     df = df.dropna().copy()
     if df.empty: return df, None, "No valid data found.", None
+    
+    # 【專家級優化】1. 剛性過濾 (Hard Filter)
+    # 過濾掉 ROE < 0 (虧損公司) 或 負債比過高 (> 200, 視產業而定，這裡先從寬)
+    if 'returnOnEquity' in df.columns:
+        df = df[df['returnOnEquity'] > 0]
+        
+    if df.empty: return df, None, "所有股票皆未通過剛性過濾 (ROE > 0)", None
+
     df_norm = df.copy()
+    
+    # 【專家級優化】2. Winsorization (去極端值)
     for key, cfg in config.items():
         col = cfg['col']
-        mn, mx = df[col].min(), df[col].max()
+        # 計算 5% 和 95% 分位數
+        q_low = df[col].quantile(0.05)
+        q_high = df[col].quantile(0.95)
+        # 將極端值壓縮到邊界
+        df_norm[col] = df[col].clip(lower=q_low, upper=q_high)
+        
+        # 3. 正常化 (使用去極端值後的數據)
+        mn, mx = df_norm[col].min(), df_norm[col].max()
         denom = mx - mn
         if denom == 0: df_norm[f'{col}_n'] = 0.5
         else:
-            if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df[col] - mn) / denom
-            else: df_norm[f'{col}_n'] = (mx - df[col]) / denom
+            if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df_norm[col] - mn) / denom
+            else: df_norm[f'{col}_n'] = (mx - df_norm[col]) / denom
+            
+    # 熵值法計算權重
     m = len(df)
     k = 1 / np.log(m) if m > 1 else 0
     weights = {}
@@ -422,12 +408,19 @@ def calculate_entropy_score(df, config):
         p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum() if df_norm[f'{col}_n'].sum() != 0 else 0
         e = -k * np.sum(p * np.log(p + 1e-9))
         weights[key] = 1 - e 
+        
     tot = sum(weights.values())
-    fin_w = {k: v/tot for k, v in weights.items()}
+    # 避免權重總和為 0
+    if tot == 0: 
+        fin_w = {k: 1/len(weights) for k in weights}
+    else:
+        fin_w = {k: v/tot for k, v in weights.items()}
+        
     df['Score'] = 0
     for key, cfg in config.items():
         df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] 
     df['Score'] = (df['Score']*100).round(1)
+    
     return df.sort_values('Score', ascending=False), fin_w, None, df_norm
 
 def get_contract_liabilities_safe(symbol_code):
@@ -523,8 +516,8 @@ with st.sidebar:
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ AlphaCore 智能量化戰略終端 4.2")
-    st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
+    st.title("⚡ AlphaCore 智能量化戰略終端 5.0")
+    st.caption("Entropy Scoring • Factor Radar • PDF Reporting (Expert Edition)")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
          st.metric("Total Scanned", f"{len(st.session_state['raw_data'])} Stocks", delta="Live Update")
@@ -552,22 +545,23 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         if bias < -0.05: return "🟢 超跌/買點"
         elif bias > 0.15: return "🔴 過熱/賣點"
         else: return "🟡 盤整/持有"
-        
-    res['Trend'] = res['priceToMA60'].apply(get_trend_label)
-
-    if err: st.error(err)
+    
+    if err:
+        st.error(err) # 顯示剛性過濾錯誤 (例如全被過濾掉)
     else:
+        res['Trend'] = res['priceToMA60'].apply(get_trend_label)
         top_n = 10
         top_stocks = res.head(top_n)
 
         st.markdown("### 🏆 Top 10 潛力標的 (Entropy Ranking)")
         st.dataframe(
-            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'beta', 'Trend']],
+            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'debtToEquity', 'Trend']],
             column_config={
                 "Score": st.column_config.ProgressColumn("Entropy Score", format="%.1f", min_value=0, max_value=100),
                 "close_price": st.column_config.NumberColumn("Price", format="%.2f"),
                 "pegRatio": st.column_config.NumberColumn("PEG", format="%.2f"),
                 "priceToMA60": st.column_config.NumberColumn("MA Bias", format="%.2%"),
+                "debtToEquity": st.column_config.NumberColumn("D/E (Risk)", format="%.2f"),
                 "Trend": st.column_config.TextColumn("配置時機 (Actionable Timing)"),
             },
             hide_index=True, use_container_width=True
@@ -579,22 +573,17 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         with st.container():
             st.markdown('<div class="pdf-center">', unsafe_allow_html=True)
             
-            # 直接準備數據
             if len(res) > 0:
-                # 調整按鈕容器比例
                 col_info, col_dl = st.columns([0.65, 0.35], vertical_alignment="center")
                 with col_info:
                     st.success(f"✅ 已準備 {len(res)} 份量化數據報告。點擊 AI 分析後，內容將自動更新。")
                 with col_dl:
-                    # 準備數據
                     bulk_data_final = []
                     for idx, row in res.iterrows():
                         stock_name = f"{row['代號']} {row['名稱']}"
-                        
-                        # 安全匹配
-                        code_match = df_norm[df_norm['代號'] == row['代號']]
-                        if not code_match.empty:
-                            norm_row = code_match.iloc[0]
+                        # 注意：經過過濾後，index 仍需對齊
+                        if idx in df_norm.index:
+                            norm_row = df_norm.loc[idx]
                             radar = get_radar_data(norm_row, indicators_config)
                             analysis_text = st.session_state['analysis_results'].get(stock_name, None)
                             
@@ -603,7 +592,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 'price': row['close_price'],
                                 'score': row['Score'],
                                 'peg': row['pegRatio'],
-                                'beta': row['beta'],
+                                'beta': row.get('beta', 0), # Beta 可能不存在
+                                'debt_eq': row.get('debtToEquity', 'N/A'),
                                 'ma_bias': f"{row['priceToMA60']:.2%}",
                                 'radar_data': radar,
                                 'analysis': analysis_text
@@ -614,7 +604,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.download_button(
                             label="📑 下載全部報告 (PDF)",
                             data=pdf_data_final,
-                            file_name=f"QuantAlpha_Full_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            file_name=f"AlphaCore_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
                             mime="application/pdf",
                             use_container_width=True
                         )
@@ -632,10 +622,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 c1, c2, c3 = st.columns([1.5, 1.2, 2])
                 
-                # 安全獲取 norm_row
-                code_match = df_norm[df_norm['代號'] == row['代號']]
-                if not code_match.empty:
-                    norm_row = code_match.iloc[0]
+                if index in df_norm.index:
+                    norm_row = df_norm.loc[index]
                     radar_data = get_radar_data(norm_row, indicators_config)
                 
                     with c1:
@@ -670,7 +658,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         else: st.warning("⚠️ 無法取得歷史數據")
                     except Exception as e: st.error("圖表載入失敗")
 
-                # 按鈕區 (AI 生成 + 個股下載)
                 col_btn, col_dl = st.columns([3, 1])
                 
                 with col_btn:
@@ -689,14 +676,13 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 st.session_state['analysis_results'][stock_name] = result
                                 st.rerun()
                 
-                # 個股 PDF 下載 (永遠顯示)
                 with col_dl:
                     single_data = [{
                         'name': stock_name,
                         'price': row['close_price'],
                         'score': row['Score'],
                         'peg': row['pegRatio'],
-                        'beta': row['beta'],
+                        'debt_eq': row.get('debtToEquity', 'N/A'),
                         'ma_bias': f"{row['priceToMA60']:.2%}",
                         'radar_data': radar_data,
                         'analysis': st.session_state['analysis_results'].get(stock_name, None)
