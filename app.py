@@ -33,54 +33,75 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 終極修復 (針對 Toolbar, Input, 與全局配色) ---
+# --- 2. CSS 全域視覺優化 (High Contrast Dark Mode) ---
 st.markdown("""
 <style>
-    /* 1. 全局文字與背景 */
-    body, .stApp, p, h1, h2, h3, h4, h5, h6, span, div, label {
+    /* 1. 基底：強制全域黑底白字 */
+    .stApp {
+        background-color: #0e1117;
+    }
+    h1, h2, h3, h4, h5, h6, p, div, span, label, li {
         color: #e6e6e6 !important;
-        font-family: 'Roboto', 'Helvetica Neue', sans-serif;
+        font-family: 'Roboto', sans-serif;
     }
-    .stApp { background-color: #0e1117; }
-    [data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
 
-    /* 2. 【核彈級修復】DataFrame 工具列 (右上角) */
-    /* 強制針對 Toolbar 容器 */
-    [data-testid="stElementToolbar"], [data-testid="stElementToolbar"] > div {
-        background-color: #262730 !important; /* 深灰色背景 */
-        color: #ffffff !important;
+    /* 2. 【核心修復】表格工具列 (右上角) */
+    [data-testid="stElementToolbar"] {
+        background-color: #262730 !important; /* 深灰背景 */
         border: 1px solid #4b4b4b !important;
-        border-radius: 8px !important;
-        z-index: 99999 !important; /* 確保在最上層 */
+        border-radius: 6px !important;
+        opacity: 1 !important; /* 確保不透明 */
+        z-index: 1000 !important;
     }
-    /* 強制針對按鈕 */
     [data-testid="stElementToolbar"] button {
         border: none !important;
         background: transparent !important;
+    }
+    /* 強制圖示變白 */
+    [data-testid="stElementToolbar"] svg {
+        fill: #ffffff !important;
         color: #ffffff !important;
     }
-    /* 強制針對 SVG 圖示 (下載、搜尋、全螢幕 icon) */
-    [data-testid="stElementToolbar"] svg, [data-testid="stElementToolbar"] svg path {
-        fill: #ffffff !important; /* 強制塗白 */
-        stroke: #ffffff !important;
-        color: #ffffff !important;
-    }
-    /* 滑鼠懸停效果 */
+    /* 滑鼠懸停變色 */
     [data-testid="stElementToolbar"] button:hover {
         background-color: #4b4b4b !important;
     }
 
-    /* 3. 搜尋輸入框與下拉選單 */
+    /* 3. 【核心修復】下載按鈕 (stDownloadButton) */
+    /* 修正白底白字問題，改為深灰底白字 */
+    .stDownloadButton > button {
+        background-color: #262730 !important;
+        color: #ffffff !important;
+        border: 1px solid #4b4b4b !important;
+        transition: all 0.3s ease;
+    }
+    .stDownloadButton > button:hover {
+        border-color: #58a6ff !important;
+        color: #58a6ff !important;
+        background-color: #1f1f1f !important;
+    }
+    
+    /* 4. 普通按鈕 (生成分析) */
+    .stButton > button {
+        background-color: #238636 !important; /* 綠色 */
+        color: white !important;
+        border: none !important;
+    }
+    .stButton > button:hover {
+        background-color: #2ea043 !important;
+    }
+
+    /* 5. 輸入框與下拉選單 (Input Fields) */
     div[data-baseweb="select"] > div {
         background-color: #21262d !important;
         border-color: #30363d !important;
+        color: white !important;
     }
-    input[aria-autocomplete="list"] {
+    input {
         color: #ffffff !important;
-        caret-color: #ffffff !important; /* 游標顏色 */
-        -webkit-text-fill-color: #ffffff !important;
+        caret-color: #ffffff !important;
     }
-    /* 下拉選單選項背景 */
+    /* 下拉選單彈出層 */
     div[data-baseweb="popover"] div {
         background-color: #161b22 !important;
         color: #e6e6e6 !important;
@@ -93,25 +114,24 @@ st.markdown("""
         background-color: #30363d !important;
     }
 
-    /* 4. 卡片與其他元件 */
+    /* 6. 側邊欄 */
+    [data-testid="stSidebar"] {
+        background-color: #161b22 !important;
+        border-right: 1px solid #30363d;
+    }
+
+    /* 7. 卡片樣式 */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
         border-radius: 10px; 
         border: 1px solid #30363d; 
         margin-bottom: 15px;
-        transition: transform 0.2s;
     }
-    .stock-card:hover { border-color: #58a6ff; }
-    .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
     
-    /* PDF 下載中心 */
-    .pdf-center {
-        background-color: #1f2937;
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 5px solid #238636;
-        margin-bottom: 20px;
+    /* 8. 表格樣式微調 */
+    [data-testid="stDataFrame"] {
+        border: 1px solid #30363d;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -134,7 +154,7 @@ proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
 
-# --- 6. 字型下載 (PDF 中文支援) ---
+# --- 6. 字型下載 ---
 @st.cache_resource
 def register_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -155,7 +175,7 @@ def register_chinese_font():
 
 font_ready = register_chinese_font()
 
-# --- 7. 雙軌 PDF 生成引擎 ---
+# --- 7. PDF 生成引擎 ---
 def create_pdf(stock_data_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -164,13 +184,11 @@ def create_pdf(stock_data_list):
     styles = getSampleStyleSheet()
     font_name = 'ChineseFont' if font_ready else 'Helvetica'
     
-    # 定義樣式
     title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=22, spaceAfter=20, alignment=1, textColor=colors.HexColor("#2C3E50"))
     h2_style = ParagraphStyle('Heading2', parent=styles['Heading2'], fontName=font_name, fontSize=16, spaceBefore=15, spaceAfter=10, textColor=colors.HexColor("#2980B9"))
     h3_style = ParagraphStyle('Heading3', parent=styles['Heading3'], fontName=font_name, fontSize=12, spaceBefore=10, textColor=colors.HexColor("#16A085"))
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=16, spaceAfter=5)
     
-    # 報告標題
     story.append(Paragraph(f"QuantAlpha 深度投資戰略報告", title_style))
     story.append(Paragraph(f"生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 20))
@@ -179,23 +197,18 @@ def create_pdf(stock_data_list):
         if idx > 0: story.append(PageBreak()) 
         
         name = stock['name']
-        
-        # 標題區
         story.append(Paragraph(f"🎯 {name}", h2_style))
         story.append(Paragraph("_" * 60, normal_style))
         story.append(Spacer(1, 10))
         
-        # 1. 核心數據表 (Table)
+        # 數據表
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
-        
-        # 準備表格數據 (加入安全檢查)
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
             [f"PEG Ratio", f"{stock.get('peg', 'N/A')}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
             [f"Beta (風險)", f"{stock.get('beta', 'N/A')}", f"合約負債", f"{stock.get('cl_val', '尚未讀取')}"],
         ]
-        
         t = Table(t_data, colWidths=[100, 130, 100, 130])
         t.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
@@ -208,14 +221,12 @@ def create_pdf(stock_data_list):
         story.append(t)
         story.append(Spacer(1, 15))
 
-        # 2. 因子貢獻分析 (如果有雷達數據)
+        # 因子分析
         radar = stock.get('radar_data', {})
         if radar:
-            story.append(Paragraph("⚡ 四大因子貢獻度 (Factor Contribution)", h3_style))
-            # 找出最強因子
+            story.append(Paragraph("⚡ 四大因子貢獻度", h3_style))
             best_factor = max(radar, key=radar.get)
             story.append(Paragraph(f"🚀 主力優勢: <b>{best_factor} ({radar[best_factor]:.1f}%)</b>", normal_style))
-            
             r_data = [[k, f"{v:.1f}%"] for k, v in radar.items()]
             r_table = Table([["因子面向", "得分 (0-100)"]] + r_data, colWidths=[200, 100], hAlign='LEFT')
             r_table.setStyle(TableStyle([
@@ -227,13 +238,11 @@ def create_pdf(stock_data_list):
             story.append(r_table)
             story.append(Spacer(1, 15))
 
-        # 3. AI 深度分析 (如果有)
+        # AI 分析
         analysis = stock.get('analysis')
         if analysis:
             story.append(Paragraph("🤖 Gemini AI 戰略解讀", h3_style))
-            # 格式化
-            formatted = analysis.replace("\n", "<br/>").replace("**", "<b>").replace("**", "</b>")
-            formatted = formatted.replace("###", "").replace("#", "")
+            formatted = analysis.replace("\n", "<br/>").replace("**", "<b>").replace("**", "</b>").replace("###", "").replace("#", "")
             story.append(Paragraph(formatted, normal_style))
         else:
             story.append(Paragraph("💡 (此份報告僅包含量化數據，尚未執行 AI 深度解讀)", normal_style))
@@ -244,7 +253,6 @@ def create_pdf(stock_data_list):
         c = SimpleDocTemplate(buffer)
         story = [Paragraph(f"PDF Error: {str(e)}", getSampleStyleSheet()['Normal'])]
         c.build(story)
-
     buffer.seek(0)
     return buffer
 
@@ -401,7 +409,6 @@ def calculate_entropy_score(df, config):
     for key, cfg in config.items():
         df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] 
     df['Score'] = (df['Score']*100).round(1)
-    # Return sorted DF (res), weights, error, and normalized DF
     return df.sort_values('Score', ascending=False), fin_w, None, df_norm
 
 def get_contract_liabilities_safe(symbol_code):
@@ -494,57 +501,10 @@ with st.sidebar:
     st.markdown("---")
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
-    # --- 批次下載 PDF (基本數據版) ---
-    if st.session_state['scan_finished'] and st.session_state['df_norm'] is not None:
-        st.markdown("---")
-        st.markdown("### 📥 報告下載中心")
-        
-        # 準備數據
-        bulk_data = []
-        raw = st.session_state['raw_data']
-        # 【修正】: 使用 res (計算完畢含 Score 的表)
-        res, _, _, _ = calculate_entropy_score(raw, indicators_config)
-        
-        # df_norm 用來算雷達圖
-        df_norm = st.session_state['df_norm']
-        
-        for idx, row in res.iterrows(): # 遍歷結果表
-            code = row['代號']
-            stock_name = f"{row['代號']} {row['名稱']}"
-            
-            # 從正規化表找雷達數據
-            # 注意：index 可能不同步，需用代號對應
-            norm_row = df_norm.loc[idx] 
-            radar = get_radar_data(norm_row, indicators_config)
-            
-            # 檢查是否有 AI 分析
-            analysis_text = st.session_state['analysis_results'].get(stock_name, None)
-            
-            bulk_data.append({
-                'name': stock_name,
-                'price': row['close_price'],
-                'score': row['Score'],
-                'peg': row['pegRatio'],
-                'beta': row['beta'],
-                'ma_bias': f"{row['priceToMA60']:.2%}",
-                'radar_data': radar,
-                'analysis': analysis_text
-            })
-            
-        if bulk_data:
-            pdf_data = create_pdf(bulk_data)
-            st.download_button(
-                label="📄 下載所有分析報告 (PDF)",
-                data=pdf_data,
-                file_name=f"QuantAlpha_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
-
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ QuantAlpha 戰略儀表板 3.1")
+    st.title("⚡ QuantAlpha 戰略儀表板 3.2")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
