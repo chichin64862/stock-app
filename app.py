@@ -26,7 +26,7 @@ except ImportError:
     st.error("⚠️ 缺少 reportlab 套件。請在 requirements.txt 中加入 `reportlab`")
     st.stop()
 
-# --- 1. 介面設定 (更名) ---
+# --- 1. 介面設定 ---
 st.set_page_config(
     page_title="熵值決策選股及AI深度分析平台", 
     page_icon="⚡", 
@@ -34,7 +34,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 針對性修復 ---
+# --- 2. CSS 針對性修復 (針對下拉選單可讀性優化) ---
 st.markdown("""
 <style>
     /* 1. 全局基底 */
@@ -44,32 +44,44 @@ st.markdown("""
         font-family: 'Roboto', sans-serif;
     }
 
-    /* 2. DataFrame 右上角配置選單 (白底黑字修復) */
+    /* 2. DataFrame 右上角配置選單 (白底黑字) */
     div[role="menu"] div, div[role="menu"] span, div[role="menu"] label {
         color: #31333F !important;
         font-weight: 500 !important;
     }
     div[role="menu"] label { color: #31333F !important; }
 
-    /* 3. 下拉選單 (深色風格) */
+    /* 3. 【關鍵修正】下拉選單 (解決白底灰字看不見的問題) */
+    
+    /* (A) 選單輸入框本體：維持深色，與側邊欄融合 */
     div[data-baseweb="select"] > div {
         background-color: #262730 !important;
         border-color: #4b4b4b !important;
         color: white !important;
     }
+    
+    /* (B) 彈出列表容器：強制設為【白色背景】，配合您的視覺現況 */
     div[data-baseweb="popover"], ul[data-baseweb="menu"] {
-        background-color: #1f2937 !important;
-        border: 1px solid #4b4b4b !important;
+        background-color: #ffffff !important; 
+        border: 1px solid #cccccc !important;
     }
-    div[data-baseweb="popover"] li, div[data-baseweb="popover"] div {
-        color: #e6e6e6 !important;
+    
+    /* (C) 選項文字：強制設為【純黑色】，確保在白底上清晰可見 */
+    div[data-baseweb="popover"] li, 
+    div[data-baseweb="popover"] div, 
+    li[role="option"] {
+        color: #000000 !important;
+        font-weight: 500 !important;
     }
-    li[role="option"]:hover, li[role="option"][aria-selected="true"] {
-        background-color: #238636 !important;
-        color: white !important;
+    
+    /* (D) 滑鼠懸停與選中狀態：綠底白字 */
+    li[role="option"]:hover, 
+    li[role="option"][aria-selected="true"] {
+        background-color: #238636 !important; /* 綠色高亮 */
+        color: #ffffff !important; /* 白字 */
     }
 
-    /* 4. 下載按鈕 (不換行優化) */
+    /* 4. 下載按鈕 */
     .stDownloadButton button {
         background-color: #1f2937 !important;
         color: #ffffff !important;
@@ -269,7 +281,7 @@ def call_gemini_api(prompt):
         else: return f"❌ 分析失敗 (Code {response.status_code})"
     except Exception as e: return f"❌ 連線逾時或錯誤: {str(e)}"
 
-# 【Prompt 去個人化】改為客觀投資建議
+# Prompt
 HEDGE_FUND_PROMPT = """
 【指令】
 請針對 **[STOCK]** 撰寫一份客觀的「投資決策分析報告」。
@@ -651,7 +663,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.download_button(
                             label="📑 下載全部報告 (PDF)",
                             data=pdf_data_final,
-                            file_name=f"QuantAlpha_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            file_name=f"AlphaCore_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
                             mime="application/pdf",
                             use_container_width=True
                         )
