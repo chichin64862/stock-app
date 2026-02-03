@@ -5,7 +5,8 @@ import numpy as np
 import plotly.express as px
 import twstock
 import concurrent.futures
-import google.generativeai as genai
+import requests # 改用 requests 直接呼叫，避開套件版本問題
+import json
 import time
 
 # --- 介面設定 ---
@@ -22,45 +23,56 @@ if 'scan_finished' not in st.session_state:
     st.session_state['scan_finished'] = False
 
 # --- 1. 設定 Gemini API ---
+# 這裡不需要 genai.configure 了，直接讀取 Key 給 requests 用
 api_key = st.secrets.get("GEMINI_API_KEY")
 
 if not api_key:
     st.error("⚠️ 未偵測到 Gemini API Key！請去 Streamlit Cloud 後台的 Settings -> Secrets 設定 `GEMINI_API_KEY`。")
     st.stop()
-else:
-    genai.configure(api_key=api_key)
 
-# 【核心優化】除錯模式：顯示每個模型的失敗原因
+# 【核心優化】改用 REST API 直接呼叫 (解決 404 問題)
 def call_gemini_api(prompt):
-    # 只使用最標準的兩個模型，確保相容性
+    # 模型鏈：優先使用 1.5-flash，失敗轉 1.5-pro，最後用 1.0-pro 保底
     model_chain = [
-        'gemini-1.5-flash',      # 首選：速度快、免費額度最高
-        'gemini-1.5-pro',        # 次選：能力強
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-pro'
     ]
     
-    error_log = [] # 用來記錄每個模型的錯誤
+    headers = {'Content-Type': 'application/json'}
+    data = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2} # 降低隨機性，讓分析更嚴謹
+    }
+    
+    last_error = None
     
     for model_name in model_chain:
+        # 直接組裝官方 API 網址
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        
         try:
-            # 嘗試建立模型
-            model = genai.GenerativeModel(model_name)
-            # 呼叫生成
-            response = model.generate_content(prompt)
+            # 發送 POST 請求
+            response = requests.post(url, headers=headers, json=data, timeout=30)
             
-            # 若成功則回傳
-            return response.text
-            
+            # 檢查回應狀態
+            if response.status_code == 200:
+                # 成功！解析 JSON 取出文字
+                return response.json()['candidates'][0]['content']['parts'][0]['text']
+            else:
+                # 失敗，記錄錯誤代碼 (如 404, 429, 400)
+                error_msg = f"Status: {response.status_code}, Body: {response.text}"
+                print(f"⚠️ Model {model_name} failed: {error_msg}")
+                last_error = error_msg
+                time.sleep(1) # 休息一下再試下一個
+                continue
+                
         except Exception as e:
-            # 記錄詳細錯誤原因
-            error_msg = str(e)
-            error_log.append(f"❌ {model_name}: {error_msg}")
-            print(f"Model {model_name} failed: {error_msg}")
-            time.sleep(1) # 暫停一秒再試
+            print(f"⚠️ Connection error with {model_name}: {e}")
+            last_error = str(e)
             continue
-            
-    # 如果全部失敗，回傳完整的錯誤日誌給使用者看
-    all_errors = "\n".join(error_log)
-    return f"⚠️ 分析失敗，請檢查以下錯誤訊息：\n\n{all_errors}\n\n(常見原因：API Key 無效、Google Cloud 專案未啟用 API、或免費額度已達上限 429 Resource Exhausted)"
+
+    return f"❌ AI 分析失敗 (已嘗試 REST API)。\n最後錯誤訊息：{last_error}\n請檢查 API Key 是否正確或額度是否已滿。"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
