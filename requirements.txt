@@ -8,3 +8,4 @@ lxml
 requests
 matplotlib
 reportlab
+kaleido
