@@ -33,78 +33,115 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 終極修復 (針對 Toolbar, Button, Tooltip) ---
+# --- 2. CSS 暴力強制修復 (強制所有元件進入深色模式) ---
 st.markdown("""
 <style>
-    /* 1. 基底設定 */
-    .stApp { background-color: #0e1117; }
-    body, p, h1, h2, h3, h4, h5, h6, span, div, label, li {
+    /* =========================================
+       1. 全局強制深色背景與白字 (覆蓋瀏覽器預設)
+       ========================================= */
+    .stApp {
+        background-color: #0e1117 !important; /* 主畫面深黑 */
+    }
+    
+    /* 強制所有文字顏色為亮灰白 */
+    h1, h2, h3, h4, h5, h6, p, div, span, label, li, button {
         color: #e6e6e6 !important;
         font-family: 'Roboto', sans-serif;
     }
 
-    /* 2. 【修復】DataFrame 右上角工具列 (Toolbar) */
+    /* =========================================
+       2. 側邊欄 (Sidebar) 修復
+       ========================================= */
+    section[data-testid="stSidebar"] {
+        background-color: #161b22 !important; /* 側邊欄深灰 */
+        border-right: 1px solid #30363d;
+    }
+    /* 側邊欄內的文字 */
+    section[data-testid="stSidebar"] * {
+        color: #e6e6e6 !important;
+    }
+
+    /* =========================================
+       3. 輸入框與下拉選單 (Input & Selectbox)
+       ========================================= */
+    /* 輸入框容器背景 */
+    div[data-baseweb="select"] > div {
+        background-color: #21262d !important;
+        border-color: #30363d !important;
+        color: white !important;
+    }
+    /* 下拉選單彈出的列表 (Popover) - 關鍵修復 */
+    div[data-baseweb="popover"], div[data-baseweb="menu"] {
+        background-color: #161b22 !important;
+        border: 1px solid #30363d !important;
+    }
+    /* 選項文字 */
+    div[data-baseweb="popover"] div, li[role="option"] {
+        color: #ffffff !important;
+    }
+    /* 滑鼠懸停選項 */
+    li[role="option"]:hover, li[role="option"][aria-selected="true"] {
+        background-color: #238636 !important; /* 綠色高亮 */
+        color: white !important;
+    }
+    /* 多選標籤 (Tags) */
+    div[data-baseweb="tag"] {
+        background-color: #238636 !important;
+    }
+
+    /* =========================================
+       4. DataFrame 工具列與彈出選單 (Toolbar & Tooltip)
+       ========================================= */
+    /* 工具列容器 */
     [data-testid="stElementToolbar"] {
         background-color: #262730 !important;
-        border: 1px solid #4b4b4b !important;
-        border-radius: 8px !important;
+        border: 1px solid #555 !important;
         opacity: 1 !important;
-        z-index: 100 !important;
     }
+    /* 工具列按鈕與圖示 */
     [data-testid="stElementToolbar"] button {
-        color: #ffffff !important;
-        border: none !important;
         background: transparent !important;
+        border: none !important;
     }
     [data-testid="stElementToolbar"] svg {
         fill: #ffffff !important;
         stroke: #ffffff !important;
     }
-    [data-testid="stElementToolbar"]:hover {
-        border-color: #58a6ff !important;
+    /* 彈出的 tooltip (如 Show/hide columns) */
+    div[role="tooltip"] {
+        background-color: #262730 !important;
+        color: #ffffff !important;
+        border: 1px solid #555 !important;
     }
 
-    /* 3. 【修復】DataFrame 的 Popup 選單 (如 Show/hide columns) */
-    div[role="tooltip"], div[data-baseweb="popover"] {
-        background-color: #1f2937 !important;
-        color: #ffffff !important;
-        border: 1px solid #4b4b4b !important;
+    /* =========================================
+       5. 按鈕樣式 (Button & Download)
+       ========================================= */
+    /* 普通按鈕 (紅色/Primary) */
+    button[kind="primary"] {
+        background-color: #ff4b4b !important;
+        border: none !important;
+        color: white !important;
     }
-    
-    /* 4. 【修復】下載按鈕 (stDownloadButton) */
-    /* 強制覆蓋 Streamlit 預設樣式 */
+    /* 下載按鈕 (stDownloadButton) - 關鍵修復 */
     [data-testid="stDownloadButton"] button {
-        background-color: #1f2937 !important;
-        color: #ffffff !important;
-        border: 1px solid #238636 !important; /* 綠色邊框 */
-        border-radius: 6px !important;
-        font-weight: bold !important;
-        transition: all 0.2s ease-in-out !important;
+        background-color: #1f2937 !important; /* 深灰底 */
+        border: 1px solid #238636 !important; /* 綠框 */
+        color: #ffffff !important; /* 白字 */
+        transition: all 0.3s;
     }
     [data-testid="stDownloadButton"] button:hover {
-        background-color: #238636 !important;
-        color: #ffffff !important;
-        border-color: #2ea043 !important;
-        box-shadow: 0 0 8px rgba(35, 134, 54, 0.5) !important;
+        background-color: #238636 !important; /* 懸停變綠 */
+        border-color: #ffffff !important;
     }
-    [data-testid="stDownloadButton"] button p {
-        color: #ffffff !important; /* 確保按鈕內文字也是白色 */
+    /* 強制按鈕內文字白色 */
+    [data-testid="stDownloadButton"] p {
+        color: #ffffff !important;
     }
 
-    /* 5. 搜尋輸入框與下拉選單 */
-    div[data-baseweb="select"] > div {
-        background-color: #21262d !important;
-        border-color: #30363d !important;
-    }
-    input {
-        color: #ffffff !important;
-        caret-color: #ffffff !important;
-    }
-    div[data-baseweb="tag"] {
-        background-color: #30363d !important;
-    }
-
-    /* 6. 卡片樣式 */
+    /* =========================================
+       6. 卡片與其他容器
+       ========================================= */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
@@ -625,7 +662,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         else: st.warning("⚠️ 無法取得歷史數據")
                     except Exception as e: st.error("圖表載入失敗")
 
-                # 按鈕區 (AI 生成 + 個股下載)
                 col_btn, col_dl = st.columns([3, 1])
                 
                 with col_btn:
@@ -644,7 +680,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 st.session_state['analysis_results'][stock_name] = result
                                 st.rerun()
                 
-                # 個股 PDF 下載 (永遠顯示)
                 with col_dl:
                     single_data = [{
                         'name': stock_name,
