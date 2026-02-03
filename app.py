@@ -51,7 +51,7 @@ st.markdown("""
     }
     div[role="menu"] label { color: #31333F !important; }
 
-    /* 3. 下拉選單 (白底黑字，確保清晰) */
+    /* 3. 下拉選單 (白底黑字) */
     div[data-baseweb="select"] > div {
         background-color: #262730 !important;
         border-color: #4b4b4b !important;
@@ -103,8 +103,13 @@ st.markdown("""
         background-color: #4b4b4b !important;
     }
 
-    /* 6. 其他元件 */
-    input { color: #ffffff !important; caret-color: #ffffff !important; }
+    /* 6. 輸入框優化 (解決白底看不到字) */
+    input { 
+        color: #ffffff !important; 
+        caret-color: #ffffff !important;
+        background-color: #262730 !important; /* 確保輸入框背景深色 */
+    }
+    
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
     .stock-card {
         background-color: #161b22; 
@@ -330,58 +335,71 @@ indicators_config = {
 
 def fetch_single_stock(ticker):
     try:
+        ticker = ticker.strip()
         parts = ticker.split(' ')
         symbol = parts[0]
-        # 若輸入格式為 "1802.TW 台玻"，取第二部分為名稱；若僅輸入 "1802.TW"，則名稱預設為代號
+        
         if len(parts) > 1:
             name_zh = parts[1]
         else:
             name_zh = symbol 
         
-        # 修正：Yahoo Finance 代號必須包含後綴 (.TW 或 .TWO)
+        # 智慧補全代碼後綴
         if not (symbol.endswith('.TW') or symbol.endswith('.TWO')):
-            # 簡易判斷：若為 4 位數字，預設為上市 (.TW)
             if symbol.isdigit() and len(symbol) == 4:
-                symbol += '.TW'
+                symbol += '.TW' # 預設補上市
         
         display_code = symbol.split('.')[0]
         stock = yf.Ticker(symbol)
-        info = stock.info 
         
-        # 若 API 回傳失敗 (無資料)，直接返回 None
-        if not info or 'currentPrice' not in info:
+        # 【關鍵修復】雙重抓取機制 (Double-Check)
+        # 1. 先嘗試標準 info
+        info = stock.info
+        price = info.get('currentPrice', info.get('previousClose', None))
+        
+        # 2. 若 info 失敗 (常見於台玻 1802)，嘗試 fast_info
+        if price is None:
+            try:
+                price = stock.fast_info.last_price
+                if price:
+                    # 手動補齊缺少的 info 欄位，避免報錯
+                    info['currentPrice'] = price
+                    info['marketCap'] = stock.fast_info.market_cap
+                    info['previousClose'] = stock.fast_info.previous_close
+            except:
+                pass
+        
+        # 若兩者都失敗，回傳 None (讓主程式知道這檔抓不到)
+        if price is None:
             return None
 
         name_en = info.get('shortName', '')
-        # 若是手動輸入，name_zh 可能是代號，這裡嘗試優化顯示
         final_name = f"{name_zh} ({name_en})" if name_en else name_zh
 
+        # 數值容錯處理 (若無數據則設為 None 或 預設值)
         peg = info.get('pegRatio', None)
-        pe = info.get('trailingPE', None)
-        growth = info.get('revenueGrowth', 0) 
-        if peg is None and pe is not None and growth > 0: peg = pe / (growth * 100)
-        elif peg is None: peg = 2.5 
+        beta = info.get('beta', 1.0)
         
-        price = info.get('currentPrice', info.get('previousClose', 0))
         ma50 = info.get('fiftyDayAverage', price) 
         bias = (price / ma50) - 1 if ma50 and ma50 > 0 else 0
         
-        vol_avg = info.get('averageVolume', 0)
+        # 嘗試計算量能
         vol_curr = info.get('volume', 0)
-        if vol_curr == 0 or vol_avg == 0:
-            try:
+        vol_avg = info.get('averageVolume', 0)
+        if vol_curr == 0: # 嘗試從 history 補救
+             try:
                 hist = stock.history(period="5d")
                 if not hist.empty:
                     vol_curr = hist['Volume'].iloc[-1]
                     vol_avg = hist['Volume'].mean()
-            except: pass
+             except: pass
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
         
+        # FCF
         fcf = info.get('freeCashflow', 0)
-        if fcf is None: fcf = 0
         mkt_cap = info.get('marketCap', 1)
         if mkt_cap is None: mkt_cap = 1
-        fcf_yield = (fcf / mkt_cap) if mkt_cap > 0 else 0
+        fcf_yield = (fcf / mkt_cap) if (fcf is not None and mkt_cap > 0) else 0
         
         return {
             '代號': display_code,
@@ -395,29 +413,46 @@ def fetch_single_stock(ticker):
             'returnOnEquity': info.get('returnOnEquity', np.nan), 
             'debtToEquity': info.get('debtToEquity', np.nan),
             'fcfYield': fcf_yield * 100, 
-            'beta': info.get('beta', 1.0)
+            'beta': beta
         }
     except: return None
 
 def get_stock_data_concurrent(selected_list):
     data = []
+    failed_stocks = []
     progress_bar = st.progress(0, text="初始化平台資料庫...")
+    
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         future_to_ticker = {executor.submit(fetch_single_stock, t): t for t in selected_list}
         completed = 0
         total = len(selected_list)
         for future in concurrent.futures.as_completed(future_to_ticker):
-            result = future.result()
-            if result: data.append(result)
+            ticker = future_to_ticker[future]
+            try:
+                result = future.result()
+                if result: 
+                    data.append(result)
+                else:
+                    failed_stocks.append(ticker)
+            except:
+                failed_stocks.append(ticker)
+                
             completed += 1
             progress_bar.progress(completed / total, text=f"正在掃描市場數據: {completed}/{total}...")
+            
     progress_bar.empty()
+    
+    # 【關鍵修復】如果抓取失敗，顯示警告
+    if failed_stocks:
+        st.warning(f"⚠️ 部分股票數據抓取失敗 (可能是 Yahoo Finance 連線問題或代號錯誤): {', '.join(failed_stocks)}")
+        
     return pd.DataFrame(data)
 
 def calculate_entropy_score(df, config):
     df = df.dropna().copy()
-    if df.empty: return df, None, "No valid data found.", None
+    if df.empty: return df, None, "有效數據不足 (可能因基本面數據缺失或過濾後無標的)", None
     
+    # 剛性過濾
     if 'returnOnEquity' in df.columns:
         df = df[df['returnOnEquity'] > 0]
         
@@ -518,12 +553,12 @@ with st.sidebar:
     scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
     target_stocks = []
     
-    # 【關鍵新增】強制手動輸入框 (解決找不到股票的痛點)
-    st.caption("🔍 若找不到股票，請直接輸入代號 (如 1802.TW):")
-    manual_input = st.text_input("手動輸入代號:", placeholder="例如: 1802.TW 或 2330.TW", label_visibility="collapsed")
+    # 手動輸入框 (白色字體修復)
+    st.caption("🔍 若找不到股票，請直接輸入代號 (如 1802):")
+    manual_input = st.text_input("手動輸入代號:", placeholder="例如: 1802 或 2330", label_visibility="collapsed")
     
     if scan_mode == "自行輸入/多選":
-        default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
+        default_selection = ["2330.TW 台積電", "2454.TW 聯發科"]
         selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
         target_stocks = selected
     elif scan_mode == "🔥 熱門策略掃描":
@@ -553,7 +588,6 @@ with st.sidebar:
             codes = industry_map[selected_industry]
             target_stocks = [stock_map[c] for c in codes if c in stock_map]
     
-    # 合併手動輸入的股票
     if manual_input:
         target_stocks.append(manual_input)
             
@@ -572,7 +606,7 @@ with col2:
 
 if run_btn:
     if not target_stocks:
-        st.warning("⚠️ 請至少選擇一檔股票，或在左側輸入代號 (例如 1802.TW)。")
+        st.warning("⚠️ 請至少選擇一檔股票，或在左側輸入代號 (例如 1802)。")
     else:
         st.session_state['analysis_results'] = {}
         st.session_state['raw_data'] = None
@@ -582,9 +616,10 @@ if run_btn:
             st.session_state['raw_data'] = raw
             st.session_state['scan_finished'] = True
             st.rerun()
+        else:
+            st.error("❌ 掃描失敗：無法獲取任何股票數據，請檢查代號是否正確。")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
-    # 檢測資料完整性
     required_cols = ['fcfYield', 'debtToEquity']
     if not all(col in st.session_state['raw_data'].columns for col in required_cols):
         st.toast("⚠️ 偵測到系統升級，正在重新抓取最新財報數據...", icon="🔄")
@@ -595,13 +630,11 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
     res, w, err, df_norm = calculate_entropy_score(raw, indicators_config)
     st.session_state['df_norm'] = df_norm 
     
-    # 增加趨勢判定欄位 (Trend)
     def get_trend_label(bias):
         if bias < -0.05: return "🟢 超跌/買點"
         elif bias > 0.15: return "🔴 過熱/賣點"
         else: return "🟡 盤整/持有"
         
-    # 增加戰略指令 (Action Plan)
     def determine_action_plan(row):
         score = row['Score']
         bias = row['priceToMA60']
