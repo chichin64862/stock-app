@@ -26,9 +26,9 @@ except ImportError:
     st.error("⚠️ 缺少 reportlab 套件。請在 requirements.txt 中加入 `reportlab`")
     st.stop()
 
-# --- 1. 介面設定 ---
+# --- 1. 介面設定 (更名) ---
 st.set_page_config(
-    page_title="AlphaCore | 機構級戰略終端", 
+    page_title="熵值決策選股及AI深度分析平台", 
     page_icon="⚡", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -173,8 +173,9 @@ def create_pdf(stock_data_list):
     h3_style = ParagraphStyle('Heading3', parent=styles['Heading3'], fontName=font_name, fontSize=12, spaceBefore=10, textColor=colors.HexColor("#16A085"))
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=16, spaceAfter=5)
     
-    story.append(Paragraph(f"AlphaCore 深度投資戰略報告", title_style))
-    story.append(Paragraph(f"生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
+    # 標題更新
+    story.append(Paragraph(f"熵值決策選股及AI深度分析報告", title_style))
+    story.append(Paragraph(f"生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M')} (僅供參考使用)", normal_style))
     story.append(Spacer(1, 20))
 
     for idx, stock in enumerate(stock_data_list):
@@ -227,7 +228,7 @@ def create_pdf(stock_data_list):
 
         analysis = stock.get('analysis')
         if analysis:
-            story.append(Paragraph("🤖 Gemini AI 機構級戰略解讀", h3_style))
+            story.append(Paragraph("🤖 AI 深度投資建議", h3_style))
             formatted = analysis.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', formatted)
             formatted = formatted.replace("\n", "<br/>").replace("### ", "").replace("## ", "").replace("# ", "")
@@ -268,25 +269,26 @@ def call_gemini_api(prompt):
         else: return f"❌ 分析失敗 (Code {response.status_code})"
     except Exception as e: return f"❌ 連線逾時或錯誤: {str(e)}"
 
+# 【Prompt 去個人化】改為客觀投資建議
 HEDGE_FUND_PROMPT = """
-【角色設定】
-你現在是高盛(Goldman Sachs)亞太區首席策略分析師。請針對 **[STOCK]** 撰寫一份「機構級投資備忘錄」。
+【指令】
+請針對 **[STOCK]** 撰寫一份客觀的「投資決策分析報告」。
 
-【⚠️ 嚴謹邏輯指令】
-不要給予模糊的敘述。請結合量化數據與產業週期，執行以下預測分析：
+【⚠️ 分析邏輯指令】
+請直接根據量化數據與產業現況進行分析，無需扮演任何角色或提及任何機構名稱。報告內容應包含：
 
-1. **財務健康度 (Quality Check)**：
-   - 結合「負債權益比」與「自由現金流」判斷其獲利含金量。
-   - 評估該公司是否有「虛胖」或「高槓桿」風險。
+1. **財務健康度評估**：
+   - 結合「負債權益比」與「自由現金流」判斷公司體質與獲利含金量。
+   - 評估是否有高槓桿或虛胖風險。
 
-2. **營收前瞻預測 (Revenue Outlook)**：
-   - 根據「合約負債」的金額與變動，**推算** 未來 1-2 季的成長動能強弱。
-   - 請明確指出是「訂單滿載」、「庫存調整」還是「需求疲軟」。
+2. **營收與成長動能**：
+   - 根據「合約負債」的金額與變動，**推算** 未來 1-2 季的訂單能見度。
+   - 指出目前是處於「訂單滿載」、「庫存調整」還是「需求疲軟」階段。
 
-3. **戰略操作建議 (Execution)**：
-   - **投資評等**：請給出 [強力買進 (Strong Buy) / 區間操作 (Range Bound) / 減持 (Reduce)]。
-   - **關鍵點位**：設定「防禦區間 (Support Zone)」與「獲利目標 (Target Zone)」。
-   - **觀察指標**：列出一個未來最需要盯緊的變數。
+3. **操作建議與風險提示**：
+   - **投資評等**：請給出 [強力買進 / 區間操作 / 減持觀望] 建議。
+   - **關鍵點位**：設定合理的「防禦區間 (Support)」與「目標區間 (Target)」。
+   - **觀察指標**：列出未來最需要關注的一個風險變數。
 
 【最新市場即時數據】
 [DATA_CONTEXT]
@@ -313,6 +315,7 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
+# 指標配置
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
@@ -380,7 +383,7 @@ def fetch_single_stock(ticker):
 
 def get_stock_data_concurrent(selected_list):
     data = []
-    progress_bar = st.progress(0, text="Initializing AlphaCore Scanner...")
+    progress_bar = st.progress(0, text="初始化平台資料庫...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         future_to_ticker = {executor.submit(fetch_single_stock, t): t for t in selected_list}
         completed = 0
@@ -389,7 +392,7 @@ def get_stock_data_concurrent(selected_list):
             result = future.result()
             if result: data.append(result)
             completed += 1
-            progress_bar.progress(completed / total, text=f"Scanning Market Data: {completed}/{total}...")
+            progress_bar.progress(completed / total, text=f"正在掃描市場數據: {completed}/{total}...")
     progress_bar.empty()
     return pd.DataFrame(data)
 
@@ -492,7 +495,7 @@ def render_factor_bars(radar_data):
 
 # --- 11. 側邊欄與執行 ---
 with st.sidebar:
-    st.title("🎛️ AlphaCore 控制台")
+    st.title("🎛️ 控制台")
     st.markdown("---")
     scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
     target_stocks = []
@@ -535,8 +538,8 @@ with st.sidebar:
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ AlphaCore 智能量化戰略終端 6.1")
-    st.caption("Entropy Scoring • Factor Radar • PDF Reporting (Institutional Research Edition)")
+    st.title("⚡ 熵值決策選股及AI深度分析平台")
+    st.caption("Entropy Scoring • Factor Radar • PDF Reporting (僅供參考使用)")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
          st.metric("Total Scanned", f"{len(st.session_state['raw_data'])} Stocks", delta="Live Update")
@@ -555,7 +558,7 @@ if run_btn:
             st.rerun()
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
-    # 【關鍵修復】: 檢測舊資料是否包含新欄位，若無則強制重跑
+    # 檢測資料完整性
     required_cols = ['fcfYield', 'debtToEquity']
     if not all(col in st.session_state['raw_data'].columns for col in required_cols):
         st.toast("⚠️ 偵測到系統升級，正在重新抓取最新財報數據...", icon="🔄")
@@ -648,7 +651,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.download_button(
                             label="📑 下載全部報告 (PDF)",
                             data=pdf_data_final,
-                            file_name=f"AlphaCore_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            file_name=f"QuantAlpha_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
                             mime="application/pdf",
                             use_container_width=True
                         )
@@ -748,7 +751,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     )
 
                 if is_analyzed:
-                    st.markdown("<div class='ai-header'>🏛️ Hedge Fund Manager Insight</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='ai-header'>🤖 AI 深度投資建議 (Investment Insight)</div>", unsafe_allow_html=True)
                     st.markdown(st.session_state['analysis_results'][stock_name])
                     
                 st.markdown("</div>", unsafe_allow_html=True) 
