@@ -67,6 +67,7 @@ if 'analysis_results' not in st.session_state: st.session_state['analysis_result
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
 if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
+if 'market_fundamentals' not in st.session_state: st.session_state['market_fundamentals'] = {}
 
 # --- 4. API Key ---
 try:
@@ -101,7 +102,7 @@ def register_chinese_font():
 
 font_ready = register_chinese_font()
 
-# --- 7. Matplotlib 靜態繪圖函數 ---
+# --- 7. 圖表繪製 ---
 def generate_radar_img_mpl(radar_data):
     try:
         categories = list(radar_data.keys())
@@ -147,7 +148,6 @@ def generate_trend_img_mpl(full_symbol, ma_bias):
         return buf
     except: return None
 
-# --- 8. UI 互動式繪圖函數 ---
 def plot_radar_chart_ui(row_name, radar_data):
     clean_data = {k: (v if not pd.isna(v) else 0) for k, v in radar_data.items()}
     fig = go.Figure()
@@ -193,7 +193,7 @@ def plot_trend_chart_ui(full_symbol, ma_bias):
         return fig_trend
     except: return None
 
-# --- 9. PDF 生成引擎 ---
+# --- 8. PDF 生成引擎 ---
 def create_pdf(stock_data_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -224,12 +224,16 @@ def create_pdf(stock_data_list):
         peg = stock.get('peg', 'N/A')
         if pd.isna(peg) or str(peg) == 'nan': peg = 'N/A'
         
+        # 顯示欄位修正：因使用官方數據，PE與殖利率更準確
+        pe_display = stock.get('pe', 'N/A')
+        yield_display = stock.get('fcf_yield', 'N/A') # 用殖利率替代 FCF 顯示
+        
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
-            [f"PEG Ratio", f"{peg}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
-            [f"負債權益比", f"{stock.get('debt_eq', 'N/A')}", f"FCF Yield (現金流)", f"{stock.get('fcf_yield', 'N/A')}"],
-            [f"合約負債", f"{stock.get('cl_val', '尚未讀取')}", f"Beta", f"{stock.get('beta', 'N/A')}"],
+            [f"本益比 (P/E)", f"{pe_display}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
+            [f"股價淨值比 (P/B)", f"{stock.get('pb', 'N/A')}", f"殖利率 (Yield)", f"{yield_display}"],
+            [f"合成 ROE", f"{stock.get('roe_syn', 'N/A')}", f"Beta", f"{stock.get('beta', 'N/A')}"],
         ]
         t = Table(t_data, colWidths=[100, 130, 100, 130])
         t.setStyle(TableStyle([
@@ -281,7 +285,7 @@ def create_pdf(stock_data_list):
     buffer.seek(0)
     return buffer
 
-# --- 10. Gemini API ---
+# --- 9. Gemini API ---
 def get_available_model(key):
     default_model = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
@@ -305,7 +309,6 @@ def call_gemini_api(prompt):
         else: return f"❌ 分析失敗 (Code {response.status_code})"
     except Exception as e: return f"❌ 連線逾時或錯誤: {str(e)}"
 
-# Prompt
 HEDGE_FUND_PROMPT = """
 【指令】
 請針對 **[STOCK]** 撰寫一份客觀的「投資決策分析報告」。
@@ -314,12 +317,12 @@ HEDGE_FUND_PROMPT = """
 請直接根據量化數據與產業現況進行分析，無需扮演任何角色或提及任何機構名稱。報告內容應包含：
 
 1. **財務健康度評估**：
-   - 結合「負債權益比」與「自由現金流」判斷公司體質與獲利含金量。
-   - 評估是否有高槓桿或虛胖風險。
+   - 結合「本益比」與「股價淨值比」判斷估值位階。
+   - 透過「殖利率」評估現金回饋能力。
 
 2. **營收與成長動能**：
-   - 根據「合約負債」的金額與變動，**推算** 未來 1-2 季的訂單能見度。
-   - 指出目前是處於「訂單滿載」、「庫存調整」還是「需求疲軟」階段。
+   - 根據「合成 ROE (P/B 除以 P/E)」推算資本回報效率。
+   - 指出目前是處於「價值低估」、「合理評價」還是「成長溢價」階段。
 
 3. **操作建議與風險提示**：
    - **投資評等**：請給出 [強力買進 / 區間操作 / 減持觀望] 建議。
@@ -330,7 +333,7 @@ HEDGE_FUND_PROMPT = """
 [DATA_CONTEXT]
 """
 
-# --- 11. 數據處理 ---
+# --- 10. 數據處理 ---
 @st.cache_data
 def get_tw_stock_info():
     codes = twstock.codes
@@ -351,17 +354,56 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
+# 調整指標配置：使用官方數據欄位
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
-    'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG', 'category': '估值'},
-    'Price To Book': {'col': 'priceToBook', 'direction': '負向', 'name': 'PB比', 'category': '估值'},
-    'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE', 'category': '財報'},
-    'Debt To Equity': {'col': 'debtToEquity', 'direction': '負向', 'name': '負債權益比', 'category': '財報'},
-    'FCF Yield': {'col': 'fcfYield', 'direction': '正向', 'name': 'FCF收益率', 'category': '財報'},
+    'P/E Ratio': {'col': 'pe', 'direction': '負向', 'name': '本益比', 'category': '估值'}, # 取代 PEG
+    'P/B Ratio': {'col': 'pb', 'direction': '負向', 'name': '股價淨值比', 'category': '估值'},
+    'Synthetic ROE': {'col': 'roe_syn', 'direction': '正向', 'name': '合成ROE', 'category': '財報'}, # 取代 ROE
+    'Dividend Yield': {'col': 'yield', 'direction': '正向', 'name': '殖利率', 'category': '財報'}, # 取代 FCF
 }
 
-# --- 【關鍵修復】get_radar_data 必須在調用前定義 ---
+# --- 【核心】TWSE/TPEX 官方開放數據連接器 ---
+@st.cache_data(ttl=3600)
+def fetch_market_fundamentals():
+    """下載全市場個股本益比、殖利率、股價淨值比 (官方 Open Data)"""
+    market_data = {}
+    
+    # 1. 上市 (TWSE)
+    try:
+        url_twse = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
+        r = requests.get(url_twse, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            for item in data:
+                code = item['Code']
+                try:
+                    pe = float(item['PEratio']) if item['PEratio'] != "-" else 0
+                    pb = float(item['PBratio']) if item['PBratio'] != "-" else 0
+                    dy = float(item['DividendYield']) if item['DividendYield'] != "-" else 0
+                    market_data[code] = {'pe': pe, 'pb': pb, 'yield': dy}
+                except: pass
+    except: pass
+    
+    # 2. 上櫃 (TPEX)
+    try:
+        url_tpex = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
+        r = requests.get(url_tpex, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            for item in data:
+                code = item['SecuritiesCompanyCode']
+                try:
+                    pe = float(item['PERatio']) if item['PERatio'] != "-" else 0
+                    pb = float(item['PBRatio']) if item['PBRatio'] != "-" else 0
+                    dy = float(item['DividendYield']) if item['DividendYield'] != "-" else 0
+                    market_data[code] = {'pe': pe, 'pb': pb, 'yield': dy}
+                except: pass
+    except: pass
+            
+    return market_data
+
 def get_radar_data(df_norm_row, config):
     categories = {'技術': [], '籌碼': [], '財報': [], '估值': []}
     for key, cfg in config.items():
@@ -372,101 +414,87 @@ def get_radar_data(df_norm_row, config):
             categories[cat].append(score)
     return {k: np.mean(v) if v else 0 for k, v in categories.items()}
 
-def get_contract_liabilities_safe(symbol_code):
-    try:
-        if not symbol_code.endswith('.TW') and not symbol_code.endswith('.TWO'): symbol_code += '.TW'
-        stock = yf.Ticker(symbol_code)
-        bs = stock.balance_sheet
-        if bs.empty: return "無財報數據"
-        target_keys = ['Contract Liabilities', 'Deferred Revenue']
-        val = None
-        for key in target_keys:
-            matches = [k for k in bs.index if key in k]
-            if matches:
-                val = bs.loc[matches[0]].iloc[0]
-                break
-        if val is not None and not pd.isna(val): return f"{val / 100000000:.2f} 億元"
-        else: return "無合約負債數據"
-    except: return "讀取失敗"
-
-def render_factor_bars(radar_data):
-    html = ""
-    colors = {'技術': '#29b6f6', '籌碼': '#ab47bc', '財報': '#ffca28', '估值': '#ef5350'}
-    for cat, score in radar_data.items():
-        color = colors.get(cat, '#8b949e')
-        blocks = int(score / 10)
-        visual_bar = "■" * blocks + "░" * (10 - blocks)
-        html += f"""<div style="margin-bottom: 8px;"><div style="display:flex; justify-content:space-between; font-size:0.85rem; color:#e6e6e6;"><span><span style="color:{color};">●</span> {cat}</span><span>{score:.0f}%</span></div><div style="font-family: monospace; color:{color}; letter-spacing: 2px;">{visual_bar}</div></div>"""
-    return html
-
-# --- 數據獲取核心 (混合引擎 + 快取) ---
-def fetch_twse_batch(tickers_list):
-    """TWSE 批量救援模式"""
-    try:
-        codes = sorted(list(set([t.split(' ')[0].split('.')[0] for t in tickers_list])))
-        batch_size = 50
-        results = []
-        for i in range(0, len(codes), batch_size):
-            chunk = codes[i:i+batch_size]
-            try:
-                realtime_data = twstock.realtime.get(chunk)
-                if realtime_data and realtime_data['success']:
-                    for code, data in realtime_data.items():
-                        if data['success'] and data['realtime']:
-                            latest = data['realtime'].get('latest_trade_price', '-')
-                            if latest == '-' or not latest:
-                                latest = data['realtime'].get('best_bid_price', [None])[0]
-                            if latest and latest != '-':
-                                price = float(latest)
-                                full_symbol = next((t for t in tickers_list if code in t), f"{code}.TW")
-                                results.append({
-                                    '代號': code,
-                                    'full_symbol': full_symbol,
-                                    '名稱': data['info']['name'],
-                                    'close_price': price,
-                                    'pegRatio': np.nan, 'priceToMA60': 0, 'volumeRatio': 1.0,
-                                    'priceToBook': np.nan, 'returnOnEquity': np.nan, 
-                                    'debtToEquity': np.nan, 'fcfYield': np.nan, 'beta': 1.0
-                                })
-                time.sleep(1) 
-            except: continue
-        return pd.DataFrame(results)
-    except:
-        return pd.DataFrame()
-
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_hybrid_data(tickers_list):
     results = []
-    # 1. Yahoo Batch
+    
+    # 1. 獲取官方基本面數據 (Map)
+    fund_map = fetch_market_fundamentals()
+    
+    # 2. 批量獲取 Yahoo 股價 (只抓價格與量，這是 Yahoo 最不容易擋的部分)
     try:
         symbols = [t.split(' ')[0] for t in tickers_list]
-        data = yf.download(symbols, period="1d", group_by='ticker', progress=False, threads=False)
-        if not data.empty:
-            for ticker_full in tickers_list:
-                parts = ticker_full.split(' ')
-                symbol = parts[0]
-                name = parts[1] if len(parts) > 1 else symbol
+        # threads=False 避免被當攻擊
+        data = yf.download(symbols, period="3mo", group_by='ticker', progress=False, threads=False)
+        
+        # 解析數據
+        for ticker_full in tickers_list:
+            parts = ticker_full.split(' ')
+            symbol = parts[0]
+            name = parts[1] if len(parts) > 1 else symbol
+            code = symbol.split('.')[0]
+            
+            # 預設值
+            price = np.nan
+            ma_bias = 0
+            vol_ratio = 1.0
+            
+            # 從 Yahoo Data 提取
+            try:
+                df = data if len(symbols) == 1 else (data[symbol] if symbol in data else pd.DataFrame())
+                if not df.empty and 'Close' in df.columns:
+                    latest = df.iloc[-1]
+                    price = float(latest['Close'])
+                    if not pd.isna(price):
+                        # 技術指標
+                        ma60 = df['Close'].rolling(window=60).mean().iloc[-1]
+                        if not pd.isna(ma60) and ma60 > 0:
+                            ma_bias = (price / ma60) - 1
+                        
+                        vol_curr = df['Volume'].iloc[-1]
+                        vol_avg = df['Volume'].rolling(window=20).mean().iloc[-1]
+                        if not pd.isna(vol_avg) and vol_avg > 0:
+                            vol_ratio = vol_curr / vol_avg
+            except: pass
+            
+            # 若 Yahoo 失敗，嘗試 TWSE 補價 (救援)
+            if pd.isna(price):
                 try:
-                    df = data if len(symbols) == 1 else (data[symbol] if symbol in data else pd.DataFrame())
-                    if not df.empty and 'Close' in df.columns:
-                        price = df['Close'].iloc[-1]
-                        if not pd.isna(price):
-                            results.append({
-                                '代號': symbol.split('.')[0],
-                                'full_symbol': symbol,
-                                '名稱': name,
-                                'close_price': float(price),
-                                'pegRatio': np.nan, 'priceToMA60': 0, 'volumeRatio': 1.0,
-                                'priceToBook': np.nan, 'returnOnEquity': np.nan, 
-                                'debtToEquity': np.nan, 'fcfYield': np.nan, 'beta': 1.0
-                            })
+                    realtime = twstock.realtime.get(code)
+                    if realtime['success']:
+                        p_str = realtime['realtime'].get('latest_trade_price', '-')
+                        if p_str and p_str != '-': price = float(p_str)
                 except: pass
-    except: pass
-
-    # 2. TWSE Rescue
-    if not results:
-        twse_df = fetch_twse_batch(tickers_list)
-        if not twse_df.empty: return twse_df
+            
+            # 若有價格，進行數據合併
+            if not pd.isna(price):
+                # 從官方 Map 獲取真實財報數據
+                f_data = fund_map.get(code, {'pe': 0, 'pb': 0, 'yield': 0})
+                
+                # 計算合成 ROE: ROE = P/B / P/E
+                # 數學上: E/B = (P/B) / (P/E)
+                roe_syn = 0
+                if f_data['pe'] > 0 and f_data['pb'] > 0:
+                    roe_syn = (f_data['pb'] / f_data['pe']) * 100
+                
+                results.append({
+                    '代號': code,
+                    'full_symbol': symbol,
+                    '名稱': name,
+                    'close_price': price,
+                    'priceToMA60': ma_bias, 
+                    'volumeRatio': vol_ratio,
+                    'pe': f_data['pe'],
+                    'pb': f_data['pb'],
+                    'yield': f_data['yield'],
+                    'roe_syn': roe_syn,
+                    'pegRatio': np.nan, # 已被 PE 取代
+                    'debtToEquity': np.nan, # 無法獲取，暫不計分
+                    'fcfYield': np.nan, # 已被 Yield 取代
+                    'beta': 1.0
+                })
+                
+    except Exception as e: pass
             
     return pd.DataFrame(results)
 
@@ -475,11 +503,20 @@ def calculate_entropy_score(df, config):
     df_norm = df.copy()
     for key, cfg in config.items():
         col = cfg['col']
-        if col not in df.columns: df[col] = np.nan 
-        if cfg['direction'] == '正向': fill_val = df[col].min() if df[col].notna().any() else 0
-        else: fill_val = df[col].max() if df[col].notna().any() else 100
+        # 容錯：若欄位不存在補 0
+        if col not in df.columns: df[col] = 0
+        
+        # 填補 0 值 (避免官方數據缺漏)
+        # 對於 PE，0 通常代表虧損，設為極大值(懲罰)
+        if col == 'pe':
+            df[col] = df[col].replace(0, 1000) 
+            
+        if cfg['direction'] == '正向': fill_val = df[col].min()
+        else: fill_val = df[col].max()
+        
         df[col] = df[col].fillna(fill_val)
         df_norm[col] = df[col]
+        
         q_low = df[col].quantile(0.05); q_high = df[col].quantile(0.95)
         df_norm[col] = df[col].clip(lower=q_low, upper=q_high)
         mn, mx = df_norm[col].min(), df_norm[col].max()
@@ -488,6 +525,7 @@ def calculate_entropy_score(df, config):
         else:
             if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df_norm[col] - mn) / denom
             else: df_norm[f'{col}_n'] = (mx - df_norm[col]) / denom
+            
     m = len(df); k = 1 / np.log(m) if m > 1 else 0; weights = {}
     for key, cfg in config.items():
         col = cfg['col']
@@ -505,12 +543,21 @@ def calculate_entropy_score(df, config):
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None, df_norm
 
+def render_factor_bars(radar_data):
+    html = ""
+    colors = {'技術': '#29b6f6', '籌碼': '#ab47bc', '財報': '#ffca28', '估值': '#ef5350'}
+    for cat, score in radar_data.items():
+        color = colors.get(cat, '#8b949e')
+        blocks = int(score / 10)
+        visual_bar = "■" * blocks + "░" * (10 - blocks)
+        html += f"""<div style="margin-bottom: 8px;"><div style="display:flex; justify-content:space-between; font-size:0.85rem; color:#e6e6e6;"><span><span style="color:{color};">●</span> {cat}</span><span>{score:.0f}%</span></div><div style="font-family: monospace; color:{color}; letter-spacing: 2px;">{visual_bar}</div></div>"""
+    return html
+
 # --- 12. 主儀表板與流程 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
     st.markdown("---")
     
-    # 清除快取按鈕
     if st.button("🔴 清除快取並重置", use_container_width=True):
         st.cache_data.clear()
         if 'raw_data' in st.session_state: del st.session_state['raw_data']
@@ -578,7 +625,7 @@ if run_btn:
         st.session_state['raw_data'] = None
         st.session_state['df_norm'] = None
         
-        with st.spinner("🚀 正在啟動雙引擎掃描 (Yahoo Batch + TWSE 救援模式)..."):
+        with st.spinner("🚀 正在啟動雙網架構掃描 (Yahoo 報價 + TWSE/TPEX 官方財報)..."):
             raw = fetch_hybrid_data(target_stocks)
             
         if not raw.empty:
@@ -586,11 +633,11 @@ if run_btn:
             st.session_state['scan_finished'] = True
             st.rerun()
         else:
-            st.error("❌ 掃描失敗：所有來源皆無回應，請點擊左側「清除快取並重置」後稍後再試。")
+            st.error("❌ 掃描失敗：所有來源皆無回應，請稍後再試。")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
-    required_cols = ['fcfYield', 'debtToEquity']
-    if not all(col in st.session_state['raw_data'].columns for col in required_cols):
+    # 更新：檢查欄位是否包含新的指標
+    if 'pe' not in st.session_state['raw_data'].columns:
         st.session_state['raw_data'] = None
         st.rerun()
 
@@ -631,14 +678,14 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
 
         st.markdown("### 🏆 Top 10 潛力標的 (Entropy Ranking)")
         st.dataframe(
-            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'debtToEquity', 'fcfYield', 'Action Plan']],
+            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pe', 'priceToMA60', 'pb', 'yield', 'Action Plan']],
             column_config={
                 "Score": st.column_config.ProgressColumn("Entropy Score", format="%.1f", min_value=0, max_value=100),
                 "close_price": st.column_config.NumberColumn("Price", format="%.2f"),
-                "pegRatio": st.column_config.NumberColumn("PEG", format="%.2f"),
+                "pe": st.column_config.NumberColumn("P/E (本益比)", format="%.2f"),
                 "priceToMA60": st.column_config.NumberColumn("MA Bias", format="%.2%"),
-                "debtToEquity": st.column_config.NumberColumn("D/E (Risk)", format="%.2f"),
-                "fcfYield": st.column_config.NumberColumn("FCF Yield", format="%.2f%%"),
+                "pb": st.column_config.NumberColumn("P/B (淨值比)", format="%.2f"),
+                "yield": st.column_config.NumberColumn("Yield (殖利率)", format="%.2f%%"),
                 "Action Plan": st.column_config.TextColumn("戰略指令 (Strategy)"),
             },
             hide_index=True, use_container_width=True
@@ -667,10 +714,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 'name': stock_name,
                                 'price': row['close_price'],
                                 'score': row['Score'],
-                                'peg': row['pegRatio'],
-                                'beta': row.get('beta', 0),
-                                'debt_eq': row.get('debtToEquity', 'N/A'),
-                                'fcf_yield': f"{row.get('fcfYield', 0):.2f}%",
+                                'pe': row.get('pe', 0),
+                                'pb': row.get('pb', 0),
+                                'fcf_yield': f"{row.get('yield', 0):.2f}%",
+                                'roe_syn': f"{row.get('roe_syn', 0):.2f}%",
                                 'ma_bias': f"{row['priceToMA60']:.2%}",
                                 'radar_data': radar,
                                 'analysis': analysis_text,
@@ -727,14 +774,17 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                      if st.button(f"✨ 生成分析報告", key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
                          if not is_analyzed:
                             with st.spinner(f"⚡ AI 正在為您撰寫 {stock_name} 的投資備忘錄..."):
-                                cl_val = get_contract_liabilities_safe(row['full_symbol']) 
-                                fcf_val = row.get('fcfYield', 0)
-                                de_val = row.get('debtToEquity', 0)
+                                pe_val = row.get('pe', 0)
+                                pb_val = row.get('pb', 0)
+                                dy_val = row.get('yield', 0)
+                                roe_syn = row.get('roe_syn', 0)
+                                
                                 real_time_data = f"""
                                 - 收盤價: {row['close_price']}
-                                - 合約負債: {cl_val}
-                                - 自由現金流收益率 (FCF Yield): {fcf_val:.2f}%
-                                - 負債權益比 (D/E): {de_val:.2f}
+                                - 本益比 (P/E): {pe_val:.2f}
+                                - 股價淨值比 (P/B): {pb_val:.2f}
+                                - 殖利率 (Yield): {dy_val:.2f}%
+                                - 合成 ROE: {roe_syn:.2f}%
                                 - 因子得分: {radar_data} (滿分100)
                                 - 季線乖離: {row['priceToMA60']:.2%}
                                 """
@@ -748,9 +798,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         'name': stock_name,
                         'price': row['close_price'],
                         'score': row['Score'],
-                        'peg': row['pegRatio'],
-                        'debt_eq': row.get('debtToEquity', 'N/A'),
-                        'fcf_yield': f"{row.get('fcfYield', 0):.2f}%",
+                        'pe': row.get('pe', 0),
+                        'pb': row.get('pb', 0),
+                        'fcf_yield': f"{row.get('yield', 0):.2f}%",
+                        'roe_syn': f"{row.get('roe_syn', 0):.2f}%",
                         'ma_bias': f"{row['priceToMA60']:.2%}",
                         'radar_data': radar_data,
                         'analysis': st.session_state['analysis_results'].get(stock_name, None),
