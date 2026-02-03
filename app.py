@@ -5,7 +5,7 @@ import numpy as np
 import plotly.express as px
 import twstock
 import concurrent.futures
-import requests # 改用 requests 直接呼叫，避開套件版本問題
+import requests
 import json
 import time
 
@@ -14,65 +14,47 @@ st.set_page_config(page_title="熵值法 x Gemini 全自動分析", page_icon="�
 st.title("🤖 熵值法選股 & Gemini 全自動戰略分析")
 st.markdown("### 流程： 1. 自動掃描選股 ➡️ 2. Gemini API 即時撰寫報告")
 
-# --- 0. 初始化 Session State ---
+# --- 0. 初始化 Session State (守門員機制) ---
 if 'analysis_results' not in st.session_state:
     st.session_state['analysis_results'] = {}
 if 'raw_data' not in st.session_state:
     st.session_state['raw_data'] = None
+# 【關鍵修改】預設為 False，除非按下按鈕，否則不顯示結果
 if 'scan_finished' not in st.session_state:
     st.session_state['scan_finished'] = False
 
 # --- 1. 設定 Gemini API ---
-# 這裡不需要 genai.configure 了，直接讀取 Key 給 requests 用
 api_key = st.secrets.get("GEMINI_API_KEY")
 
 if not api_key:
     st.error("⚠️ 未偵測到 Gemini API Key！請去 Streamlit Cloud 後台的 Settings -> Secrets 設定 `GEMINI_API_KEY`。")
     st.stop()
 
-# 【核心優化】改用 REST API 直接呼叫 (解決 404 問題)
+# 【核心優化】REST API 呼叫 (解決 404 問題)
 def call_gemini_api(prompt):
-    # 模型鏈：優先使用 1.5-flash，失敗轉 1.5-pro，最後用 1.0-pro 保底
-    model_chain = [
-        'gemini-1.5-flash',
-        'gemini-1.5-pro',
-        'gemini-pro'
-    ]
-    
+    model_chain = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
     headers = {'Content-Type': 'application/json'}
-    data = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2} # 降低隨機性，讓分析更嚴謹
-    }
-    
+    data = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2}}
     last_error = None
     
     for model_name in model_chain:
-        # 直接組裝官方 API 網址
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        
         try:
-            # 發送 POST 請求
             response = requests.post(url, headers=headers, json=data, timeout=30)
-            
-            # 檢查回應狀態
             if response.status_code == 200:
-                # 成功！解析 JSON 取出文字
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
-                # 失敗，記錄錯誤代碼 (如 404, 429, 400)
                 error_msg = f"Status: {response.status_code}, Body: {response.text}"
                 print(f"⚠️ Model {model_name} failed: {error_msg}")
                 last_error = error_msg
-                time.sleep(1) # 休息一下再試下一個
+                time.sleep(1)
                 continue
-                
         except Exception as e:
             print(f"⚠️ Connection error with {model_name}: {e}")
             last_error = str(e)
             continue
 
-    return f"❌ AI 分析失敗 (已嘗試 REST API)。\n最後錯誤訊息：{last_error}\n請檢查 API Key 是否正確或額度是否已滿。"
+    return f"❌ AI 分析失敗。\n最後錯誤訊息：{last_error}\n請檢查 API Key 或額度。"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
@@ -118,10 +100,14 @@ with st.sidebar:
     scan_mode = st.radio("選股模式：", ["自行輸入/多選", "🔥 熱門策略掃描", "🏭 產業類股掃描"])
     target_stocks = []
     
+    # 這裡只負責「準備名單」，絕對不觸發執行
     if scan_mode == "自行輸入/多選":
+        # 預設值僅作為 UI 顯示，不代表要執行
         default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
         selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
         target_stocks = selected
+        st.caption(f"已選擇 {len(target_stocks)} 檔股票")
+        
     elif scan_mode == "🔥 熱門策略掃描":
         strategy = st.selectbox("選擇策略:", ["台灣50成份股 (大型權值)", "中型100成份股 (成長潛力)", "高股息熱門股 (存股族)", "AI 供應鏈概念", "貨櫃航運三雄"])
         if strategy == "台灣50成份股 (大型權值)":
@@ -144,20 +130,20 @@ with st.sidebar:
                 elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
         elif strategy == "貨櫃航運三雄":
             target_stocks = ["2603.TW 長榮", "2609.TW 陽明", "2615.TW 萬海"]
-        st.success(f"已載入 {len(target_stocks)} 檔成分股")
+        
+        st.info(f"已載入【{strategy}】清單，共 {len(target_stocks)} 檔。請點擊下方按鈕開始分析。")
+
     elif scan_mode == "🏭 產業類股掃描":
         all_industries = sorted(list(industry_map.keys()))
         selected_industry = st.selectbox("選擇產業:", all_industries)
         if selected_industry:
             codes = industry_map[selected_industry]
             target_stocks = [stock_map[c] for c in codes if c in stock_map]
-            st.success(f"「{selected_industry}」類股共有 {len(target_stocks)} 檔")
+            st.info(f"已鎖定【{selected_industry}】，共 {len(target_stocks)} 檔。請點擊下方按鈕開始分析。")
             if len(target_stocks) > 60: st.warning("⚠️ 數量較多，掃描時間可能較長。")
     
-    if st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True):
-        st.session_state['scan_finished'] = False 
-        st.session_state['raw_data'] = None      
-        st.session_state['analysis_results'] = {} 
+    # 【關鍵按鈕】這是唯一的執行入口
+    run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
 # --- 4. 指標與函數 ---
 indicators_config = {
@@ -235,17 +221,25 @@ def calculate_entropy_score(df, config):
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None
 
-# --- 主執行區 ---
+# --- 主執行區 (邏輯重構：只有按下按鈕才會執行) ---
 
-# 1. 抓取資料
-if st.session_state['raw_data'] is None and target_stocks:
-    raw = get_stock_data_concurrent(target_stocks)
-    if not raw.empty:
-        st.session_state['raw_data'] = raw
-        st.session_state['scan_finished'] = True
-        st.rerun()
+# 1. 只有當按鈕「真的被按下」時，才執行數據抓取
+if run_btn:
+    if not target_stocks:
+        st.warning("⚠️ 請先選擇至少一檔股票或一個策略！")
+    else:
+        # 重置舊資料
+        st.session_state['analysis_results'] = {}
+        st.session_state['raw_data'] = None
+        
+        # 執行抓取
+        raw = get_stock_data_concurrent(target_stocks)
+        if not raw.empty:
+            st.session_state['raw_data'] = raw
+            st.session_state['scan_finished'] = True
+            st.rerun() # 強制刷新頁面來顯示結果
 
-# 2. 顯示結果與互動
+# 2. 顯示結果 (只在 scan_finished 為 True 時顯示)
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     raw = st.session_state['raw_data']
     st.markdown("---")
@@ -294,5 +288,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 if stock_name in st.session_state['analysis_results']:
                     st.markdown("### 📝 AI 分析報告")
                     st.markdown(st.session_state['analysis_results'][stock_name])
-elif not target_stocks:
-    st.info("👈 請從左側側邊欄選擇掃描模式與股票，然後點擊「啟動全自動掃描」。")
+
+# 3. 如果還沒開始掃描，顯示提示
+elif not st.session_state['scan_finished']:
+    st.info("👈 請在左側選擇選股模式與範圍，確認無誤後點擊「啟動全自動掃描」按鈕。")
