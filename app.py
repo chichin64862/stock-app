@@ -33,106 +33,113 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 針對性修復 (解決白底白字問題) ---
+# --- 2. CSS 暴力修正 (針對您提出的三個痛點) ---
 st.markdown("""
 <style>
     /* =========================================
-       1. 全局基底：深色模式
+       1. 基底：強制全域黑底白字
        ========================================= */
     .stApp { background-color: #0e1117 !important; }
-    
-    /* 預設文字為白色 (針對大多數黑底區域) */
     body, h1, h2, h3, h4, h5, h6, p, div, span, label, li {
         color: #e6e6e6 !important;
         font-family: 'Roboto', sans-serif;
     }
 
     /* =========================================
-       2. 【痛點修復】DataFrame 右上角配置選單 (那個白色的框框)
+       2. 【痛點修復】選擇產業/下拉選單 (圖1問題)
        ========================================= */
-    /* 針對 Glide Data Grid 的 Column Menu */
-    /* 既然它是白底，我們強制把裡面的文字改成【深灰色】，確保看得到 */
-    div[role="menu"] div, 
-    div[role="menu"] span, 
-    div[role="menu"] label {
-        color: #31333F !important; /* 深灰色文字 */
-        font-weight: 500 !important;
-    }
-    
-    /* 針對選單內的 Checkbox 標籤 */
-    div[role="menu"] label {
-        color: #31333F !important;
-    }
-
-    /* =========================================
-       3. 【痛點修復】下拉選單 (Selectbox) - 保持黑底白字
-       ========================================= */
-    /* 選單本體 */
+    /* 修正選單本體的背景 */
     div[data-baseweb="select"] > div {
         background-color: #262730 !important;
         border-color: #4b4b4b !important;
         color: white !important;
     }
-    /* 彈出列表 (Popover) */
-    div[data-baseweb="popover"], ul[data-baseweb="menu"] {
+    
+    /* 修正「彈出列表」的背景 (最關鍵的修正) */
+    ul[data-baseweb="menu"], 
+    div[data-baseweb="popover-content"],
+    div[data-baseweb="popover"] {
         background-color: #1f2937 !important; /* 深灰背景 */
         border: 1px solid #4b4b4b !important;
     }
-    /* 選項文字 (維持白色，因為背景是深灰) */
-    div[data-baseweb="popover"] li, 
-    div[data-baseweb="popover"] div {
-        color: #e6e6e6 !important;
+    
+    /* 修正列表內的選項文字 */
+    li[role="option"] {
+        color: #ffffff !important; /* 白字 */
     }
-    /* 滑鼠懸停 */
+    
+    /* 修正滑鼠懸停時的顏色 */
     li[role="option"]:hover, li[role="option"][aria-selected="true"] {
-        background-color: #238636 !important;
-        color: white !important;
-    }
-
-    /* =========================================
-       4. 【痛點修復】下載按鈕 (Download Button)
-       ========================================= */
-    .stDownloadButton button {
-        background-color: #1f2937 !important;
+        background-color: #238636 !important; /* 綠色背景 */
         color: #ffffff !important;
-        border: 1px solid #238636 !important;
-        white-space: nowrap !important; /* 禁止換行 */
-        min-width: 180px !important; /* 確保寬度足夠 */
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-    }
-    .stDownloadButton button:hover {
-        border-color: #58a6ff !important;
-        color: #58a6ff !important;
-    }
-    .stDownloadButton p {
-        color: inherit !important;
-        font-size: 1rem !important;
     }
 
     /* =========================================
-       5. DataFrame 工具列 (Toolbar)
+       3. 【痛點修復】表格右上角工具列 (圖3問題)
        ========================================= */
+    /* 強制定位並覆蓋背景色 */
     [data-testid="stElementToolbar"] {
-        background-color: #262730 !important;
+        background-color: #262730 !important; /* 深色背景 */
         border: 1px solid #4b4b4b !important;
+        color: #ffffff !important;
     }
+    
+    /* 覆蓋按鈕樣式 */
+    [data-testid="stElementToolbar"] button {
+        background-color: transparent !important;
+        border: none !important;
+        color: #ffffff !important;
+    }
+    
+    /* 強制 SVG 圖示變白 */
     [data-testid="stElementToolbar"] svg {
         fill: #ffffff !important;
-        color: #ffffff !important;
+        stroke: #ffffff !important;
     }
+    
+    /* 滑鼠懸停效果 */
     [data-testid="stElementToolbar"] button:hover {
         background-color: #4b4b4b !important;
     }
 
     /* =========================================
-       6. 其他元件
+       4. 【痛點修復】下載按鈕與排版 (圖2問題)
        ========================================= */
-    /* 輸入框 */
+    /* 強制按鈕文字不換行 */
+    .stDownloadButton button {
+        white-space: nowrap !important;
+        width: 100% !important;
+        background-color: #1f2937 !important;
+        border: 1px solid #238636 !important;
+        color: white !important;
+    }
+    .stDownloadButton button:hover {
+        background-color: #238636 !important;
+        border-color: #ffffff !important;
+        color: white !important;
+    }
+    
+    /* PDF 中心容器優化 */
+    .pdf-center {
+        background-color: #1f2937;
+        padding: 15px 20px;
+        border-radius: 8px;
+        border-left: 5px solid #238636;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    /* =========================================
+       5. 其他元件優化
+       ========================================= */
+    /* 輸入框文字 */
     input { color: #ffffff !important; caret-color: #ffffff !important; }
+    
     /* 側邊欄 */
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
+    
     /* 卡片 */
     .stock-card {
         background-color: #161b22; 
@@ -140,14 +147,6 @@ st.markdown("""
         border-radius: 10px; 
         border: 1px solid #30363d; 
         margin-bottom: 15px;
-    }
-    /* PDF 中心容器 */
-    .pdf-center {
-        background-color: #1f2937;
-        padding: 20px;
-        border-radius: 8px;
-        border-left: 5px solid #238636;
-        margin-bottom: 20px;
     }
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
 </style>
@@ -524,7 +523,7 @@ with st.sidebar:
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ AlphaCore 智能量化戰略終端 4.3")
+    st.title("⚡ AlphaCore 智能量化戰略終端 4.2")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -580,15 +579,19 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         with st.container():
             st.markdown('<div class="pdf-center">', unsafe_allow_html=True)
             
+            # 直接準備數據
             if len(res) > 0:
-                # 調整比例與對齊，解決換行與美觀問題
+                # 調整按鈕容器比例
                 col_info, col_dl = st.columns([0.65, 0.35], vertical_alignment="center")
                 with col_info:
                     st.success(f"✅ 已準備 {len(res)} 份量化數據報告。點擊 AI 分析後，內容將自動更新。")
                 with col_dl:
+                    # 準備數據
                     bulk_data_final = []
                     for idx, row in res.iterrows():
                         stock_name = f"{row['代號']} {row['名稱']}"
+                        
+                        # 安全匹配
                         code_match = df_norm[df_norm['代號'] == row['代號']]
                         if not code_match.empty:
                             norm_row = code_match.iloc[0]
@@ -667,6 +670,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         else: st.warning("⚠️ 無法取得歷史數據")
                     except Exception as e: st.error("圖表載入失敗")
 
+                # 按鈕區 (AI 生成 + 個股下載)
                 col_btn, col_dl = st.columns([3, 1])
                 
                 with col_btn:
@@ -685,6 +689,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 st.session_state['analysis_results'][stock_name] = result
                                 st.rerun()
                 
+                # 個股 PDF 下載 (永遠顯示)
                 with col_dl:
                     single_data = [{
                         'name': stock_name,
