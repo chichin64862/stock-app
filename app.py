@@ -28,13 +28,13 @@ except ImportError:
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="AlphaCore | 智能量化戰略終端", 
+    page_title="AlphaCore | 機構級戰略終端", 
     page_icon="⚡", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 針對性修復 (延續 4.3 的完美深色 UI) ---
+# --- 2. CSS 針對性修復 ---
 st.markdown("""
 <style>
     /* 1. 全局基底 */
@@ -184,8 +184,12 @@ def create_pdf(stock_data_list):
         story.append(Paragraph("_" * 60, normal_style))
         story.append(Spacer(1, 10))
         
+        # 加入「戰略指令」
+        action = stock.get('action', 'N/A')
+        story.append(Paragraph(f"⚡ 系統戰略指令: <b>{action}</b>", h3_style))
+        story.append(Spacer(1, 10))
+
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
-        # 【優化】加入 FCF Yield 數據
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
@@ -224,7 +228,6 @@ def create_pdf(stock_data_list):
         analysis = stock.get('analysis')
         if analysis:
             story.append(Paragraph("🤖 Gemini AI 機構級戰略解讀", h3_style))
-            # 文字清洗，避免 ReportLab 崩潰
             formatted = analysis.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', formatted)
             formatted = formatted.replace("\n", "<br/>").replace("### ", "").replace("## ", "").replace("# ", "")
@@ -241,7 +244,7 @@ def create_pdf(stock_data_list):
     buffer.seek(0)
     return buffer
 
-# --- 8. Gemini API (升級版) ---
+# --- 8. Gemini API ---
 def get_available_model(key):
     default_model = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
@@ -265,10 +268,9 @@ def call_gemini_api(prompt):
         else: return f"❌ 分析失敗 (Code {response.status_code})"
     except Exception as e: return f"❌ 連線逾時或錯誤: {str(e)}"
 
-# 【專家級優化】升級 Prompt 邏輯
 HEDGE_FUND_PROMPT = """
 【角色設定】
-你現在是高盛(Goldman Sachs)亞太區首席策略分析師。請針對 **[STOCK]** 撰寫一份「專業級機構投資備忘錄」。
+你現在是高盛(Goldman Sachs)亞太區首席策略分析師。請針對 **[STOCK]** 撰寫一份「機構級投資備忘錄」。
 
 【⚠️ 嚴謹邏輯指令】
 不要給予模糊的敘述。請結合量化數據與產業週期，執行以下預測分析：
@@ -281,13 +283,10 @@ HEDGE_FUND_PROMPT = """
    - 根據「合約負債」的金額與變動，**推算** 未來 1-2 季的成長動能強弱。
    - 請明確指出是「訂單滿載」、「庫存調整」還是「需求疲軟」。
 
-3. **估值合理性 (Valuation Gap)**：
-   - 利用 PEG 與目前「季線乖離率」，判斷是「價值窪地」還是「動能過熱」。
-
-4. **戰略操作建議 (Execution)**：
-   - **投資評等**：請給出 [重於大盤 (Overweight) / 中立 (Neutral) / 減持 (Underweight)]。
-   - **關鍵點位**：設定「防禦區間」與「目標空間」。
-   - **觀察指標**：列出一個未來最需要盯緊的變數 (如：匯率、原物料、特定客戶訂單)。
+3. **戰略操作建議 (Execution)**：
+   - **投資評等**：請給出 [強力買進 (Strong Buy) / 區間操作 (Range Bound) / 減持 (Reduce)]。
+   - **關鍵點位**：設定「防禦區間 (Support Zone)」與「獲利目標 (Target Zone)」。
+   - **觀察指標**：列出一個未來最需要盯緊的變數。
 
 【最新市場即時數據】
 [DATA_CONTEXT]
@@ -314,7 +313,6 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
-# 【專家級優化】指標配置：加入 FCF Yield (現金流收益)
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
@@ -322,7 +320,7 @@ indicators_config = {
     'Price To Book': {'col': 'priceToBook', 'direction': '負向', 'name': 'PB比', 'category': '估值'},
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE', 'category': '財報'},
     'Debt To Equity': {'col': 'debtToEquity', 'direction': '負向', 'name': '負債權益比', 'category': '財報'},
-    'FCF Yield': {'col': 'fcfYield', 'direction': '正向', 'name': 'FCF收益率', 'category': '財報'}, # 新增：巴菲特指標
+    'FCF Yield': {'col': 'fcfYield', 'direction': '正向', 'name': 'FCF收益率', 'category': '財報'},
 }
 
 def fetch_single_stock(ticker):
@@ -358,13 +356,10 @@ def fetch_single_stock(ticker):
             except: pass
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
         
-        # 【專家級優化】計算自由現金流收益率 (FCF / Market Cap)
         fcf = info.get('freeCashflow', 0)
-        if fcf is None: fcf = 0 # 安全處理
-        
+        if fcf is None: fcf = 0
         mkt_cap = info.get('marketCap', 1)
         if mkt_cap is None: mkt_cap = 1
-        
         fcf_yield = (fcf / mkt_cap) if mkt_cap > 0 else 0
         
         return {
@@ -378,7 +373,7 @@ def fetch_single_stock(ticker):
             'priceToBook': info.get('priceToBook', np.nan),
             'returnOnEquity': info.get('returnOnEquity', np.nan), 
             'debtToEquity': info.get('debtToEquity', np.nan),
-            'fcfYield': fcf_yield * 100, # 轉為百分比
+            'fcfYield': fcf_yield * 100, 
             'beta': info.get('beta', 1.0)
         }
     except: return None
@@ -409,10 +404,9 @@ def calculate_entropy_score(df, config):
 
     df_norm = df.copy()
     
-    # Winsorization
     for key, cfg in config.items():
         col = cfg['col']
-        if col in df.columns: # 確保欄位存在
+        if col in df.columns:
             q_low = df[col].quantile(0.05)
             q_high = df[col].quantile(0.95)
             df_norm[col] = df[col].clip(lower=q_low, upper=q_high)
@@ -541,7 +535,7 @@ with st.sidebar:
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ AlphaCore 智能量化戰略終端 5.5")
+    st.title("⚡ AlphaCore 智能量化戰略終端 6.1")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting (Institutional Research Edition)")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -561,34 +555,57 @@ if run_btn:
             st.rerun()
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
+    # 【關鍵修復】: 檢測舊資料是否包含新欄位，若無則強制重跑
+    required_cols = ['fcfYield', 'debtToEquity']
+    if not all(col in st.session_state['raw_data'].columns for col in required_cols):
+        st.toast("⚠️ 偵測到系統升級，正在重新抓取最新財報數據...", icon="🔄")
+        st.session_state['raw_data'] = None
+        st.rerun()
+
     raw = st.session_state['raw_data']
     res, w, err, df_norm = calculate_entropy_score(raw, indicators_config)
     st.session_state['df_norm'] = df_norm 
     
+    # 增加趨勢判定欄位 (Trend)
     def get_trend_label(bias):
         if bias < -0.05: return "🟢 超跌/買點"
         elif bias > 0.15: return "🔴 過熱/賣點"
         else: return "🟡 盤整/持有"
+        
+    # 增加戰略指令 (Action Plan)
+    def determine_action_plan(row):
+        score = row['Score']
+        bias = row['priceToMA60']
+        if score >= 75:
+            if bias < -0.05: return "🚀 強力抄底 (Deep Value Buy)"
+            elif bias > 0.15: return "👀 拉回買進 (Buy on Dip)"
+            else: return "🔥 強力買進 (Strong Buy)"
+        elif score >= 50:
+            if bias < -0.1: return "🟢 超跌反彈 (Rebound)"
+            elif bias > 0.2: return "🔴 高檔調節 (Take Profit)"
+            else: return "🟡 持有續抱 (Hold)"
+        else:
+            return "⛔ 觀望/賣出 (Avoid/Sell)"
     
     if err:
         st.error(err)
     else:
         res['Trend'] = res['priceToMA60'].apply(get_trend_label)
+        res['Action Plan'] = res.apply(determine_action_plan, axis=1)
         top_n = 10
         top_stocks = res.head(top_n)
 
         st.markdown("### 🏆 Top 10 潛力標的 (Entropy Ranking)")
-        # 【優化】加入 FCF Yield 欄位
         st.dataframe(
-            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'debtToEquity', 'fcfYield', 'Trend']],
+            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'debtToEquity', 'fcfYield', 'Action Plan']],
             column_config={
                 "Score": st.column_config.ProgressColumn("Entropy Score", format="%.1f", min_value=0, max_value=100),
                 "close_price": st.column_config.NumberColumn("Price", format="%.2f"),
                 "pegRatio": st.column_config.NumberColumn("PEG", format="%.2f"),
                 "priceToMA60": st.column_config.NumberColumn("MA Bias", format="%.2%"),
                 "debtToEquity": st.column_config.NumberColumn("D/E (Risk)", format="%.2f"),
-                "fcfYield": st.column_config.NumberColumn("FCF Yield %", format="%.2f%%"),
-                "Trend": st.column_config.TextColumn("配置時機 (Actionable Timing)"),
+                "fcfYield": st.column_config.NumberColumn("FCF Yield", format="%.2f%%"),
+                "Action Plan": st.column_config.TextColumn("戰略指令 (Strategy)"),
             },
             hide_index=True, use_container_width=True
         )
@@ -622,7 +639,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 'fcf_yield': f"{row.get('fcfYield', 0):.2f}%",
                                 'ma_bias': f"{row['priceToMA60']:.2%}",
                                 'radar_data': radar,
-                                'analysis': analysis_text
+                                'analysis': analysis_text,
+                                'action': row['Action Plan']
                             })
                     
                     if bulk_data_final:
@@ -644,7 +662,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             is_analyzed = (stock_name in st.session_state['analysis_results'])
             
             with st.container():
-                st.markdown(f"""<div class="stock-card"><h3>{stock_name} <span style="font-size:0.6em;color:#8b949e">NT$ {row['close_price']}</span></h3>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class="stock-card"><h3>{stock_name} <span style="font-size:0.6em;color:#8b949e">NT$ {row['close_price']}</span> <span style="font-size:0.8em;color:#00e676;border:1px solid #00e676;padding:2px 5px;border-radius:4px;margin-left:10px;">{row['Action Plan']}</span></h3>""", unsafe_allow_html=True)
                 
                 c1, c2, c3 = st.columns([1.5, 1.2, 2])
                 
@@ -691,7 +709,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                          if not is_analyzed:
                             with st.spinner(f"⚡ AI 正在為您撰寫 {stock_name} 的投資備忘錄..."):
                                 cl_val = get_contract_liabilities_safe(row['full_symbol']) 
-                                # 【專家級優化】注入 FCF 與 負債比 數據給 AI
                                 fcf_val = row.get('fcfYield', 0)
                                 de_val = row.get('debtToEquity', 0)
                                 real_time_data = f"""
@@ -717,7 +734,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         'fcf_yield': f"{row.get('fcfYield', 0):.2f}%",
                         'ma_bias': f"{row['priceToMA60']:.2%}",
                         'radar_data': radar_data,
-                        'analysis': st.session_state['analysis_results'].get(stock_name, None)
+                        'analysis': st.session_state['analysis_results'].get(stock_name, None),
+                        'action': row['Action Plan']
                     }]
                     pdf_data = create_pdf(single_data)
                     st.download_button(
