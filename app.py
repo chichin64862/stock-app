@@ -25,7 +25,7 @@ except ImportError:
     st.error("⚠️ 缺少 reportlab 套件。請在 requirements.txt 中加入 `reportlab`")
     st.stop()
 
-# --- 1. 介面設定 (更名為 AlphaCore) ---
+# --- 1. 介面設定 ---
 st.set_page_config(
     page_title="AlphaCore | 智能量化戰略終端", 
     page_icon="⚡", 
@@ -33,67 +33,39 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 終極修復 (針對 Popover, Toolbar, Button) ---
+# --- 2. CSS 全域視覺優化 ---
 st.markdown("""
 <style>
-    /* =========================================
-       1. 全局深色模式強制鎖定
-       ========================================= */
+    /* 全局強制深色背景與白字 */
     .stApp { background-color: #0e1117 !important; }
-    
     body, h1, h2, h3, h4, h5, h6, p, div, span, label, li {
         color: #e6e6e6 !important;
-        font-family: 'Roboto', 'Helvetica Neue', sans-serif;
+        font-family: 'Roboto', sans-serif;
     }
 
-    /* =========================================
-       2. 【修復】DataFrame 右上角工具列
-       ========================================= */
+    /* DataFrame 工具列修復 */
     [data-testid="stElementToolbar"] {
         background-color: #262730 !important;
         border: 1px solid #4b4b4b !important;
         border-radius: 6px !important;
         z-index: 99999 !important;
     }
-    [data-testid="stElementToolbar"] button {
-        border: none !important;
-        background: transparent !important;
-    }
-    [data-testid="stElementToolbar"] svg {
-        fill: #ffffff !important;
-        color: #ffffff !important;
-    }
-    [data-testid="stElementToolbar"] button:hover {
-        background-color: #4b4b4b !important;
-    }
+    [data-testid="stElementToolbar"] button { border: none !important; background: transparent !important; }
+    [data-testid="stElementToolbar"] svg { fill: #ffffff !important; color: #ffffff !important; }
+    [data-testid="stElementToolbar"] button:hover { background-color: #4b4b4b !important; }
 
-    /* =========================================
-       3. 【修復】Show/hide columns 等彈出選單 (Popover)
-       這是解決「白底白字」的關鍵！
-       ========================================= */
-    div[data-baseweb="popover"], 
-    div[data-baseweb="popover"] > div,
-    ul[data-baseweb="menu"] {
-        background-color: #1f2937 !important; /* 深灰背景 */
+    /* Popover 彈出選單修復 (Show/hide columns) */
+    div[data-baseweb="popover"], ul[data-baseweb="menu"] {
+        background-color: #1f2937 !important;
         border: 1px solid #4b4b4b !important;
     }
-    
-    /* 選單內的文字 */
-    div[data-baseweb="popover"] li, 
-    div[data-baseweb="popover"] div {
-        color: #e6e6e6 !important;
-    }
-    
-    /* 滑鼠懸停選項 */
-    li[role="option"]:hover, 
-    li[role="option"][aria-selected="true"] {
-        background-color: #238636 !important; /* 綠色高亮 */
+    div[data-baseweb="popover"] li, div[data-baseweb="popover"] div { color: #e6e6e6 !important; }
+    li[role="option"]:hover, li[role="option"][aria-selected="true"] {
+        background-color: #238636 !important;
         color: white !important;
     }
 
-    /* =========================================
-       4. 【修復】下載按鈕 (stDownloadButton)
-       ========================================= */
+    /* 下載按鈕修復 */
     [data-testid="stDownloadButton"] button {
         background-color: #1f2937 !important;
         color: #ffffff !important;
@@ -105,31 +77,17 @@ st.markdown("""
         color: #58a6ff !important;
         background-color: #262730 !important;
     }
-    [data-testid="stDownloadButton"] button p {
-        color: inherit !important;
-    }
+    [data-testid="stDownloadButton"] button p { color: inherit !important; }
 
-    /* =========================================
-       5. 輸入框與其他元件
-       ========================================= */
-    /* 下拉選單 Input */
+    /* 輸入框與其他元件 */
     div[data-baseweb="select"] > div {
         background-color: #21262d !important;
         border-color: #30363d !important;
         color: white !important;
     }
-    input {
-        color: #ffffff !important;
-        caret-color: #ffffff !important;
-    }
+    input { color: #ffffff !important; caret-color: #ffffff !important; }
+    [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
     
-    /* 側邊欄 */
-    [data-testid="stSidebar"] {
-        background-color: #161b22 !important;
-        border-right: 1px solid #30363d;
-    }
-    
-    /* 卡片與報告中心 */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
@@ -139,11 +97,13 @@ st.markdown("""
     }
     .pdf-center {
         background-color: #1f2937;
-        padding: 20px;
-        border-radius: 10px;
+        padding: 15px 20px;
+        border-radius: 8px;
         border-left: 5px solid #238636;
-        margin-bottom: 25px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
     }
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
 </style>
@@ -320,6 +280,7 @@ def get_tw_stock_info():
             full_code = f"{code}{suffix}"
             name = info.name
             industry = info.group
+            # 格式：2330.TW 台積電
             stock_dict[full_code] = f"{full_code} {name}"
             if industry not in industry_dict: industry_dict[industry] = []
             industry_dict[industry].append(full_code)
@@ -337,22 +298,35 @@ indicators_config = {
     'Profit Margins': {'col': 'profitMargins', 'direction': '正向', 'name': '淨利率', 'category': '財報'},
 }
 
-def fetch_single_stock(ticker):
+def fetch_single_stock(ticker_str):
     try:
-        symbol = ticker.split(' ')[0]
+        # ticker_str 來自選單，格式如 "2330.TW 台積電"
+        parts = ticker_str.split(' ')
+        symbol = parts[0]  # 2330.TW
+        name_zh = parts[1] if len(parts) > 1 else symbol # 台積電
+        
         display_code = symbol.split('.')[0]
         stock = yf.Ticker(symbol)
         info = stock.info 
+        
+        # 嘗試抓取英文名稱
+        name_en = info.get('shortName', '')
+        
+        # 【關鍵修改】組合名稱：中文 + (英文)
+        final_name = f"{name_zh} ({name_en})" if name_en else name_zh
+
         peg = info.get('pegRatio', None)
         pe = info.get('trailingPE', None)
         growth = info.get('revenueGrowth', 0) 
         if peg is None and pe is not None and growth > 0: peg = pe / (growth * 100)
         elif peg is None: peg = 2.5 
+        
         price = info.get('currentPrice', info.get('previousClose', 0))
         ma50 = info.get('fiftyDayAverage', price) 
         bias = (price / ma50) - 1 if ma50 and ma50 > 0 else 0
         beta = info.get('beta', 1.0)
         if beta is None: beta = 1.0
+        
         vol_avg = info.get('averageVolume', 0)
         vol_curr = info.get('volume', 0)
         if vol_curr == 0 or vol_avg == 0:
@@ -363,10 +337,11 @@ def fetch_single_stock(ticker):
                     vol_avg = hist['Volume'].mean()
             except: pass
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
+        
         return {
             '代號': display_code,
             'full_symbol': symbol,
-            '名稱': info.get('shortName', symbol),
+            '名稱': final_name, # 使用組合後的中英名稱
             'close_price': price, 
             'pegRatio': peg, 
             'priceToMA60': bias, 
@@ -543,9 +518,10 @@ with st.sidebar:
                 })
             
             if bulk_data:
-                col_info, col_dl = st.columns([3, 1])
+                # 【關鍵修改】優化排版與對齊
+                col_info, col_dl = st.columns([0.7, 0.3], vertical_alignment="center")
                 with col_info:
-                    st.success(f"✅ 已準備 {len(bulk_data)} 份報告 (包含基礎量化數據)。若您需要 AI 深度觀點，請先點擊下方各股的「生成分析」按鈕後，再次點擊此處下載。")
+                    st.success(f"✅ 已準備 {len(bulk_data)} 份報告。若有點擊 AI 分析，內容將自動更新。")
                 with col_dl:
                     pdf_data = create_pdf(bulk_data)
                     st.download_button(
@@ -560,7 +536,7 @@ with st.sidebar:
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ AlphaCore 智能量化戰略終端 4.0")
+    st.title("⚡ AlphaCore 智能量化戰略終端 4.1")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -598,17 +574,13 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         top_stocks = res.head(top_n)
 
         st.markdown("### 🏆 Top 10 潛力標的 (Entropy Ranking)")
-        # --- 欄位標題中英對照優化 ---
         st.dataframe(
             top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'beta', 'Trend']],
             column_config={
-                "代號": st.column_config.TextColumn("代號 (Code)"),
-                "名稱": st.column_config.TextColumn("名稱 (Name)"),
-                "close_price": st.column_config.NumberColumn("收盤價 (Price)", format="%.2f"),
-                "Score": st.column_config.ProgressColumn("熵值評分 (Entropy Score)", format="%.1f", min_value=0, max_value=100),
-                "pegRatio": st.column_config.NumberColumn("PEG (Valuation)", format="%.2f"),
-                "priceToMA60": st.column_config.NumberColumn("乖離率 (MA Bias)", format="%.2%"),
-                "beta": st.column_config.NumberColumn("Beta (Risk)", format="%.2f"),
+                "Score": st.column_config.ProgressColumn("Entropy Score", format="%.1f", min_value=0, max_value=100),
+                "close_price": st.column_config.NumberColumn("Price", format="%.2f"),
+                "pegRatio": st.column_config.NumberColumn("PEG", format="%.2f"),
+                "priceToMA60": st.column_config.NumberColumn("MA Bias", format="%.2%"),
                 "Trend": st.column_config.TextColumn("配置時機 (Actionable Timing)"),
             },
             hide_index=True, use_container_width=True
@@ -683,7 +655,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 st.session_state['analysis_results'][stock_name] = result
                                 st.rerun()
                 
-                # 個股 PDF 下載 (永遠顯示)
                 with col_dl:
                     single_data = [{
                         'name': stock_name,
