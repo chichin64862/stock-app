@@ -59,8 +59,8 @@ st.markdown("""
     .stock-card { background-color: #161b22; padding: 20px; border-radius: 10px; border: 1px solid #30363d; margin-bottom: 15px; }
     .pdf-center { background-color: #1f2937; padding: 20px; border-radius: 8px; border-left: 5px solid #238636; margin-bottom: 20px; }
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
-    /* 上傳區塊優化 */
-    [data-testid="stFileUploader"] { background-color: #1f2937; padding: 10px; border-radius: 8px; border: 1px dashed #4b4b4b; }
+    /* 強制上傳區塊樣式 */
+    [data-testid="stExpander"] { background-color: #262730 !important; border: 1px solid #4b4b4b !important; border-radius: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -70,7 +70,7 @@ if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
 if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
 if 'market_fundamentals' not in st.session_state: st.session_state['market_fundamentals'] = {}
-if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None # 儲存 TEJ 數據
+if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
 
 # --- 4. API Key ---
 try:
@@ -225,12 +225,9 @@ def create_pdf(stock_data_list):
 
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
         
-        # 顯示欄位：TEJ 優先，官方次之
         pe_val = stock.get('pe', 'N/A')
         pb_val = stock.get('pb', 'N/A')
         yield_val = stock.get('yield', 'N/A')
-        
-        # 如果有 TEJ 來源標記，可以在報告中顯示
         source_tag = "(TEJ)" if stock.get('is_tej', False) else "(TWSE)"
         
         t_data = [
@@ -409,6 +406,34 @@ def fetch_market_fundamentals():
             
     return market_data
 
+# --- TEJ 處理函式 (先定義) ---
+def process_tej_upload(uploaded_file):
+    if uploaded_file is None: return None
+    try:
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+            
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        # 尋找代號欄位
+        code_col = next((c for c in df.columns if '代號' in c or 'Code' in c or '股票' in c), None)
+        if not code_col:
+            st.error("❌ TEJ 檔案中找不到『代號』或『Code』欄位，無法對應。")
+            return None
+            
+        tej_map = {}
+        for _, row in df.iterrows():
+            raw_code = str(row[code_col]).split('.')[0].strip() 
+            tej_map[raw_code] = row.to_dict()
+            
+        st.sidebar.success(f"✅ TEJ 數據掛載成功：{len(tej_map)} 檔")
+        return tej_map
+    except Exception as e:
+        st.sidebar.error(f"❌ 檔案讀取失敗: {str(e)}")
+        return None
+
 def get_radar_data(df_norm_row, config):
     categories = {'技術': [], '籌碼': [], '財報': [], '估值': [], '風險': []}
     for key, cfg in config.items():
@@ -418,37 +443,6 @@ def get_radar_data(df_norm_row, config):
             score = df_norm_row[col_n] * 100
             categories[cat].append(score)
     return {k: np.mean(v) if v else 0 for k, v in categories.items() if v}
-
-# --- 【關鍵新增】處理 TEJ 上傳 ---
-def process_tej_upload(uploaded_file):
-    if uploaded_file is None: return None
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
-            
-        # 簡單標準化欄位名稱 (假設用戶欄位包含 '代號' 或 'Code')
-        df.columns = [str(c).strip() for c in df.columns]
-        
-        # 尋找代號欄位
-        code_col = next((c for c in df.columns if '代號' in c or 'Code' in c or '股票' in c), None)
-        if not code_col:
-            st.error("❌ TEJ 檔案中找不到『代號』或『Code』欄位，無法對應。")
-            return None
-            
-        # 建立映射字典 {code: {col: val}}
-        tej_map = {}
-        for _, row in df.iterrows():
-            # 處理代號 (去除空白, 轉字串)
-            raw_code = str(row[code_col]).split('.')[0].strip() 
-            tej_map[raw_code] = row.to_dict()
-            
-        st.success(f"✅ 成功讀取 TEJ 數據：{len(tej_map)} 檔股票")
-        return tej_map
-    except Exception as e:
-        st.error(f"❌ 檔案讀取失敗: {str(e)}")
-        return None
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_hybrid_data(tickers_list, tej_data=None):
@@ -470,7 +464,6 @@ def fetch_hybrid_data(tickers_list, tej_data=None):
             vol_ratio = 1.0
             volatility = 0.05
             
-            # 技術面數據 (Yahoo Batch)
             try:
                 df = data if len(symbols) == 1 else (data[symbol] if symbol in data else pd.DataFrame())
                 if not df.empty and 'Close' in df.columns:
@@ -501,26 +494,20 @@ def fetch_hybrid_data(tickers_list, tej_data=None):
                 except: pass
             
             if not pd.isna(price):
-                # 預設使用官方數據
                 f_data = fund_map.get(code, {'pe': 0, 'pb': 0, 'yield': 0})
                 pe = f_data['pe']
                 pb = f_data['pb']
                 dy = f_data['yield']
                 is_tej = False
                 
-                # 【核心邏輯】TEJ 數據覆蓋 (Override)
+                # TEJ 覆蓋
                 if tej_data and code in tej_data:
                     t_row = tej_data[code]
-                    # 智慧映射 (這裡列舉常見 TEJ 欄位名，可根據檔案調整)
-                    # 嘗試找本益比
                     for k in t_row:
-                        if '本益比' in k or 'PE' in k: pe = t_row[k]; is_tej = True
-                        if '淨值比' in k or 'PB' in k: pb = t_row[k]; is_tej = True
-                        if '殖利率' in k or 'Yield' in k: dy = t_row[k]; is_tej = True
-                        # 若 TEJ 有 ROE，直接用，不用合成
-                        # if 'ROE' in k: ... (這裡暫時保持合成邏輯一致性，或可擴充)
+                        if '本益比' in k or 'PE' in k: pe = float(t_row[k]) if t_row[k] != '-' else 0; is_tej = True
+                        if '淨值比' in k or 'PB' in k: pb = float(t_row[k]) if t_row[k] != '-' else 0; is_tej = True
+                        if '殖利率' in k or 'Yield' in k: dy = float(t_row[k]) if t_row[k] != '-' else 0; is_tej = True
 
-                # 計算合成 ROE
                 roe_syn = 0
                 if pe > 0 and pb > 0: roe_syn = (pb / pe) * 100
                 elif pe == 0: roe_syn = -5.0
@@ -540,7 +527,8 @@ def fetch_hybrid_data(tickers_list, tej_data=None):
                     'yield': dy,
                     'roe_syn': roe_syn,
                     'beta': 1.0,
-                    'is_tej': is_tej
+                    'is_tej': is_tej,
+                    'pegRatio': np.nan, 'debtToEquity': np.nan, 'fcfYield': np.nan
                 })
                 
     except Exception as e: pass
@@ -604,15 +592,17 @@ def render_factor_bars(radar_data):
 # --- 12. 主儀表板與流程 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
-    st.markdown("---")
     
-    # TEJ 上傳區
-    uploaded_file = st.file_uploader("📂 上傳 TEJ 資料 (CSV/Excel)", type=['csv', 'xlsx'])
-    if uploaded_file is not None:
-        tej_data = process_tej_upload(uploaded_file)
-        if tej_data:
-            st.session_state['tej_data'] = tej_data
-            
+    # 1. 數據源設定 (強制置頂)
+    st.markdown("### 1️⃣ 數據源設定")
+    with st.expander("📂 匯入 TEJ 專業數據 (選填)", expanded=True):
+        st.caption("上傳 Excel/CSV，系統將優先使用其中的財報數據。")
+        uploaded_file = st.file_uploader("上傳檔案", type=['csv', 'xlsx'])
+        if uploaded_file is not None:
+            tej_data = process_tej_upload(uploaded_file)
+            if tej_data:
+                st.session_state['tej_data'] = tej_data
+                
     if st.button("🔴 清除快取並重置", use_container_width=True):
         st.cache_data.clear()
         if 'raw_data' in st.session_state: del st.session_state['raw_data']
@@ -620,16 +610,20 @@ with st.sidebar:
         st.rerun()
         
     st.markdown("---")
+    
+    # 2. 選股策略
+    st.markdown("### 2️⃣ 選股策略")
     scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
     target_stocks = []
     
-    st.caption("🔍 若找不到股票，請直接輸入代號 (如 1802):")
-    manual_input = st.text_input("手動輸入代號:", placeholder="例如: 1802 或 2330", label_visibility="collapsed")
-    
     if scan_mode == "自行輸入/多選":
+        st.caption("🔍 若找不到股票，請直接輸入代號 (如 1802):")
+        manual_input = st.text_input("手動輸入代號:", placeholder="例如: 1802 或 2330", label_visibility="collapsed")
         default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
         selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
         target_stocks = selected
+        if manual_input: target_stocks.append(manual_input)
+        
     elif scan_mode == "🔥 熱門策略掃描":
         strategy = st.selectbox("策略集:", ["台灣50成份股 (大型權值)", "中型100成份股 (成長潛力)", "高股息熱門股 (存股族)", "AI 供應鏈概念", "貨櫃航運三雄"])
         if strategy == "台灣50成份股 (大型權值)":
@@ -656,9 +650,6 @@ with st.sidebar:
         if selected_industry:
             codes = industry_map[selected_industry]
             target_stocks = [stock_map[c] for c in codes if c in stock_map]
-    
-    if manual_input:
-        target_stocks.append(manual_input)
             
     st.info(f"已鎖定 {len(target_stocks)} 檔標的")
     st.markdown("---")
@@ -681,7 +672,6 @@ if run_btn:
         st.session_state['df_norm'] = None
         
         with st.spinner("🚀 正在啟動混合掃描 (Yahoo + TWSE + TEJ)..."):
-            # 傳入 TEJ 數據
             raw = fetch_hybrid_data(target_stocks, st.session_state.get('tej_data'))
             
         if not raw.empty:
