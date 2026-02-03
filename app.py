@@ -31,37 +31,33 @@ except Exception:
     st.stop()
 
 # --- 2. 環境設定 (Proxy 與 SSL) ---
-# 這是讓 main_app.py 成功的關鍵設定
 proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
 
 # --- 3. 核心功能：自動偵測可用模型 ---
-# 避免因為猜錯模型名稱導致 404
 def get_available_model(key):
+    # 預設使用 flash，因為它最快且最不容易卡住
+    default_model = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
-        # 使用 verify=False 繞過可能的 SSL 憑證問題
-        response = requests.get(url, proxies=proxies, timeout=10, verify=False)
+        response = requests.get(url, proxies=proxies, timeout=5, verify=False)
         if response.status_code == 200:
             data = response.json()
+            # 優先找 Flash
             for m in data.get('models', []):
-                # 優先尋找支援內容生成的 Flash 或 Pro 模型
-                if 'generateContent' in m.get('supportedGenerationMethods', []):
-                    m_name = m['name'].replace('models/', '')
-                    if 'flash' in m_name: return m_name
-            # 如果沒找到 Flash，找 Pro
+                if 'generateContent' in m.get('supportedGenerationMethods', []) and 'flash' in m['name']:
+                    return m['name'].replace('models/', '')
+            # 次要找 Pro
             for m in data.get('models', []):
                 if 'generateContent' in m.get('supportedGenerationMethods', []) and 'pro' in m['name']:
                     return m['name'].replace('models/', '')
     except:
         pass
-    # 預設備案
-    return "gemini-1.5-flash"
+    return default_model
 
 # --- 4. 呼叫 Gemini API (REST 方式) ---
 def call_gemini_api(prompt):
-    # 自動選擇當前鑰匙可用的模型
     target_model = get_available_model(api_key)
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
@@ -72,7 +68,7 @@ def call_gemini_api(prompt):
     }
     
     try:
-        # 關鍵：加入 verify=False 以符合您的環境需求
+        # 設定 60 秒超時，避免無限轉圈
         response = requests.post(url, headers=headers, json=data, proxies=proxies, timeout=60, verify=False)
         
         if response.status_code == 200:
@@ -82,10 +78,10 @@ def call_gemini_api(prompt):
                 err_msg = response.json().get('error', {}).get('message', response.text)
             except:
                 err_msg = response.text
-            return f"❌ 分析失敗 (模型: {target_model})\n代碼: {response.status_code}\n訊息: {err_msg}"
+            return f"❌ 分析失敗 (Code {response.status_code}): {err_msg}"
             
     except Exception as e:
-        return f"❌ 連線錯誤: {str(e)}"
+        return f"❌ 連線逾時或錯誤: {str(e)}"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
@@ -288,23 +284,29 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             stock_name = f"{row['代號']} {row['名稱']}"
             final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
             
-            def analyze_callback(s_name=stock_name, prompt=final_prompt):
-                result = call_gemini_api(prompt)
-                st.session_state['analysis_results'][s_name] = result
+            is_analyzed = (stock_name in st.session_state['analysis_results'])
             
-            is_expanded = (i==0) or (stock_name in st.session_state['analysis_results'])
-            
-            with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=is_expanded):
+            with st.expander(f"🏆 第 {i+1} 名：{stock_name} (分數: {row['Score']})", expanded=(i==0 or is_analyzed)):
                 col1, col2 = st.columns([4, 1])
+                
                 with col1:
-                    if stock_name in st.session_state['analysis_results']:
+                    if is_analyzed:
                         st.success("✅ 分析報告已生成")
                     else:
                         st.caption("AI 分析核心指令已準備就緒...")
+                        
                 with col2:
-                    st.button(f"✨ AI 分析", key=f"btn_{i}", on_click=analyze_callback, use_container_width=True)
+                    # 【核心修改】改用直接的 if 判斷，避免 callback 卡住
+                    if st.button(f"✨ AI 分析", key=f"btn_{i}", use_container_width=True):
+                        if not is_analyzed:
+                            with st.spinner(f"🤖 AI 正在深入分析 {stock_name} 的財報與籌碼，請稍候約 15 秒..."):
+                                result = call_gemini_api(final_prompt)
+                                st.session_state['analysis_results'][stock_name] = result
+                                st.toast(f"✅ {stock_name} 分析完成！")
+                                time.sleep(0.5)
+                                st.rerun() # 強制刷新畫面，顯示結果
 
-                if stock_name in st.session_state['analysis_results']:
+                if is_analyzed:
                     st.markdown("### 📝 AI 分析報告")
                     st.markdown(st.session_state['analysis_results'][stock_name])
 
