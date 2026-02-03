@@ -19,48 +19,87 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 客製化：打造華爾街終端機風格 ---
+# --- 2. CSS 強制修正：高對比深色主題 ---
 st.markdown("""
 <style>
-    /* 全局深色背景微調 */
+    /* 全局文字顏色修正 */
+    body, .stApp, p, h1, h2, h3, h4, h5, h6, span, div {
+        color: #e6e6e6 !important;
+        font-family: 'Roboto', 'Helvetica Neue', sans-serif;
+    }
+    
+    /* 背景色設定 */
     .stApp {
         background-color: #0e1117;
     }
+    
     /* 側邊欄優化 */
     [data-testid="stSidebar"] {
         background-color: #161b22;
         border-right: 1px solid #30363d;
     }
-    /* 指標卡片樣式 */
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+        color: #58a6ff !important;
+    }
+    
+    /* 指標卡片 (Metric) */
     div[data-testid="stMetric"] {
         background-color: #21262d;
         padding: 15px;
         border-radius: 8px;
         border: 1px solid #30363d;
     }
-    /* 表格優化 */
-    [data-testid="stDataFrame"] {
+    div[data-testid="stMetricLabel"] {
+        color: #8b949e !important;
+    }
+    div[data-testid="stMetricValue"] {
+        color: #2ea043 !important; /* 漲跌色 */
+    }
+    
+    /* 表格 (DataFrame) 文字修正 */
+    div[data-testid="stDataFrame"] {
+        background-color: #161b22;
         border: 1px solid #30363d;
         border-radius: 5px;
     }
-    /* 按鈕優化 */
+    
+    /* 按鈕樣式 */
     div.stButton > button {
         background-color: #238636;
-        color: white;
-        border: none;
+        color: white !important;
+        border: 1px solid #rgba(255,255,255,0.1);
         font-weight: bold;
     }
     div.stButton > button:hover {
         background-color: #2ea043;
+        border-color: #f0f6fc;
     }
-    /* AI 分析區塊標題 */
+    
+    /* Expander (摺疊區塊) */
+    .streamlit-expanderHeader {
+        background-color: #21262d;
+        color: #e6e6e6 !important;
+        border-radius: 5px;
+    }
+    
+    /* AI 分析標題 */
     .ai-header {
-        color: #58a6ff;
+        color: #58a6ff !important;
         font-weight: bold;
-        font-size: 1.2rem;
-        margin-bottom: 10px;
+        font-size: 1.3rem;
+        margin-bottom: 12px;
         border-bottom: 1px solid #30363d;
-        padding-bottom: 5px;
+        padding-bottom: 8px;
+    }
+    
+    /* 分數解釋區塊 */
+    .score-legend {
+        background-color: #1f2937;
+        padding: 10px;
+        border-radius: 5px;
+        font-size: 0.9rem;
+        border-left: 4px solid #a371f7;
+        margin-bottom: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -73,19 +112,19 @@ if 'raw_data' not in st.session_state:
 if 'scan_finished' not in st.session_state:
     st.session_state['scan_finished'] = False
 
-# --- 4. 安全讀取 API Key (維持原架構) ---
+# --- 4. 安全讀取 API Key ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
     st.error("⚠️ 系統偵測不到 API Key！請確認您已在 Streamlit Cloud > Settings > Secrets 中設定 `GEMINI_API_KEY`。")
     st.stop()
 
-# --- 5. 環境設定 (Proxy 與 SSL) ---
+# --- 5. 環境與連線設定 ---
 proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
 
-# --- 6. 核心功能：自動偵測可用模型 (維持原邏輯) ---
+# --- 6. 模型偵測與呼叫 (邏輯不變) ---
 def get_available_model(key):
     default_model = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
@@ -103,7 +142,6 @@ def get_available_model(key):
         pass
     return default_model
 
-# --- 7. 呼叫 Gemini API (維持原邏輯) ---
 def call_gemini_api(prompt):
     target_model = get_available_model(api_key)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
@@ -125,7 +163,7 @@ def call_gemini_api(prompt):
     except Exception as e:
         return f"❌ 連線逾時或錯誤: {str(e)}"
 
-# --- 8. 定義分析提示詞 (維持原邏輯) ---
+# --- 7. 分析提示詞 (不變) ---
 HEDGE_FUND_PROMPT = """
 【角色設定】
 你現在是華爾街頂尖的避險基金經理人，同時具備會計學教授的嚴謹度。請針對 **[STOCK]** 進行深度投資分析。
@@ -141,7 +179,7 @@ HEDGE_FUND_PROMPT = """
 6. 總結與實戰建議: 給出空手者「安全買點」與持股者「停利停損點」。風險提示。
 """
 
-# --- 9. 數據與清單處理 ---
+# --- 8. 數據與清單處理 ---
 @st.cache_data
 def get_tw_stock_info():
     codes = twstock.codes
@@ -163,7 +201,7 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
-# --- 10. 側邊欄：控制面板 ---
+# --- 9. 側邊欄設定 ---
 with st.sidebar:
     st.title("🎛️ QuantAlpha 控制台")
     st.markdown("---")
@@ -213,7 +251,7 @@ with st.sidebar:
     st.subheader("2️⃣ 執行掃描")
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
-# --- 11. 指標與函數 ---
+# --- 10. 指標與函數 ---
 indicators_config = {
     'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG (成長估值)'},
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE (權益報酬)'},
@@ -290,9 +328,9 @@ def calculate_entropy_score(df, config):
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None
 
-# --- Main Dashboard Logic ---
+# --- 11. 儀表板顯示邏輯 ---
 
-# Header Section
+# 頂部標題與解釋
 col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📈 QuantAlpha 智慧選股終端")
@@ -301,7 +339,7 @@ with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
          st.metric("Total Scanned", f"{len(st.session_state['raw_data'])} Stocks", delta="Live Update")
 
-# Execution Block
+# 執行掃描邏輯
 if run_btn:
     if not target_stocks:
         st.warning("⚠️ Please select at least one stock or strategy from the sidebar.")
@@ -314,7 +352,7 @@ if run_btn:
             st.session_state['scan_finished'] = True
             st.rerun()
 
-# Dashboard Display
+# 結果顯示區
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     raw = st.session_state['raw_data']
     res, w, err = calculate_entropy_score(raw, indicators_config)
@@ -325,21 +363,39 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         top_n = 10
         top_stocks = res.head(top_n)
 
+        # --- 新增：模型原理與分數解釋 ---
+        with st.expander("ℹ️ 關於熵值模型分數 (Entropy Score) 的定義", expanded=True):
+            st.markdown("""
+            <div class='score-legend'>
+                <h4>🧮 什麼是熵值評分 (Entropy Score)?</h4>
+                <p>這不是主觀評分，而是透過<b>「資訊熵 (Information Entropy)」</b>演算法計算出來的客觀權重。</p>
+                <ul>
+                    <li><b>原理</b>：演算法會自動判斷哪些指標（如 ROE、PEG）在目前這群股票中差異最大。差異越大的指標，代表提供的資訊量越多，獲得的權重就越高。</li>
+                    <li><b>50 分代表什麼？</b>：50 分代表該股票在所有指標的綜合表現上，處於<b>「平均水準」</b>。</li>
+                </ul>
+                <hr style='border-color: #30363d;'>
+                <b>📊 分數解讀指南：</b>
+                <ul>
+                    <li><span style='color:#2ea043; font-weight:bold;'>🟢 > 60 分 (優異)</span>：該股票在關鍵指標上顯著優於同業，屬於強勢潛力股。</li>
+                    <li><span style='color:#e3b341; font-weight:bold;'>🟡 40 - 60 分 (中性)</span>：各項數據表現平均，無明顯短版但亮點不足。</li>
+                    <li><span style='color:#f85149; font-weight:bold;'>🔴 < 40 分 (落後)</span>：財務或技術指標低於群體平均，需留意風險。</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+
         # --- Section 1: Market Overview & Entropy Analysis ---
         st.markdown("### 📊 市場熵值模型分析 (Entropy Market Model)")
         
-        # Split layout: Table (Left) and Chart (Right)
         c1, c2 = st.columns([1.8, 1.2])
         
         with c1:
             st.markdown("**Top Ranked Assets (Entropy Score)**")
-            # Use Column Config for a professional look
             st.dataframe(
                 top_stocks[['代號', '名稱', 'Score', 'pegRatio', 'returnOnEquity', 'profitMargins']],
                 column_config={
                     "Score": st.column_config.ProgressColumn(
                         "Entropy Score",
-                        help="綜合評分 (0-100)",
+                        help="綜合評分 (0-100)，越高越好",
                         format="%.1f",
                         min_value=0,
                         max_value=100,
@@ -354,18 +410,19 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             )
 
         with c2:
-            st.markdown("**Factor Weight Distribution**")
-            # Plotly Chart for Weights
+            st.markdown("**Factor Weight Distribution (演算法自動賦權)**")
             w_df = pd.DataFrame(list(w.items()), columns=['Factor', 'Weight'])
+            # 使用 plotly_dark 主題解決黑底看不見圖的問題
             fig = px.bar(w_df, x='Weight', y='Factor', orientation='h', 
-                         title="Entropy Calculated Weights (客觀權重)",
-                         text_auto='.1%', color='Weight', color_continuous_scale='Viridis')
+                         title="Entropy Calculated Weights",
+                         text_auto='.1%', color='Weight', template='plotly_dark')
+            
             fig.update_layout(
                 plot_bgcolor='rgba(0,0,0,0)', 
                 paper_bgcolor='rgba(0,0,0,0)',
-                font_color='#b6c0bf',
-                margin=dict(l=0, r=0, t=30, b=0),
-                xaxis=dict(showgrid=False),
+                font_color='#e6e6e6',
+                margin=dict(l=0, r=0, t=40, b=0),
+                xaxis=dict(showgrid=True, gridcolor='#30363d'),
                 yaxis=dict(showgrid=False)
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -374,39 +431,39 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         st.markdown("---")
         st.markdown("### 🤖 Gemini AI 戰略分析中心 (Strategic Intelligence)")
         
-        # Create a professional card layout for each stock
         for i, (index, row) in enumerate(top_stocks.iterrows()):
             stock_name = f"{row['代號']} {row['名稱']}"
             final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
             is_analyzed = (stock_name in st.session_state['analysis_results'])
             
-            # Custom Container for AI Card
-            with st.container(border=True):
-                head_c1, head_c2, head_c3 = st.columns([3, 1, 1])
-                with head_c1:
-                    st.markdown(f"#### {stock_name}")
-                    st.caption(f"Entropy Score: {row['Score']} | ROE: {row['returnOnEquity']:.1%}")
-                with head_c2:
-                     if is_analyzed:
-                         st.success("Analysis Ready")
-                with head_c3:
-                    # Action Button
-                    if st.button(f"Generate Insights", key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
+            # 使用 container 模擬卡片效果
+            with st.container():
+                st.markdown(f"""
+                <div style="background-color: #161b22; padding: 15px; border-radius: 8px; border: 1px solid #30363d; margin-bottom: 10px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <h3 style="margin: 0; color: #58a6ff;">{stock_name}</h3>
+                            <span style="color: #8b949e; font-size: 0.9em;">Entropy Score: <b>{row['Score']}</b> | ROE: <b>{row['returnOnEquity']:.1%}</b></span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col_btn, col_status = st.columns([1, 4])
+                with col_btn:
+                     if st.button(f"✨ 生成分析報告", key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
                          if not is_analyzed:
-                            with st.spinner(f"⚡ Establishing secure link to Gemini AI for {stock_name}..."):
+                            with st.spinner(f"⚡ 正在連線 Gemini AI 深度分析 {stock_name}..."):
                                 result = call_gemini_api(final_prompt)
                                 st.session_state['analysis_results'][stock_name] = result
                                 st.rerun()
-
-                # Display Results
+                
                 if is_analyzed:
                     st.markdown("<div class='ai-header'>🏛️ Hedge Fund Manager Insight</div>", unsafe_allow_html=True)
                     st.markdown(st.session_state['analysis_results'][stock_name])
-                    
-                    # Add a disclaimer footer
                     st.markdown("---")
                     st.caption(f"Generated by Google Gemini 1.5 • Confidence Level: High • Data as of {time.strftime('%Y-%m-%d')}")
+                    st.markdown("<br>", unsafe_allow_html=True)
 
 elif not st.session_state['scan_finished']:
-    # Empty State / Landing Page
     st.info("👈 請在左側選擇掃描策略，點擊 **「啟動全自動掃描」** 開始量化分析。")
