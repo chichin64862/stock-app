@@ -67,6 +67,7 @@ if 'analysis_results' not in st.session_state: st.session_state['analysis_result
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
 if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
+# 新增：儲存官方全市場數據，避免重複下載
 if 'market_fundamentals' not in st.session_state: st.session_state['market_fundamentals'] = {}
 
 # --- 4. API Key ---
@@ -221,19 +222,18 @@ def create_pdf(stock_data_list):
         story.append(Spacer(1, 10))
 
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
-        peg = stock.get('peg', 'N/A')
-        if pd.isna(peg) or str(peg) == 'nan': peg = 'N/A'
         
-        # 顯示欄位修正：因使用官方數據，PE與殖利率更準確
-        pe_display = stock.get('pe', 'N/A')
-        yield_display = stock.get('fcf_yield', 'N/A') # 用殖利率替代 FCF 顯示
+        # 使用新指標顯示
+        pe_val = stock.get('pe', 'N/A')
+        pb_val = stock.get('pb', 'N/A')
+        yield_val = stock.get('yield', 'N/A')
         
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
-            [f"本益比 (P/E)", f"{pe_display}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
-            [f"股價淨值比 (P/B)", f"{stock.get('pb', 'N/A')}", f"殖利率 (Yield)", f"{yield_display}"],
-            [f"合成 ROE", f"{stock.get('roe_syn', 'N/A')}", f"Beta", f"{stock.get('beta', 'N/A')}"],
+            [f"本益比 (P/E)", f"{pe_val}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
+            [f"股價淨值比 (P/B)", f"{pb_val}", f"殖利率 (Yield)", f"{yield_val}%"],
+            [f"合成 ROE", f"{stock.get('roe_syn', 'N/A')}%", f"Beta", f"{stock.get('beta', 'N/A')}"],
         ]
         t = Table(t_data, colWidths=[100, 130, 100, 130])
         t.setStyle(TableStyle([
@@ -317,12 +317,12 @@ HEDGE_FUND_PROMPT = """
 請直接根據量化數據與產業現況進行分析，無需扮演任何角色或提及任何機構名稱。報告內容應包含：
 
 1. **財務健康度評估**：
-   - 結合「本益比」與「股價淨值比」判斷估值位階。
-   - 透過「殖利率」評估現金回饋能力。
+   - 結合「本益比 (P/E)」與「股價淨值比 (P/B)」判斷目前估值是否合理。
+   - 透過「殖利率 (Dividend Yield)」評估公司的現金回饋吸引力。
 
 2. **營收與成長動能**：
-   - 根據「合成 ROE (P/B 除以 P/E)」推算資本回報效率。
-   - 指出目前是處於「價值低估」、「合理評價」還是「成長溢價」階段。
+   - 根據「合成 ROE (P/B 除以 P/E)」推算資本運用效率。
+   - 分析目前是否處於「價值低估」或「成長溢價」階段。
 
 3. **操作建議與風險提示**：
    - **投資評等**：請給出 [強力買進 / 區間操作 / 減持觀望] 建議。
@@ -354,17 +354,17 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
-# 調整指標配置：使用官方數據欄位
+# --- 【核心修改】指標配置更換為官方數據欄位 ---
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
-    'P/E Ratio': {'col': 'pe', 'direction': '負向', 'name': '本益比', 'category': '估值'}, # 取代 PEG
-    'P/B Ratio': {'col': 'pb', 'direction': '負向', 'name': '股價淨值比', 'category': '估值'},
-    'Synthetic ROE': {'col': 'roe_syn', 'direction': '正向', 'name': '合成ROE', 'category': '財報'}, # 取代 ROE
-    'Dividend Yield': {'col': 'yield', 'direction': '正向', 'name': '殖利率', 'category': '財報'}, # 取代 FCF
+    'P/E Ratio': {'col': 'pe', 'direction': '負向', 'name': '本益比', 'category': '估值'},
+    'P/B Ratio': {'col': 'pb', 'direction': '負向', 'name': '淨值比', 'category': '估值'},
+    'Dividend Yield': {'col': 'yield', 'direction': '正向', 'name': '殖利率', 'category': '財報'},
+    'Synthetic ROE': {'col': 'roe_syn', 'direction': '正向', 'name': '合成ROE', 'category': '財報'},
 }
 
-# --- 【核心】TWSE/TPEX 官方開放數據連接器 ---
+# --- 【關鍵】TWSE/TPEX 官方開放數據連接器 ---
 @st.cache_data(ttl=3600)
 def fetch_market_fundamentals():
     """下載全市場個股本益比、殖利率、股價淨值比 (官方 Open Data)"""
@@ -418,7 +418,7 @@ def get_radar_data(df_norm_row, config):
 def fetch_hybrid_data(tickers_list):
     results = []
     
-    # 1. 獲取官方基本面數據 (Map)
+    # 1. 獲取官方基本面數據 (Map) - 這一步很快且不會被鎖
     fund_map = fetch_market_fundamentals()
     
     # 2. 批量獲取 Yahoo 股價 (只抓價格與量，這是 Yahoo 最不容易擋的部分)
@@ -444,8 +444,9 @@ def fetch_hybrid_data(tickers_list):
                 df = data if len(symbols) == 1 else (data[symbol] if symbol in data else pd.DataFrame())
                 if not df.empty and 'Close' in df.columns:
                     latest = df.iloc[-1]
-                    price = float(latest['Close'])
-                    if not pd.isna(price):
+                    price_val = latest['Close']
+                    if not pd.isna(price_val):
+                        price = float(price_val)
                         # 技術指標
                         ma60 = df['Close'].rolling(window=60).mean().iloc[-1]
                         if not pd.isna(ma60) and ma60 > 0:
@@ -463,7 +464,11 @@ def fetch_hybrid_data(tickers_list):
                     realtime = twstock.realtime.get(code)
                     if realtime['success']:
                         p_str = realtime['realtime'].get('latest_trade_price', '-')
-                        if p_str and p_str != '-': price = float(p_str)
+                        if p_str == '-' or p_str is None:
+                             p_str = realtime['realtime'].get('best_bid_price', [None])[0]
+                        if p_str and p_str != '-': 
+                            price = float(p_str)
+                            name = realtime['info']['name'] # 確保名稱正確
                 except: pass
             
             # 若有價格，進行數據合併
@@ -471,8 +476,7 @@ def fetch_hybrid_data(tickers_list):
                 # 從官方 Map 獲取真實財報數據
                 f_data = fund_map.get(code, {'pe': 0, 'pb': 0, 'yield': 0})
                 
-                # 計算合成 ROE: ROE = P/B / P/E
-                # 數學上: E/B = (P/B) / (P/E)
+                # 計算合成 ROE
                 roe_syn = 0
                 if f_data['pe'] > 0 and f_data['pb'] > 0:
                     roe_syn = (f_data['pb'] / f_data['pe']) * 100
@@ -488,10 +492,9 @@ def fetch_hybrid_data(tickers_list):
                     'pb': f_data['pb'],
                     'yield': f_data['yield'],
                     'roe_syn': roe_syn,
-                    'pegRatio': np.nan, # 已被 PE 取代
-                    'debtToEquity': np.nan, # 無法獲取，暫不計分
-                    'fcfYield': np.nan, # 已被 Yield 取代
-                    'beta': 1.0
+                    'beta': 1.0,
+                    # 舊欄位補 NaN 以防報錯
+                    'pegRatio': np.nan, 'debtToEquity': np.nan, 'fcfYield': np.nan
                 })
                 
     except Exception as e: pass
@@ -503,14 +506,12 @@ def calculate_entropy_score(df, config):
     df_norm = df.copy()
     for key, cfg in config.items():
         col = cfg['col']
-        # 容錯：若欄位不存在補 0
         if col not in df.columns: df[col] = 0
         
-        # 填補 0 值 (避免官方數據缺漏)
-        # 對於 PE，0 通常代表虧損，設為極大值(懲罰)
-        if col == 'pe':
-            df[col] = df[col].replace(0, 1000) 
-            
+        # 數據清洗：0 值處理
+        if col == 'pe': df[col] = df[col].replace(0, 500) # 本益比0視為無限大
+        if col == 'pb': df[col] = df[col].replace(0, 10)  # 淨值比0視為高估
+        
         if cfg['direction'] == '正向': fill_val = df[col].min()
         else: fill_val = df[col].max()
         
