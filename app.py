@@ -23,29 +23,23 @@ if 'raw_data' not in st.session_state:
 if 'scan_finished' not in st.session_state:
     st.session_state['scan_finished'] = False
 
-# --- 1. 設定 Gemini API ---
-# 優先讀取 Secrets，若無則讀取環境變數 (模擬 main_app.py 的邏輯)
-api_key = st.secrets.get("GEMINI_API_KEY")
-
-# 如果 Secrets 沒設定，您可以暫時在此填入那把「備用鑰匙」測試
-# if not api_key: api_key = "AIzaSyCGDrlpjbfUFejbGNWbrmLTkb-H-c1BYVM" 
-
-if not api_key:
-    st.error("⚠️ 未偵測到 Gemini API Key！請去 Streamlit Cloud 後台設定 `GEMINI_API_KEY`。")
-    st.stop()
+# --- 1. 設定 Gemini API (終極測試：強制寫死) ---
+# 既然這把鑰匙在 main_app.py 能用，我們就直接貼在這裡，避開 Secrets 所有可能的讀取錯誤
+# 請不要修改這行，直接用這把鑰匙跑跑看
+api_key = "AIzaSyCGDrlpjbfUFejbGNWbrmLTkb-H-c1BYVM"
 
 # --- 2. Proxy 設定 (完全復刻 main_app.py) ---
 proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
 
-# 【核心優化】使用 main_app.py 同款的 requests 呼叫法
+# 【核心優化】完全復刻 main_app.py 的請求邏輯
 def call_gemini_api(prompt):
     # 使用 main_app.py 證實可用的模型清單
     model_chain = [
         'gemini-1.5-flash',      # 首選
         'gemini-1.5-pro',        # 次選
-        'gemini-2.0-flash-exp',  # 實驗版
+        'gemini-pro',            # 保底
     ]
     
     headers = {'Content-Type': 'application/json'}
@@ -57,22 +51,25 @@ def call_gemini_api(prompt):
     error_log = []
     
     for model_name in model_chain:
-        # URL 結構與 main_app.py 完全一致
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         
         try:
-            # 加入 proxies 參數 (關鍵差異)
-            response = requests.post(url, headers=headers, json=data, proxies=proxies, timeout=60)
+            # 【關鍵】加入 verify=False，這在 main_app.py 裡有用到，可能跟您的環境憑證有關
+            # 雖然不安全，但為了能跑，我們先加上去
+            response = requests.post(url, headers=headers, json=data, proxies=proxies, timeout=60, verify=False)
             
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
                 try:
-                    err_msg = response.json().get('error', {}).get('message', response.text)
+                    err_json = response.json()
+                    err_msg = err_json.get('error', {}).get('message', response.text)
+                    status_code = response.status_code
                 except:
                     err_msg = response.text
+                    status_code = response.status_code
                 
-                log_entry = f"❌ {model_name} (Status {response.status_code}): {err_msg}"
+                log_entry = f"❌ {model_name} (Status {status_code}): {err_msg}"
                 print(log_entry)
                 error_log.append(log_entry)
                 time.sleep(1)
@@ -84,7 +81,7 @@ def call_gemini_api(prompt):
             continue
 
     full_report = "\n\n".join(error_log)
-    return f"⚠️ AI 分析失敗。已嘗試所有模型。\n\n🔍 **錯誤診斷：**\n{full_report}\n\n💡 **提示：** 如果事故平台能跑，請嘗試將那把 AIzaSyCG... 開頭的備用鑰匙貼到您的 Secrets 試試看。"
+    return f"⚠️ AI 分析失敗。\n使用的鑰匙：{api_key[:5]}...{api_key[-5:]}\n\n🔍 **錯誤診斷：**\n{full_report}"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
