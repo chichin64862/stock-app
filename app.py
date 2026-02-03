@@ -27,80 +27,18 @@ st.markdown("""
         color: #e6e6e6 !important;
         font-family: 'Roboto', 'Helvetica Neue', sans-serif;
     }
-    
-    /* 背景色設定 */
-    .stApp {
-        background-color: #0e1117;
-    }
-    
-    /* 側邊欄優化 */
-    [data-testid="stSidebar"] {
-        background-color: #161b22;
-        border-right: 1px solid #30363d;
-    }
-    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
-        color: #58a6ff !important;
-    }
-    
-    /* 指標卡片 (Metric) */
-    div[data-testid="stMetric"] {
-        background-color: #21262d;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #30363d;
-    }
-    div[data-testid="stMetricLabel"] {
-        color: #8b949e !important;
-    }
-    div[data-testid="stMetricValue"] {
-        color: #2ea043 !important;
-    }
-    
-    /* 表格 (DataFrame) 文字修正 */
-    div[data-testid="stDataFrame"] {
-        background-color: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 5px;
-    }
-    
-    /* 按鈕樣式 */
-    div.stButton > button {
-        background-color: #238636;
-        color: white !important;
-        border: 1px solid #rgba(255,255,255,0.1);
-        font-weight: bold;
-    }
-    div.stButton > button:hover {
-        background-color: #2ea043;
-        border-color: #f0f6fc;
-    }
-    
-    /* Expander (摺疊區塊) */
-    .streamlit-expanderHeader {
-        background-color: #21262d;
-        color: #e6e6e6 !important;
-        border-radius: 5px;
-    }
-    
-    /* AI 分析標題 */
-    .ai-header {
-        color: #58a6ff !important;
-        font-weight: bold;
-        font-size: 1.3rem;
-        margin-bottom: 12px;
-        border-bottom: 1px solid #30363d;
-        padding-bottom: 8px;
-    }
-    
-    /* 分數解釋區塊 */
-    .score-legend {
-        background-color: #1f2937;
-        padding: 10px;
-        border-radius: 5px;
-        font-size: 0.9rem;
-        border-left: 4px solid #a371f7;
-        margin-bottom: 20px;
-    }
+    .stApp { background-color: #0e1117; }
+    [data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 { color: #58a6ff !important; }
+    div[data-testid="stMetric"] { background-color: #21262d; padding: 15px; border-radius: 8px; border: 1px solid #30363d; }
+    div[data-testid="stMetricLabel"] { color: #8b949e !important; }
+    div[data-testid="stMetricValue"] { color: #2ea043 !important; }
+    div[data-testid="stDataFrame"] { background-color: #161b22; border: 1px solid #30363d; border-radius: 5px; }
+    div.stButton > button { background-color: #238636; color: white !important; border: 1px solid #rgba(255,255,255,0.1); font-weight: bold; }
+    div.stButton > button:hover { background-color: #2ea043; border-color: #f0f6fc; }
+    .streamlit-expanderHeader { background-color: #21262d; color: #e6e6e6 !important; border-radius: 5px; }
+    .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+    .score-legend { background-color: #1f2937; padding: 10px; border-radius: 5px; font-size: 0.9rem; border-left: 4px solid #a371f7; margin-bottom: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -163,22 +101,28 @@ def call_gemini_api(prompt):
     except Exception as e:
         return f"❌ 連線逾時或錯誤: {str(e)}"
 
-# --- 7. 分析提示詞 (優化後) ---
+# --- 7. 分析提示詞 (加入合約負債指令) ---
 HEDGE_FUND_PROMPT = """
 【角色設定】
-你現在是華爾街頂尖的避險基金經理人，專精於「價值投資」與「風險套利」。請針對 **[STOCK]** 進行深度投資分析。
+你現在是華爾街頂尖的避險基金經理人，專精於「價值投資」與「成長潛力挖掘」。
+請針對 **[STOCK]** 進行深度投資分析。
+
+【⚠️ 重要指令】
+請務必依據下方提供的 **[最新市場即時數據]** 進行分析，**嚴禁使用你訓練庫裡的過時數據**。
+
+【最新市場即時數據】
+[DATA_CONTEXT]
 
 【分析維度】
-1. 價值與護城河 (Value & Moat): 目前估值(PEG/PB)是否低估？產業地位是否穩固？
-2. 風險與籌碼 (Risk & Chip): Beta值解讀（波動風險）、成交量能變化（是否有人氣匯聚）。
-3. 技術面檢視 (Technical): 季線乖離狀況（是否過熱或超跌）、MACD趨勢。
-4. 財務體質 (Fundamental): ROE與淨利率趨勢、現金流健康度。
+1. 訂單能見度 (Revenue Visibility): **重點分析「合約負債 (Contract Liabilities)」**。若數值很高或有成長，請解讀為未來營收爆發的領先指標；若無數據請說明。
+2. 價值與護城河 (Value & Moat): 根據 PEG 與 PB，判斷估值狀態。
+3. 風險與籌碼 (Risk & Chip): 解讀 Beta 值（波動風險）與量能變化。
+4. 技術面檢視 (Technical): 根據「季線乖離率」，判斷進場時機（是否過熱或回檔）。
 
 【綜合決策】
 5. 總結與操作建議: 
-   - 若為「低估值+低波動」：建議買入區間。
-   - 若為「高乖離+高風險」：建議減碼或停利點。
-   - 請明確給出「持有」、「買進」或「觀望」的評級。
+   - 引用最新收盤價，給出具體的「持有」、「買進」或「觀望」建議。
+   - 若合約負債亮眼，請強調其成長潛力。
 """
 
 # --- 8. 數據與清單處理 ---
@@ -253,18 +197,11 @@ with st.sidebar:
     st.subheader("2️⃣ 執行掃描")
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
-# --- 10. 指標與函數 (包含優化後的邏輯) ---
+# --- 10. 指標與函數 ---
 indicators_config = {
-    # 建議三：價值投資 - 改為負向，尋找低乖離或回檔股，避免追高
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離 (拉回買點)'},
-    
-    # 建議二：風險因子 - 負向，尋找低 Beta (穩健)
     'Beta': {'col': 'beta', 'direction': '負向', 'name': 'Beta係數 (低波動)'},
-    
-    # 建議一：成交量變化 - 正向，確認趨勢
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比 (趨勢確認)'},
-    
-    # 原有基本面指標
     'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG (成長估值)'},
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE (權益報酬)'},
     'Profit Margins': {'col': 'profitMargins', 'direction': '正向', 'name': '淨利率 (獲利力)'},
@@ -276,27 +213,21 @@ def fetch_single_stock(ticker):
         stock = yf.Ticker(symbol)
         info = stock.info 
         
-        # 基本面數據
         peg = info.get('pegRatio', None)
         pe = info.get('trailingPE', None)
         growth = info.get('revenueGrowth', 0) 
         if peg is None and pe is not None and growth > 0:
             peg = pe / (growth * 100)
-        elif peg is None: peg = 2.5 # 預設值
+        elif peg is None: peg = 2.5 
         
-        # 價格數據
         price = info.get('currentPrice', info.get('previousClose', 0))
         ma50 = info.get('fiftyDayAverage', price) 
         bias = (price / ma50) - 1 if ma50 and ma50 > 0 else 0
-        
-        # 建議二：獲取 Beta (風險係數)
-        beta = info.get('beta', 1.0) # 若無數據，預設為1 (市場平均風險)
+        beta = info.get('beta', 1.0)
         if beta is None: beta = 1.0
         
-        # 建議一：計算量能變化 (今日量 / 平均量)
         vol_avg = info.get('averageVolume', 0)
         vol_curr = info.get('volume', 0)
-        # 若 info 抓不到成交量，嘗試用歷史數據補救
         if vol_curr == 0 or vol_avg == 0:
             try:
                 hist = stock.history(period="5d")
@@ -304,12 +235,12 @@ def fetch_single_stock(ticker):
                     vol_curr = hist['Volume'].iloc[-1]
                     vol_avg = hist['Volume'].mean()
             except: pass
-            
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
 
         return {
             '代號': symbol.replace(".TW", "").replace(".TWO", ""),
             '名稱': info.get('shortName', symbol),
+            'close_price': price, 
             'pegRatio': peg, 
             'priceToMA60': bias, 
             'beta': beta,
@@ -362,6 +293,45 @@ def calculate_entropy_score(df, config):
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None
 
+# --- 新增功能：單獨抓取合約負債 (AI專用) ---
+def get_contract_liabilities_safe(symbol_code):
+    """
+    僅在使用者點擊分析時才執行，避免拖慢掃描速度。
+    """
+    try:
+        # 轉換代號 (2330 -> 2330.TW)
+        if not symbol_code.endswith('.TW') and not symbol_code.endswith('.TWO'):
+            symbol_code += '.TW'
+            
+        stock = yf.Ticker(symbol_code)
+        # 抓取最近的資產負債表
+        bs = stock.balance_sheet
+        
+        if bs.empty:
+            return "無財報數據"
+            
+        # 搜尋關鍵字 (yfinance 欄位名稱可能變動)
+        target_keys = ['Contract Liabilities', 'Deferred Revenue', 'Current Contract Liabilities', 'Current Deferred Revenue']
+        val = None
+        found_key = ""
+        
+        for key in target_keys:
+            # 檢查列名是否包含關鍵字
+            matches = [k for k in bs.index if key in k]
+            if matches:
+                # 取最新的數據 (第一欄)
+                val = bs.loc[matches[0]].iloc[0]
+                found_key = matches[0]
+                break
+        
+        if val is not None and not pd.isna(val):
+            # 格式化為億元
+            return f"{val / 100000000:.2f} 億元 (項目: {found_key})"
+        else:
+            return "無合約負債數據"
+    except Exception as e:
+        return f"讀取失敗"
+
 # --- 11. 儀表板顯示邏輯 ---
 
 col1, col2 = st.columns([3, 1])
@@ -394,43 +364,35 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         top_n = 10
         top_stocks = res.head(top_n)
 
-        # --- 分數解釋 (加入風險與價值因子說明) ---
+        # --- 分數解釋 ---
         with st.expander("ℹ️ 關於熵值模型分數 (Entropy Score) 的定義", expanded=True):
             st.markdown("""
             <div class='score-legend'>
                 <h4>🧮 什麼是熵值評分 (Entropy Score)?</h4>
                 <p>這不是主觀評分，而是透過<b>「資訊熵」</b>計算出的客觀權重。50 分代表綜合表現為「平均水準」。</p>
                 <hr style='border-color: #30363d;'>
-                <b>🛠️ 本次策略優化重點 (Value & Risk Adjustment)：</b>
+                <b>🛠️ 本次策略優化重點：</b>
                 <ul>
-                    <li><b>📉 價值優先 (Value Bias)</b>：我們翻轉了「季線乖離」邏輯。現在，股價接近季線（未過熱）甚至回檔的股票，分數會更高。</li>
-                    <li><b>🛡️ 風險控管 (Risk Control)</b>：加入 <b>Beta 係數</b>（負向指標），優先選擇波動度較低、較穩健的標的。</li>
-                    <li><b>📊 量能確認 (Volume Confirmation)</b>：加入 <b>量能比</b>，確保上漲是有成交量支持的。</li>
+                    <li><b>📉 價值優先</b>：股價接近季線（未過熱）甚至回檔的股票，分數會更高。</li>
+                    <li><b>🛡️ 風險控管</b>：加入 <b>Beta 係數</b>（負向指標），優先選擇波動度較低、較穩健的標的。</li>
+                    <li><b>🚀 合約負債偵測</b>：AI 分析時會自動挖出<b>合約負債</b>數據，提前預判營收爆發力。</li>
                 </ul>
             </div>
             """, unsafe_allow_html=True)
 
-        # --- Section 1: Market Overview & Entropy Analysis ---
+        # --- Section 1: Market Overview ---
         st.markdown("### 📊 市場熵值模型分析 (Entropy Market Model)")
-        
         c1, c2 = st.columns([1.8, 1.2])
-        
         with c1:
             st.markdown("**Top Ranked Assets (Entropy Score)**")
             st.dataframe(
-                top_stocks[['代號', '名稱', 'Score', 'pegRatio', 'priceToMA60', 'beta', 'volumeRatio']],
+                top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'beta']],
                 column_config={
-                    "Score": st.column_config.ProgressColumn(
-                        "Entropy Score",
-                        help="越高越好 (已包含風險與估值調整)",
-                        format="%.1f",
-                        min_value=0,
-                        max_value=100,
-                    ),
-                    "pegRatio": st.column_config.NumberColumn("PEG", format="%.2f", help="越低越好"),
-                    "priceToMA60": st.column_config.NumberColumn("MA60 Bias", format="%.2%", help="乖離率 (此策略中越低分越高)"),
-                    "beta": st.column_config.NumberColumn("Beta", format="%.2f", help="波動風險 (越低分越高)"),
-                    "volumeRatio": st.column_config.NumberColumn("Vol Ratio", format="%.2f", help="量能 (越高分越高)"),
+                    "Score": st.column_config.ProgressColumn("Entropy Score", format="%.1f", min_value=0, max_value=100),
+                    "close_price": st.column_config.NumberColumn("Price (NT$)", format="%.2f"),
+                    "pegRatio": st.column_config.NumberColumn("PEG", format="%.2f"),
+                    "priceToMA60": st.column_config.NumberColumn("MA60 Bias", format="%.2%"),
+                    "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
                 },
                 hide_index=True,
                 use_container_width=True,
@@ -438,20 +400,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             )
 
         with c2:
-            st.markdown("**Factor Weight Distribution (演算法自動賦權)**")
+            st.markdown("**Factor Weight Distribution**")
             w_df = pd.DataFrame(list(w.items()), columns=['Factor', 'Weight'])
-            fig = px.bar(w_df, x='Weight', y='Factor', orientation='h', 
-                         title="Entropy Calculated Weights",
-                         text_auto='.1%', color='Weight', template='plotly_dark')
-            
-            fig.update_layout(
-                plot_bgcolor='rgba(0,0,0,0)', 
-                paper_bgcolor='rgba(0,0,0,0)',
-                font_color='#e6e6e6',
-                margin=dict(l=0, r=0, t=40, b=0),
-                xaxis=dict(showgrid=True, gridcolor='#30363d'),
-                yaxis=dict(showgrid=False)
-            )
+            fig = px.bar(w_df, x='Weight', y='Factor', orientation='h', title="Entropy Calculated Weights", text_auto='.1%', color='Weight', template='plotly_dark')
+            fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color='#e6e6e6', margin=dict(l=0, r=0, t=40, b=0), xaxis=dict(showgrid=True, gridcolor='#30363d'))
             st.plotly_chart(fig, use_container_width=True)
 
         # --- Section 2: AI Strategic Analysis ---
@@ -460,7 +412,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         
         for i, (index, row) in enumerate(top_stocks.iterrows()):
             stock_name = f"{row['代號']} {row['名稱']}"
-            final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name)
             is_analyzed = (stock_name in st.session_state['analysis_results'])
             
             with st.container():
@@ -468,8 +419,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 <div style="background-color: #161b22; padding: 15px; border-radius: 8px; border: 1px solid #30363d; margin-bottom: 10px;">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <div>
-                            <h3 style="margin: 0; color: #58a6ff;">{stock_name}</h3>
-                            <span style="color: #8b949e; font-size: 0.9em;">Score: <b>{row['Score']}</b> | Beta: <b>{row['beta']:.2f}</b> | PEG: <b>{row['pegRatio']:.2f}</b></span>
+                            <h3 style="margin: 0; color: #58a6ff;">{stock_name} <span style='font-size:0.8em; color:#e6e6e6;'>${row['close_price']}</span></h3>
+                            <span style="color: #8b949e; font-size: 0.9em;">Score: <b>{row['Score']}</b> | Beta: <b>{row['beta']:.2f}</b></span>
                         </div>
                     </div>
                 </div>
@@ -479,7 +430,25 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 with col_btn:
                      if st.button(f"✨ 生成分析報告", key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
                          if not is_analyzed:
-                            with st.spinner(f"⚡ 正在連線 Gemini AI 深度分析 {stock_name}..."):
+                            with st.spinner(f"⚡ 正在深挖財報 (合約負債) 與分析 {stock_name}..."):
+                                
+                                # 1. 現場抓取合約負債 (耗時操作，所以放在按鈕後執行)
+                                contract_liabilities = get_contract_liabilities_safe(row['代號'])
+                                
+                                # 2. 組裝即時數據包
+                                real_time_data_block = f"""
+                                - 最新收盤價: {row['close_price']}
+                                - 合約負債 (Contract Liabilities): {contract_liabilities} (這是未來營收的領先指標)
+                                - Beta 係數 (Risk): {row['beta']:.2f}
+                                - 季線乖離 (MA60 Bias): {row['priceToMA60']:.2%}
+                                - PEG Ratio: {row['pegRatio']:.2f}
+                                - ROE: {row['returnOnEquity']:.1%}
+                                - 量能比 (Volume Ratio): {row['volumeRatio']:.2f}
+                                """
+                                
+                                final_prompt = HEDGE_FUND_PROMPT.replace("[STOCK]", stock_name).replace("[DATA_CONTEXT]", real_time_data_block)
+                                
+                                # 3. 呼叫 AI
                                 result = call_gemini_api(final_prompt)
                                 st.session_state['analysis_results'][stock_name] = result
                                 st.rerun()
