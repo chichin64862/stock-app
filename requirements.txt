@@ -7,3 +7,4 @@ twstock
 lxml
 requests
 matplotlib
+reportlab
