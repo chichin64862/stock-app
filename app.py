@@ -34,7 +34,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 針對性修復 (針對下拉選單可讀性優化) ---
+# --- 2. CSS 針對性修復 ---
 st.markdown("""
 <style>
     /* 1. 全局基底 */
@@ -44,44 +44,36 @@ st.markdown("""
         font-family: 'Roboto', sans-serif;
     }
 
-    /* 2. DataFrame 右上角配置選單 (白底黑字) */
+    /* 2. DataFrame 右上角配置選單 (白底黑字修復) */
     div[role="menu"] div, div[role="menu"] span, div[role="menu"] label {
         color: #31333F !important;
         font-weight: 500 !important;
     }
     div[role="menu"] label { color: #31333F !important; }
 
-    /* 3. 【關鍵修正】下拉選單 (解決白底灰字看不見的問題) */
-    
-    /* (A) 選單輸入框本體：維持深色，與側邊欄融合 */
+    /* 3. 下拉選單 (白底黑字，確保清晰) */
     div[data-baseweb="select"] > div {
         background-color: #262730 !important;
         border-color: #4b4b4b !important;
         color: white !important;
     }
-    
-    /* (B) 彈出列表容器：強制設為【白色背景】，配合您的視覺現況 */
     div[data-baseweb="popover"], ul[data-baseweb="menu"] {
         background-color: #ffffff !important; 
         border: 1px solid #cccccc !important;
     }
-    
-    /* (C) 選項文字：強制設為【純黑色】，確保在白底上清晰可見 */
     div[data-baseweb="popover"] li, 
     div[data-baseweb="popover"] div, 
     li[role="option"] {
         color: #000000 !important;
         font-weight: 500 !important;
     }
-    
-    /* (D) 滑鼠懸停與選中狀態：綠底白字 */
     li[role="option"]:hover, 
     li[role="option"][aria-selected="true"] {
-        background-color: #238636 !important; /* 綠色高亮 */
-        color: #ffffff !important; /* 白字 */
+        background-color: #238636 !important;
+        color: #ffffff !important;
     }
 
-    /* 4. 下載按鈕 */
+    /* 4. 下載按鈕 (不換行優化) */
     .stDownloadButton button {
         background-color: #1f2937 !important;
         color: #ffffff !important;
@@ -185,7 +177,6 @@ def create_pdf(stock_data_list):
     h3_style = ParagraphStyle('Heading3', parent=styles['Heading3'], fontName=font_name, fontSize=12, spaceBefore=10, textColor=colors.HexColor("#16A085"))
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=16, spaceAfter=5)
     
-    # 標題更新
     story.append(Paragraph(f"熵值決策選股及AI深度分析報告", title_style))
     story.append(Paragraph(f"生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M')} (僅供參考使用)", normal_style))
     story.append(Spacer(1, 20))
@@ -197,7 +188,6 @@ def create_pdf(stock_data_list):
         story.append(Paragraph("_" * 60, normal_style))
         story.append(Spacer(1, 10))
         
-        # 加入「戰略指令」
         action = stock.get('action', 'N/A')
         story.append(Paragraph(f"⚡ 系統戰略指令: <b>{action}</b>", h3_style))
         story.append(Spacer(1, 10))
@@ -342,12 +332,28 @@ def fetch_single_stock(ticker):
     try:
         parts = ticker.split(' ')
         symbol = parts[0]
-        name_zh = parts[1] if len(parts) > 1 else symbol
+        # 若輸入格式為 "1802.TW 台玻"，取第二部分為名稱；若僅輸入 "1802.TW"，則名稱預設為代號
+        if len(parts) > 1:
+            name_zh = parts[1]
+        else:
+            name_zh = symbol 
+        
+        # 修正：Yahoo Finance 代號必須包含後綴 (.TW 或 .TWO)
+        if not (symbol.endswith('.TW') or symbol.endswith('.TWO')):
+            # 簡易判斷：若為 4 位數字，預設為上市 (.TW)
+            if symbol.isdigit() and len(symbol) == 4:
+                symbol += '.TW'
         
         display_code = symbol.split('.')[0]
         stock = yf.Ticker(symbol)
         info = stock.info 
+        
+        # 若 API 回傳失敗 (無資料)，直接返回 None
+        if not info or 'currentPrice' not in info:
+            return None
+
         name_en = info.get('shortName', '')
+        # 若是手動輸入，name_zh 可能是代號，這裡嘗試優化顯示
         final_name = f"{name_zh} ({name_en})" if name_en else name_zh
 
         peg = info.get('pegRatio', None)
@@ -512,6 +518,10 @@ with st.sidebar:
     scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
     target_stocks = []
     
+    # 【關鍵新增】強制手動輸入框 (解決找不到股票的痛點)
+    st.caption("🔍 若找不到股票，請直接輸入代號 (如 1802.TW):")
+    manual_input = st.text_input("手動輸入代號:", placeholder="例如: 1802.TW 或 2330.TW", label_visibility="collapsed")
+    
     if scan_mode == "自行輸入/多選":
         default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
         selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
@@ -542,6 +552,10 @@ with st.sidebar:
         if selected_industry:
             codes = industry_map[selected_industry]
             target_stocks = [stock_map[c] for c in codes if c in stock_map]
+    
+    # 合併手動輸入的股票
+    if manual_input:
+        target_stocks.append(manual_input)
             
     st.info(f"已鎖定 {len(target_stocks)} 檔標的")
     st.markdown("---")
@@ -558,7 +572,7 @@ with col2:
 
 if run_btn:
     if not target_stocks:
-        st.warning("⚠️ Please select at least one stock or strategy from the sidebar.")
+        st.warning("⚠️ 請至少選擇一檔股票，或在左側輸入代號 (例如 1802.TW)。")
     else:
         st.session_state['analysis_results'] = {}
         st.session_state['raw_data'] = None
