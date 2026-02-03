@@ -45,23 +45,25 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
 
     /* 2. 【核彈級修復】DataFrame 工具列 (右上角) */
-    /* 針對工具列容器 */
-    [data-testid="stElementToolbar"] {
-        background-color: #262730 !important;
+    /* 強制針對 Toolbar 容器 */
+    [data-testid="stElementToolbar"], [data-testid="stElementToolbar"] > div {
+        background-color: #262730 !important; /* 深灰色背景 */
+        color: #ffffff !important;
         border: 1px solid #4b4b4b !important;
         border-radius: 8px !important;
-        z-index: 999 !important;
+        z-index: 99999 !important; /* 確保在最上層 */
     }
-    /* 針對工具列按鈕 */
+    /* 強制針對按鈕 */
     [data-testid="stElementToolbar"] button {
         border: none !important;
         background: transparent !important;
         color: #ffffff !important;
     }
-    /* 針對 SVG 圖示 (強制填色) */
-    [data-testid="stElementToolbar"] svg {
-        fill: #ffffff !important;
+    /* 強制針對 SVG 圖示 (下載、搜尋、全螢幕 icon) */
+    [data-testid="stElementToolbar"] svg, [data-testid="stElementToolbar"] svg path {
+        fill: #ffffff !important; /* 強制塗白 */
         stroke: #ffffff !important;
+        color: #ffffff !important;
     }
     /* 滑鼠懸停效果 */
     [data-testid="stElementToolbar"] button:hover {
@@ -186,8 +188,7 @@ def create_pdf(stock_data_list):
         # 1. 核心數據表 (Table)
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
         
-        # 準備表格數據
-        radar = stock.get('radar_data', {})
+        # 準備表格數據 (加入安全檢查)
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
@@ -207,7 +208,8 @@ def create_pdf(stock_data_list):
         story.append(t)
         story.append(Spacer(1, 15))
 
-        # 2. 因子貢獻分析 (模擬雷達圖數據)
+        # 2. 因子貢獻分析 (如果有雷達數據)
+        radar = stock.get('radar_data', {})
         if radar:
             story.append(Paragraph("⚡ 四大因子貢獻度 (Factor Contribution)", h3_style))
             # 找出最強因子
@@ -399,6 +401,7 @@ def calculate_entropy_score(df, config):
     for key, cfg in config.items():
         df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] 
     df['Score'] = (df['Score']*100).round(1)
+    # Return sorted DF (res), weights, error, and normalized DF
     return df.sort_values('Score', ascending=False), fin_w, None, df_norm
 
 def get_contract_liabilities_safe(symbol_code):
@@ -499,14 +502,19 @@ with st.sidebar:
         # 準備數據
         bulk_data = []
         raw = st.session_state['raw_data']
-        res = st.session_state['df_norm'] # 用於計算雷達
+        # 【修正】: 使用 res (計算完畢含 Score 的表)
+        res, _, _, _ = calculate_entropy_score(raw, indicators_config)
         
-        for idx, row in raw.iterrows():
+        # df_norm 用來算雷達圖
+        df_norm = st.session_state['df_norm']
+        
+        for idx, row in res.iterrows(): # 遍歷結果表
             code = row['代號']
             stock_name = f"{row['代號']} {row['名稱']}"
             
-            # 從結果表找分數
-            norm_row = res.iloc[idx]
+            # 從正規化表找雷達數據
+            # 注意：index 可能不同步，需用代號對應
+            norm_row = df_norm.loc[idx] 
             radar = get_radar_data(norm_row, indicators_config)
             
             # 檢查是否有 AI 分析
@@ -536,7 +544,7 @@ with st.sidebar:
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ QuantAlpha 戰略儀表板 3.0")
+    st.title("⚡ QuantAlpha 戰略儀表板 3.1")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -575,6 +583,49 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             },
             hide_index=True, use_container_width=True
         )
+
+        st.markdown("---")
+        
+        # --- 全局下載按鈕 (PDF 中心) ---
+        st.markdown("### 📥 戰略報告下載中心 (All-in-One Reports)")
+        
+        with st.container():
+            st.markdown('<div class="pdf-center">', unsafe_allow_html=True)
+            
+            # 直接準備數據 (不論有無 AI 分析)
+            if len(res) > 0:
+                col_info, col_main_dl = st.columns([3, 1])
+                with col_info:
+                    st.success(f"✅ 已準備 {len(res)} 份量化數據報告。若有點擊 AI 分析，內容將自動更新。")
+                with col_main_dl:
+                    # 重新生成 PDF 數據，確保包含最新 AI 內容
+                    bulk_data_final = []
+                    for idx, row in res.iterrows():
+                        stock_name = f"{row['代號']} {row['名稱']}"
+                        norm_row = df_norm.loc[idx]
+                        radar = get_radar_data(norm_row, indicators_config)
+                        analysis_text = st.session_state['analysis_results'].get(stock_name, None)
+                        
+                        bulk_data_final.append({
+                            'name': stock_name,
+                            'price': row['close_price'],
+                            'score': row['Score'],
+                            'peg': row['pegRatio'],
+                            'beta': row['beta'],
+                            'ma_bias': f"{row['priceToMA60']:.2%}",
+                            'radar_data': radar,
+                            'analysis': analysis_text
+                        })
+                    
+                    pdf_data_final = create_pdf(bulk_data_final)
+                    st.download_button(
+                        label="📑 下載全部報告 (PDF)",
+                        data=pdf_data_final,
+                        file_name=f"QuantAlpha_Full_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+            st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("---")
         st.markdown("### 🎯 深度戰略分析 (Strategic Deep Dive)")
