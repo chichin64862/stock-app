@@ -14,12 +14,11 @@ st.set_page_config(page_title="熵值法 x Gemini 全自動分析", page_icon="�
 st.title("🤖 熵值法選股 & Gemini 全自動戰略分析")
 st.markdown("### 流程： 1. 自動掃描選股 ➡️ 2. Gemini API 即時撰寫報告")
 
-# --- 0. 初始化 Session State (守門員機制) ---
+# --- 0. 初始化 Session State ---
 if 'analysis_results' not in st.session_state:
     st.session_state['analysis_results'] = {}
 if 'raw_data' not in st.session_state:
     st.session_state['raw_data'] = None
-# 【關鍵修改】預設為 False，除非按下按鈕，否則不顯示結果
 if 'scan_finished' not in st.session_state:
     st.session_state['scan_finished'] = False
 
@@ -30,31 +29,58 @@ if not api_key:
     st.error("⚠️ 未偵測到 Gemini API Key！請去 Streamlit Cloud 後台的 Settings -> Secrets 設定 `GEMINI_API_KEY`。")
     st.stop()
 
-# 【核心優化】REST API 呼叫 (解決 404 問題)
+# 【核心優化】移植 main_app.py 的強韌模型鏈 + 詳細除錯
 def call_gemini_api(prompt):
-    model_chain = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+    # 參考您的事故調查平台，使用多重備援策略
+    # 順序：先試最快的 Flash -> 再試最新的 2.0 -> 最後用最強的 1.5 Pro
+    model_chain = [
+        'gemini-1.5-flash',      # 首選：速度最快、穩定
+        'gemini-2.0-flash-exp',  # 次選：Google 最新實驗版 (您另一支程式用這個)
+        'gemini-1.5-pro',        # 保底：邏輯最強
+    ]
+    
     headers = {'Content-Type': 'application/json'}
-    data = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2}}
-    last_error = None
+    data = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2}
+    }
+    
+    error_log = [] # 收集所有失敗原因
     
     for model_name in model_chain:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        
         try:
-            response = requests.post(url, headers=headers, json=data, timeout=30)
+            # 延長超時時間到 60 秒，避免太快放棄
+            response = requests.post(url, headers=headers, json=data, timeout=60)
+            
             if response.status_code == 200:
+                # 成功！
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
-                error_msg = f"Status: {response.status_code}, Body: {response.text}"
-                print(f"⚠️ Model {model_name} failed: {error_msg}")
-                last_error = error_msg
-                time.sleep(1)
+                # 失敗，記錄詳細原因
+                try:
+                    err_json = response.json()
+                    err_msg = err_json.get('error', {}).get('message', response.text)
+                    err_status = err_json.get('error', {}).get('status', response.status_code)
+                except:
+                    err_msg = response.text
+                    err_status = response.status_code
+                    
+                log_entry = f"❌ {model_name} (Code {err_status}): {err_msg}"
+                print(log_entry) # 寫入後台 Log
+                error_log.append(log_entry)
+                time.sleep(1) # 休息一下再切換下一個模型
                 continue
+                
         except Exception as e:
-            print(f"⚠️ Connection error with {model_name}: {e}")
-            last_error = str(e)
+            log_entry = f"❌ {model_name} (連線錯誤): {str(e)}"
+            error_log.append(log_entry)
             continue
 
-    return f"❌ AI 分析失敗。\n最後錯誤訊息：{last_error}\n請檢查 API Key 或額度。"
+    # 如果全部失敗，顯示完整錯誤清單，讓我們知道第一關發生什麼事
+    full_report = "\n\n".join(error_log)
+    return f"⚠️ AI 分析失敗。已嘗試 {len(model_chain)} 種模型皆無回應。\n\n🔍 **錯誤診斷報告：**\n{full_report}"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
@@ -102,7 +128,7 @@ with st.sidebar:
     
     # 這裡只負責「準備名單」，絕對不觸發執行
     if scan_mode == "自行輸入/多選":
-        # 預設值僅作為 UI 顯示，不代表要執行
+        # 預設值僅作為 UI 顯示
         default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
         selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
         target_stocks = selected
