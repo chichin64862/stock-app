@@ -165,6 +165,16 @@ def plot_radar_chart_ui(row_name, radar_data):
 def plot_trend_chart_ui(full_symbol, ma_bias):
     try:
         stock_hist = yf.Ticker(full_symbol).history(period="6mo")
+        if stock_hist.empty:
+            try:
+                code = full_symbol.split('.')[0]
+                ts = twstock.Stock(code)
+                data = ts.fetch_31()
+                if data:
+                    dates = [d.date for d in data]
+                    prices = [d.close for d in data]
+                    stock_hist = pd.DataFrame({'Close': prices}, index=dates)
+            except: pass
         if stock_hist.empty: return None
         fig_trend = go.Figure()
         fig_trend.add_trace(go.Scatter(x=stock_hist.index, y=stock_hist['Close'], mode='lines', name='Price', line=dict(color='#29b6f6', width=2)))
@@ -351,18 +361,51 @@ indicators_config = {
     'FCF Yield': {'col': 'fcfYield', 'direction': '正向', 'name': 'FCF收益率', 'category': '財報'},
 }
 
+# --- 【關鍵修復】get_radar_data 必須在調用前定義 ---
+def get_radar_data(df_norm_row, config):
+    categories = {'技術': [], '籌碼': [], '財報': [], '估值': []}
+    for key, cfg in config.items():
+        cat = cfg['category']
+        col_n = f"{cfg['col']}_n"
+        if col_n in df_norm_row:
+            score = df_norm_row[col_n] * 100
+            categories[cat].append(score)
+    return {k: np.mean(v) if v else 0 for k, v in categories.items()}
+
+def get_contract_liabilities_safe(symbol_code):
+    try:
+        if not symbol_code.endswith('.TW') and not symbol_code.endswith('.TWO'): symbol_code += '.TW'
+        stock = yf.Ticker(symbol_code)
+        bs = stock.balance_sheet
+        if bs.empty: return "無財報數據"
+        target_keys = ['Contract Liabilities', 'Deferred Revenue']
+        val = None
+        for key in target_keys:
+            matches = [k for k in bs.index if key in k]
+            if matches:
+                val = bs.loc[matches[0]].iloc[0]
+                break
+        if val is not None and not pd.isna(val): return f"{val / 100000000:.2f} 億元"
+        else: return "無合約負債數據"
+    except: return "讀取失敗"
+
+def render_factor_bars(radar_data):
+    html = ""
+    colors = {'技術': '#29b6f6', '籌碼': '#ab47bc', '財報': '#ffca28', '估值': '#ef5350'}
+    for cat, score in radar_data.items():
+        color = colors.get(cat, '#8b949e')
+        blocks = int(score / 10)
+        visual_bar = "■" * blocks + "░" * (10 - blocks)
+        html += f"""<div style="margin-bottom: 8px;"><div style="display:flex; justify-content:space-between; font-size:0.85rem; color:#e6e6e6;"><span><span style="color:{color};">●</span> {cat}</span><span>{score:.0f}%</span></div><div style="font-family: monospace; color:{color}; letter-spacing: 2px;">{visual_bar}</div></div>"""
+    return html
+
 # --- 數據獲取核心 (混合引擎 + 快取) ---
 def fetch_twse_batch(tickers_list):
     """TWSE 批量救援模式"""
     try:
-        # 去除重複並提取代碼
         codes = sorted(list(set([t.split(' ')[0].split('.')[0] for t in tickers_list])))
-        
-        # 1. 使用 realtime.get 一次抓所有 (注意：若數量>100，最好分批)
-        # 這裡簡單做個分批，每批 50 檔
         batch_size = 50
         results = []
-        
         for i in range(0, len(codes), batch_size):
             chunk = codes[i:i+batch_size]
             try:
@@ -373,7 +416,6 @@ def fetch_twse_batch(tickers_list):
                             latest = data['realtime'].get('latest_trade_price', '-')
                             if latest == '-' or not latest:
                                 latest = data['realtime'].get('best_bid_price', [None])[0]
-                            
                             if latest and latest != '-':
                                 price = float(latest)
                                 full_symbol = next((t for t in tickers_list if code in t), f"{code}.TW")
@@ -386,23 +428,19 @@ def fetch_twse_batch(tickers_list):
                                     'priceToBook': np.nan, 'returnOnEquity': np.nan, 
                                     'debtToEquity': np.nan, 'fcfYield': np.nan, 'beta': 1.0
                                 })
-                time.sleep(1) # 批次間休息
+                time.sleep(1) 
             except: continue
-            
         return pd.DataFrame(results)
     except:
         return pd.DataFrame()
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_hybrid_data(tickers_list):
-    # 1. 嘗試 Yahoo Batch
-    yahoo_success = False
     results = []
-    
+    # 1. Yahoo Batch
     try:
         symbols = [t.split(' ')[0] for t in tickers_list]
         data = yf.download(symbols, period="1d", group_by='ticker', progress=False, threads=False)
-        
         if not data.empty:
             for ticker_full in tickers_list:
                 parts = ticker_full.split(' ')
@@ -422,16 +460,13 @@ def fetch_hybrid_data(tickers_list):
                                 'priceToBook': np.nan, 'returnOnEquity': np.nan, 
                                 'debtToEquity': np.nan, 'fcfYield': np.nan, 'beta': 1.0
                             })
-                            yahoo_success = True
                 except: pass
     except: pass
 
-    # 2. Yahoo 失敗則用 TWSE 救援
+    # 2. TWSE Rescue
     if not results:
-        # st.toast("Yahoo 忙碌，切換至 TWSE 官方通道...", icon="🛡️")
         twse_df = fetch_twse_batch(tickers_list)
-        if not twse_df.empty:
-            return twse_df
+        if not twse_df.empty: return twse_df
             
     return pd.DataFrame(results)
 
@@ -475,7 +510,7 @@ with st.sidebar:
     st.title("🎛️ 控制台")
     st.markdown("---")
     
-    # 【關鍵新增】清除快取按鈕
+    # 清除快取按鈕
     if st.button("🔴 清除快取並重置", use_container_width=True):
         st.cache_data.clear()
         if 'raw_data' in st.session_state: del st.session_state['raw_data']
@@ -556,7 +591,6 @@ if run_btn:
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     required_cols = ['fcfYield', 'debtToEquity']
     if not all(col in st.session_state['raw_data'].columns for col in required_cols):
-        # 靜默修復
         st.session_state['raw_data'] = None
         st.rerun()
 
@@ -685,7 +719,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     if fig_trend:
                         st.plotly_chart(fig_trend, use_container_width=True)
                     else:
-                        st.warning("⚠️ 無法取得歷史數據 (Yahoo/TWSE 來源皆無回應)")
+                        st.warning("⚠️ 無法取得歷史數據")
 
                 col_btn, col_dl = st.columns([3, 1])
                 
