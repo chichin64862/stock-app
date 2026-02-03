@@ -31,7 +31,7 @@ except ImportError:
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股及AI深度分析平台 (TEJ Pro)", 
+    page_title="熵值決策選股及AI深度分析平台 (AV Pro)", 
     page_icon="⚡", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -61,6 +61,7 @@ st.markdown("""
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
     /* 強制上傳區塊樣式 */
     [data-testid="stExpander"] { background-color: #262730 !important; border: 1px solid #4b4b4b !important; border-radius: 5px; }
+    .success-box { padding: 10px; background-color: rgba(35, 134, 54, 0.2); border: 1px solid #238636; border-radius: 5px; color: #ffffff; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -71,6 +72,8 @@ if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = 
 if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
 if 'market_fundamentals' not in st.session_state: st.session_state['market_fundamentals'] = {}
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
+# 預設載入用戶提供的 Key
+if 'av_api_key' not in st.session_state: st.session_state['av_api_key'] = "59P38LL8MKU2XB1M"
 
 # --- 4. API Key ---
 try:
@@ -228,14 +231,14 @@ def create_pdf(stock_data_list):
         pe_val = stock.get('pe', 'N/A')
         pb_val = stock.get('pb', 'N/A')
         yield_val = stock.get('yield', 'N/A')
-        source_tag = "(TEJ)" if stock.get('is_tej', False) else "(TWSE)"
+        source_tag = f"({stock.get('source', 'TWSE')})"
         
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
-            [f"本益比 (P/E)", f"{pe_val}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
+            [f"本益比 (P/E) {source_tag}", f"{pe_val}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
             [f"股價淨值比 (P/B)", f"{pb_val}", f"殖利率 (Yield)", f"{yield_val}%"],
-            [f"合成 ROE {source_tag}", f"{stock.get('roe_syn', 'N/A')}%", f"波動率 (Vol)", f"{stock.get('volatility', 'N/A')}"],
+            [f"合成 ROE", f"{stock.get('roe_syn', 'N/A')}%", f"波動率 (Vol)", f"{stock.get('volatility', 'N/A')}"],
         ]
         t = Table(t_data, colWidths=[100, 130, 100, 130])
         t.setStyle(TableStyle([
@@ -356,7 +359,6 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
-# --- 指標配置 ---
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
@@ -367,72 +369,66 @@ indicators_config = {
     'Synthetic ROE': {'col': 'roe_syn', 'direction': '正向', 'name': '合成ROE', 'category': '財報'},
 }
 
-# --- TWSE/TPEX 官方開放數據 ---
+# --- Alpha Vantage & Official Data Connectors ---
+def fetch_alpha_vantage_data(symbol, api_key):
+    """使用 AV API 獲取單檔精準數據 (需 Key)"""
+    if not api_key: return None
+    try:
+        # 去除 .TW 後綴 (AV 格式為 2330.TW)
+        if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
+        
+        # 1. 概覽數據 (PE, PB, Dividend)
+        url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={api_key}"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        
+        # 2. 價格數據 (Global Quote)
+        url_price = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={api_key}"
+        r_price = requests.get(url_price, timeout=5)
+        data_price = r_price.json()
+        
+        if "Global Quote" in data_price and "05. price" in data_price["Global Quote"]:
+            price = float(data_price["Global Quote"]["05. price"])
+            pe = float(data.get("PERatio", 0)) if data.get("PERatio") != "None" else 0
+            pb = float(data.get("PriceToBookRatio", 0)) if data.get("PriceToBookRatio") != "None" else 0
+            dy = float(data.get("DividendYield", 0)) * 100 if data.get("DividendYield") != "None" else 0
+            
+            return {'price': price, 'pe': pe, 'pb': pb, 'yield': dy, 'source': 'AV'}
+    except: return None
+    return None
+
+def safe_float(val):
+    try:
+        val = str(val).replace(',', '').strip()
+        if val == '-' or val == '': return 0.0
+        return float(val)
+    except: return 0.0
+
 @st.cache_data(ttl=3600)
 def fetch_market_fundamentals():
+    """官方數據連接器 (全市場)"""
     market_data = {}
-    
-    # 1. 上市 (TWSE)
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'}
     try:
         url_twse = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
-        r = requests.get(url_twse, timeout=10)
+        r = requests.get(url_twse, headers=headers, timeout=15, verify=False)
         if r.status_code == 200:
-            data = r.json()
-            for item in data:
-                code = item['Code']
-                try:
-                    pe = float(item['PEratio']) if item['PEratio'] != "-" else 0
-                    pb = float(item['PBratio']) if item['PBratio'] != "-" else 0
-                    dy = float(item['DividendYield']) if item['DividendYield'] != "-" else 0
-                    market_data[code] = {'pe': pe, 'pb': pb, 'yield': dy}
-                except: pass
+            for item in r.json():
+                market_data[item.get('Code')] = {
+                    'pe': safe_float(item.get('PEratio')), 'pb': safe_float(item.get('PBratio')), 'yield': safe_float(item.get('DividendYield'))
+                }
     except: pass
     
-    # 2. 上櫃 (TPEX)
     try:
         url_tpex = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
-        r = requests.get(url_tpex, timeout=10)
+        r = requests.get(url_tpex, headers=headers, timeout=15, verify=False)
         if r.status_code == 200:
-            data = r.json()
-            for item in data:
-                code = item['SecuritiesCompanyCode']
-                try:
-                    pe = float(item['PERatio']) if item['PERatio'] != "-" else 0
-                    pb = float(item['PBRatio']) if item['PBRatio'] != "-" else 0
-                    dy = float(item['DividendYield']) if item['DividendYield'] != "-" else 0
-                    market_data[code] = {'pe': pe, 'pb': pb, 'yield': dy}
-                except: pass
+            for item in r.json():
+                market_data[item.get('SecuritiesCompanyCode')] = {
+                    'pe': safe_float(item.get('PERatio')), 'pb': safe_float(item.get('PBRatio')), 'yield': safe_float(item.get('DividendYield'))
+                }
     except: pass
-            
     return market_data
-
-# --- TEJ 處理函式 (先定義) ---
-def process_tej_upload(uploaded_file):
-    if uploaded_file is None: return None
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
-            
-        df.columns = [str(c).strip() for c in df.columns]
-        
-        # 尋找代號欄位
-        code_col = next((c for c in df.columns if '代號' in c or 'Code' in c or '股票' in c), None)
-        if not code_col:
-            st.error("❌ TEJ 檔案中找不到『代號』或『Code』欄位，無法對應。")
-            return None
-            
-        tej_map = {}
-        for _, row in df.iterrows():
-            raw_code = str(row[code_col]).split('.')[0].strip() 
-            tej_map[raw_code] = row.to_dict()
-            
-        st.sidebar.success(f"✅ TEJ 數據掛載成功：{len(tej_map)} 檔")
-        return tej_map
-    except Exception as e:
-        st.sidebar.error(f"❌ 檔案讀取失敗: {str(e)}")
-        return None
 
 def get_radar_data(df_norm_row, config):
     categories = {'技術': [], '籌碼': [], '財報': [], '估值': [], '風險': []}
@@ -443,6 +439,22 @@ def get_radar_data(df_norm_row, config):
             score = df_norm_row[col_n] * 100
             categories[cat].append(score)
     return {k: np.mean(v) if v else 0 for k, v in categories.items() if v}
+
+# --- TEJ 處理 ---
+def process_tej_upload(uploaded_file):
+    if uploaded_file is None: return None
+    try:
+        if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
+        else: df = pd.read_excel(uploaded_file)
+        df.columns = [str(c).strip() for c in df.columns]
+        code_col = next((c for c in df.columns if '代號' in c or 'Code' in c), None)
+        if not code_col: return None
+        tej_map = {}
+        for _, row in df.iterrows():
+            raw_code = str(row[code_col]).split('.')[0].strip() 
+            tej_map[raw_code] = row.to_dict()
+        return tej_map
+    except: return None
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_hybrid_data(tickers_list, tej_data=None):
@@ -459,10 +471,7 @@ def fetch_hybrid_data(tickers_list, tej_data=None):
             name = parts[1] if len(parts) > 1 else symbol
             code = symbol.split('.')[0]
             
-            price = np.nan
-            ma_bias = 0
-            vol_ratio = 1.0
-            volatility = 0.05
+            price = np.nan; ma_bias = 0; vol_ratio = 1.0; volatility = 0.05
             
             try:
                 df = data if len(symbols) == 1 else (data[symbol] if symbol in data else pd.DataFrame())
@@ -477,17 +486,15 @@ def fetch_hybrid_data(tickers_list, tej_data=None):
                             vol_curr = df['Volume'].iloc[-1]
                             vol_avg = df['Volume'].rolling(window=20).mean().iloc[-1]
                             if not pd.isna(vol_avg) and vol_avg > 0: vol_ratio = vol_curr / vol_avg
-                            pct_change = df['Close'].pct_change()
-                            volatility = pct_change.std() * (252 ** 0.5)
+                            volatility = df['Close'].pct_change().std() * (252 ** 0.5)
             except: pass
             
-            # TWSE 救援
             if pd.isna(price):
                 try:
                     realtime = twstock.realtime.get(code)
                     if realtime['success']:
                         p_str = realtime['realtime'].get('latest_trade_price', '-')
-                        if p_str == '-' or p_str is None: p_str = realtime['realtime'].get('best_bid_price', [None])[0]
+                        if p_str == '-' or not p_str: p_str = realtime['realtime'].get('best_bid_price', [None])[0]
                         if p_str and p_str != '-': 
                             price = float(p_str)
                             name = realtime['info']['name'] 
@@ -499,14 +506,15 @@ def fetch_hybrid_data(tickers_list, tej_data=None):
                 pb = f_data['pb']
                 dy = f_data['yield']
                 is_tej = False
+                source = 'TWSE'
                 
-                # TEJ 覆蓋
                 if tej_data and code in tej_data:
                     t_row = tej_data[code]
                     for k in t_row:
-                        if '本益比' in k or 'PE' in k: pe = float(t_row[k]) if t_row[k] != '-' else 0; is_tej = True
-                        if '淨值比' in k or 'PB' in k: pb = float(t_row[k]) if t_row[k] != '-' else 0; is_tej = True
-                        if '殖利率' in k or 'Yield' in k: dy = float(t_row[k]) if t_row[k] != '-' else 0; is_tej = True
+                        if '本益比' in k or 'PE' in k: pe = safe_float(t_row[k]); is_tej = True
+                        if '淨值比' in k or 'PB' in k: pb = safe_float(t_row[k]); is_tej = True
+                        if '殖利率' in k or 'Yield' in k: dy = safe_float(t_row[k]); is_tej = True
+                    if is_tej: source = 'TEJ'
 
                 roe_syn = 0
                 if pe > 0 and pb > 0: roe_syn = (pb / pe) * 100
@@ -515,30 +523,19 @@ def fetch_hybrid_data(tickers_list, tej_data=None):
                 if pd.isna(volatility): volatility = 0.5
                 
                 results.append({
-                    '代號': code,
-                    'full_symbol': symbol,
-                    '名稱': name,
-                    'close_price': price,
-                    'priceToMA60': ma_bias, 
-                    'volumeRatio': vol_ratio,
-                    'volatility': volatility,
-                    'pe': pe,
-                    'pb': pb,
-                    'yield': dy,
-                    'roe_syn': roe_syn,
-                    'beta': 1.0,
-                    'is_tej': is_tej,
+                    '代號': code, 'full_symbol': symbol, '名稱': name, 'close_price': price,
+                    'priceToMA60': ma_bias, 'volumeRatio': vol_ratio, 'volatility': volatility,
+                    'pe': pe, 'pb': pb, 'yield': dy, 'roe_syn': roe_syn, 'beta': 1.0,
+                    'is_tej': is_tej, 'source': source,
                     'pegRatio': np.nan, 'debtToEquity': np.nan, 'fcfYield': np.nan
                 })
-                
-    except Exception as e: pass
+    except Exception: pass
             
     return pd.DataFrame(results)
 
 def calculate_entropy_score(df, config):
-    if df.empty: return df, None, "數據抓取為空，請檢查代號是否正確。", None
+    if df.empty: return df, None, "數據抓取為空。", None
     df_norm = df.copy()
-    
     for key, cfg in config.items():
         col = cfg['col']
         if col not in df.columns: df[col] = 0
@@ -557,9 +554,7 @@ def calculate_entropy_score(df, config):
             else: df_norm[f'{col}_n'] = (mx - df[col]) / denom
         df_norm[f'{col}_n'] = df_norm[f'{col}_n'] + 0.001 
             
-    m = len(df)
-    k = 1 / np.log(m) if m > 1 else 0
-    weights = {}
+    m = len(df); k = 1 / np.log(m) if m > 1 else 0; weights = {}
     for key, cfg in config.items():
         col = cfg['col']
         if f'{col}_n' in df_norm.columns:
@@ -575,7 +570,6 @@ def calculate_entropy_score(df, config):
         if f'{cfg["col"]}_n' in df_norm.columns:
             raw_score = df_norm[f'{cfg["col"]}_n'] - 0.001
             df['Score'] += fin_w[key] * raw_score
-            
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None, df_norm
 
@@ -593,20 +587,36 @@ def render_factor_bars(radar_data):
 with st.sidebar:
     st.title("🎛️ 控制台")
     
-    # 1. 數據源設定 (強制置頂)
+    # 1. 數據源設定
     st.markdown("### 1️⃣ 數據源設定")
-    with st.expander("📂 匯入 TEJ 專業數據 (選填)", expanded=True):
-        st.caption("上傳 Excel/CSV，系統將優先使用其中的財報數據。")
-        uploaded_file = st.file_uploader("上傳檔案", type=['csv', 'xlsx'])
-        if uploaded_file is not None:
+    
+    # AV Key 設定
+    with st.expander("🔑 Alpha Vantage 設定 (AV Key)", expanded=True):
+        av_key = st.text_input("API Key", value=st.session_state.get('av_api_key', ''))
+        if av_key: st.session_state['av_api_key'] = av_key
+        st.caption("✅ 已掛載：單檔分析將使用 AV 數據")
+
+    # TEJ 上傳
+    with st.expander("📂 匯入 TEJ 數據 (選填)", expanded=False):
+        uploaded_file = st.file_uploader("上傳 Excel/CSV", type=['csv', 'xlsx'])
+        if uploaded_file:
             tej_data = process_tej_upload(uploaded_file)
-            if tej_data:
+            if tej_data: 
                 st.session_state['tej_data'] = tej_data
-                
+                st.markdown(f"<div class='success-box'>✅ TEJ 數據已就緒：{len(tej_data)} 檔</div>", unsafe_allow_html=True)
+
+    # 官方數據狀態
+    fund_map = st.session_state.get('market_fundamentals', {})
+    if len(fund_map) > 0:
+        st.success(f"📊 TWSE 官方數據：已載入 {len(fund_map)} 檔")
+    else:
+        st.warning("⚠️ 官方數據未載入 (請按下方重置)")
+
     if st.button("🔴 清除快取並重置", use_container_width=True):
         st.cache_data.clear()
         if 'raw_data' in st.session_state: del st.session_state['raw_data']
         if 'scan_finished' in st.session_state: del st.session_state['scan_finished']
+        if 'market_fundamentals' in st.session_state: del st.session_state['market_fundamentals']
         st.rerun()
         
     st.markdown("---")
@@ -617,7 +627,7 @@ with st.sidebar:
     target_stocks = []
     
     if scan_mode == "自行輸入/多選":
-        st.caption("🔍 若找不到股票，請直接輸入代號 (如 1802):")
+        st.caption("🔍 若找不到股票，請直接輸入代號:")
         manual_input = st.text_input("手動輸入代號:", placeholder="例如: 1802 或 2330", label_visibility="collapsed")
         default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
         selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
@@ -657,7 +667,7 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股及AI深度分析平台 (TEJ Pro)")
+    st.title("⚡ 熵值決策選股及AI深度分析平台 (AV Pro)")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting (僅供參考使用)")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -671,7 +681,7 @@ if run_btn:
         st.session_state['raw_data'] = None
         st.session_state['df_norm'] = None
         
-        with st.spinner("🚀 正在啟動混合掃描 (Yahoo + TWSE + TEJ)..."):
+        with st.spinner("🚀 正在啟動混合掃描 (Yahoo + TWSE + AV)..."):
             raw = fetch_hybrid_data(target_stocks, st.session_state.get('tej_data'))
             
         if not raw.empty:
@@ -769,7 +779,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 'analysis': analysis_text,
                                 'action': row['Action Plan'],
                                 'full_symbol': row['full_symbol'],
-                                'is_tej': row.get('is_tej', False)
+                                'source': row.get('source', '')
                             })
                     
                     if bulk_data_final:
@@ -818,20 +828,26 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 col_btn, col_dl = st.columns([3, 1])
                 
                 with col_btn:
-                     if st.button(f"✨ 生成分析報告", key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
+                     # 智能按鈕：如果有 AV Key 則顯示加強版
+                     btn_label = "✨ 生成分析報告 (AV 加強)" if st.session_state.get('av_api_key') else "✨ 生成分析報告"
+                     if st.button(btn_label, key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
                          if not is_analyzed:
-                            with st.spinner(f"⚡ AI 正在為您撰寫 {stock_name} 的投資備忘錄..."):
-                                pe_val = row.get('pe', 0)
-                                pb_val = row.get('pb', 0)
-                                dy_val = row.get('yield', 0)
-                                roe_syn = row.get('roe_syn', 0)
+                            with st.spinner(f"⚡ AI 正在調用 Alpha Vantage 獲取 {stock_name} 精準數據..."):
+                                av_data = None
+                                if st.session_state.get('av_api_key'):
+                                    av_data = fetch_alpha_vantage_data(row['full_symbol'], st.session_state['av_api_key'])
+                                
+                                # 數據融合：優先使用 AV，否則用原數據
+                                pe_val = av_data['pe'] if av_data else row.get('pe', 0)
+                                pb_val = av_data['pb'] if av_data else row.get('pb', 0)
+                                dy_val = av_data['yield'] if av_data else row.get('yield', 0)
                                 
                                 real_time_data = f"""
                                 - 收盤價: {row['close_price']}
                                 - 本益比 (P/E): {pe_val:.2f}
                                 - 股價淨值比 (P/B): {pb_val:.2f}
                                 - 殖利率 (Yield): {dy_val:.2f}%
-                                - 合成 ROE: {roe_syn:.2f}%
+                                - 合成 ROE: {row.get('roe_syn', 0):.2f}%
                                 - 因子得分: {radar_data} (滿分100)
                                 - 季線乖離: {row['priceToMA60']:.2%}
                                 """
