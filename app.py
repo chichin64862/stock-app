@@ -11,7 +11,7 @@ import json
 import time
 import os
 import io
-import re  # 【新增】引入正規表達式模組，修復 PDF 生成錯誤
+import re
 from datetime import datetime
 
 # --- PDF 生成庫檢查 ---
@@ -34,71 +34,48 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 針對性修復 (解決白底白字問題) ---
+# --- 2. CSS 針對性修復 (延續 4.3 的完美深色 UI) ---
 st.markdown("""
 <style>
-    /* =========================================
-       1. 全局基底：深色模式
-       ========================================= */
+    /* 1. 全局基底 */
     .stApp { background-color: #0e1117 !important; }
-    
-    /* 預設文字為白色 (針對大多數黑底區域) */
     body, h1, h2, h3, h4, h5, h6, p, div, span, label, li {
         color: #e6e6e6 !important;
         font-family: 'Roboto', sans-serif;
     }
 
-    /* =========================================
-       2. 【痛點修復】DataFrame 右上角配置選單 (那個白色的框框)
-       ========================================= */
-    /* 針對 Glide Data Grid 的 Column Menu */
-    /* 既然它是白底，我們強制把裡面的文字改成【深灰色】，確保看得到 */
-    div[role="menu"] div, 
-    div[role="menu"] span, 
-    div[role="menu"] label {
-        color: #31333F !important; /* 深灰色文字 */
+    /* 2. DataFrame 右上角配置選單 (白底黑字修復) */
+    div[role="menu"] div, div[role="menu"] span, div[role="menu"] label {
+        color: #31333F !important;
         font-weight: 500 !important;
     }
-    
-    /* 針對選單內的 Checkbox 標籤 */
-    div[role="menu"] label {
-        color: #31333F !important;
-    }
+    div[role="menu"] label { color: #31333F !important; }
 
-    /* =========================================
-       3. 【痛點修復】下拉選單 (Selectbox) - 保持黑底白字
-       ========================================= */
-    /* 選單本體 */
+    /* 3. 下拉選單 (深色風格) */
     div[data-baseweb="select"] > div {
         background-color: #262730 !important;
         border-color: #4b4b4b !important;
         color: white !important;
     }
-    /* 彈出列表 (Popover) */
     div[data-baseweb="popover"], ul[data-baseweb="menu"] {
-        background-color: #1f2937 !important; /* 深灰背景 */
+        background-color: #1f2937 !important;
         border: 1px solid #4b4b4b !important;
     }
-    /* 選項文字 (維持白色，因為背景是深灰) */
-    div[data-baseweb="popover"] li, 
-    div[data-baseweb="popover"] div {
+    div[data-baseweb="popover"] li, div[data-baseweb="popover"] div {
         color: #e6e6e6 !important;
     }
-    /* 滑鼠懸停 */
     li[role="option"]:hover, li[role="option"][aria-selected="true"] {
         background-color: #238636 !important;
         color: white !important;
     }
 
-    /* =========================================
-       4. 【痛點修復】下載按鈕 (Download Button)
-       ========================================= */
+    /* 4. 下載按鈕 (不換行優化) */
     .stDownloadButton button {
         background-color: #1f2937 !important;
         color: #ffffff !important;
         border: 1px solid #238636 !important;
-        white-space: nowrap !important; /* 禁止換行 */
-        min-width: 180px !important; /* 確保寬度足夠 */
+        white-space: nowrap !important;
+        min-width: 180px !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
@@ -107,14 +84,9 @@ st.markdown("""
         border-color: #58a6ff !important;
         color: #58a6ff !important;
     }
-    .stDownloadButton p {
-        color: inherit !important;
-        font-size: 1rem !important;
-    }
+    .stDownloadButton p { color: inherit !important; font-size: 1rem !important; }
 
-    /* =========================================
-       5. DataFrame 工具列 (Toolbar)
-       ========================================= */
+    /* 5. Toolbar (強制深色) */
     [data-testid="stElementToolbar"] {
         background-color: #262730 !important;
         border: 1px solid #4b4b4b !important;
@@ -127,14 +99,9 @@ st.markdown("""
         background-color: #4b4b4b !important;
     }
 
-    /* =========================================
-       6. 其他元件
-       ========================================= */
-    /* 輸入框 */
+    /* 6. 其他元件 */
     input { color: #ffffff !important; caret-color: #ffffff !important; }
-    /* 側邊欄 */
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
-    /* 卡片 */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
@@ -142,7 +109,6 @@ st.markdown("""
         border: 1px solid #30363d; 
         margin-bottom: 15px;
     }
-    /* PDF 中心容器 */
     .pdf-center {
         background-color: #1f2937;
         padding: 20px;
@@ -154,7 +120,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 初始化 Session State ---
+# --- 3. Session State ---
 if 'analysis_results' not in st.session_state: st.session_state['analysis_results'] = {}
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
@@ -193,7 +159,7 @@ def register_chinese_font():
 
 font_ready = register_chinese_font()
 
-# --- 7. PDF 生成引擎 (【關鍵修正】：文字處理邏輯) ---
+# --- 7. PDF 生成引擎 ---
 def create_pdf(stock_data_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -219,11 +185,13 @@ def create_pdf(stock_data_list):
         story.append(Spacer(1, 10))
         
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
+        # 【優化】加入 FCF Yield 數據
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
             [f"PEG Ratio", f"{stock.get('peg', 'N/A')}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
-            [f"負債權益比", f"{stock.get('debt_eq', 'N/A')}", f"合約負債", f"{stock.get('cl_val', '尚未讀取')}"],
+            [f"負債權益比", f"{stock.get('debt_eq', 'N/A')}", f"FCF Yield (現金流)", f"{stock.get('fcf_yield', 'N/A')}"],
+            [f"合約負債", f"{stock.get('cl_val', '尚未讀取')}", f"Beta", f"{stock.get('beta', 'N/A')}"],
         ]
         t = Table(t_data, colWidths=[100, 130, 100, 130])
         t.setStyle(TableStyle([
@@ -255,20 +223,11 @@ def create_pdf(stock_data_list):
 
         analysis = stock.get('analysis')
         if analysis:
-            story.append(Paragraph("🤖 Gemini AI 戰略解讀", h3_style))
-            
-            # 【關鍵修復】文字清洗邏輯
-            # 1. 先處理 XML 特殊字元，避免 parser 報錯
+            story.append(Paragraph("🤖 Gemini AI 機構級戰略解讀", h3_style))
+            # 文字清洗，避免 ReportLab 崩潰
             formatted = analysis.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            
-            # 2. 使用正規表達式處理 **粗體**，確保標籤成對出現
-            # 將 **text** 替換為 <b>text</b>
             formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', formatted)
-            
-            # 3. 處理換行與標題
-            formatted = formatted.replace("\n", "<br/>")
-            formatted = formatted.replace("### ", "").replace("## ", "").replace("# ", "")
-            
+            formatted = formatted.replace("\n", "<br/>").replace("### ", "").replace("## ", "").replace("# ", "")
             story.append(Paragraph(formatted, normal_style))
         else:
             story.append(Paragraph("💡 (此份報告僅包含量化數據，尚未執行 AI 深度解讀)", normal_style))
@@ -282,7 +241,7 @@ def create_pdf(stock_data_list):
     buffer.seek(0)
     return buffer
 
-# --- 8. Gemini API ---
+# --- 8. Gemini API (升級版) ---
 def get_available_model(key):
     default_model = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
@@ -306,20 +265,32 @@ def call_gemini_api(prompt):
         else: return f"❌ 分析失敗 (Code {response.status_code})"
     except Exception as e: return f"❌ 連線逾時或錯誤: {str(e)}"
 
+# 【專家級優化】升級 Prompt 邏輯
 HEDGE_FUND_PROMPT = """
 【角色設定】
-你現在是華爾街頂尖的避險基金經理人。請針對 **[STOCK]** 進行深度投資分析。
+你現在是高盛(Goldman Sachs)亞太區首席策略分析師。請針對 **[STOCK]** 撰寫一份「專業級機構投資備忘錄」。
 
-【⚠️ 重要指令】
-請務必依據下方提供的 **[最新市場即時數據]** 進行分析。
+【⚠️ 嚴謹邏輯指令】
+不要給予模糊的敘述。請結合量化數據與產業週期，執行以下預測分析：
+
+1. **財務健康度 (Quality Check)**：
+   - 結合「負債權益比」與「自由現金流」判斷其獲利含金量。
+   - 評估該公司是否有「虛胖」或「高槓桿」風險。
+
+2. **營收前瞻預測 (Revenue Outlook)**：
+   - 根據「合約負債」的金額與變動，**推算** 未來 1-2 季的成長動能強弱。
+   - 請明確指出是「訂單滿載」、「庫存調整」還是「需求疲軟」。
+
+3. **估值合理性 (Valuation Gap)**：
+   - 利用 PEG 與目前「季線乖離率」，判斷是「價值窪地」還是「動能過熱」。
+
+4. **戰略操作建議 (Execution)**：
+   - **投資評等**：請給出 [重於大盤 (Overweight) / 中立 (Neutral) / 減持 (Underweight)]。
+   - **關鍵點位**：設定「防禦區間」與「目標空間」。
+   - **觀察指標**：列出一個未來最需要盯緊的變數 (如：匯率、原物料、特定客戶訂單)。
 
 【最新市場即時數據】
 [DATA_CONTEXT]
-
-【分析維度】
-1. 訂單能見度 (Revenue Visibility): 重點分析「合約負債」。
-2. 因子雷達解讀: 根據技術、籌碼、基本面、估值四大面向分析。
-3. 綜合決策: 給出「持有」、「買進」或「觀望」建議。
 """
 
 # --- 9. 數據處理 ---
@@ -343,7 +314,7 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
-# 【專家級優化】指標配置：移除 Profit Margins (共線性)，新增 DebtToEquity (避險)
+# 【專家級優化】指標配置：加入 FCF Yield (現金流收益)
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
@@ -351,6 +322,7 @@ indicators_config = {
     'Price To Book': {'col': 'priceToBook', 'direction': '負向', 'name': 'PB比', 'category': '估值'},
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE', 'category': '財報'},
     'Debt To Equity': {'col': 'debtToEquity', 'direction': '負向', 'name': '負債權益比', 'category': '財報'},
+    'FCF Yield': {'col': 'fcfYield', 'direction': '正向', 'name': 'FCF收益率', 'category': '財報'}, # 新增：巴菲特指標
 }
 
 def fetch_single_stock(ticker):
@@ -386,6 +358,15 @@ def fetch_single_stock(ticker):
             except: pass
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
         
+        # 【專家級優化】計算自由現金流收益率 (FCF / Market Cap)
+        fcf = info.get('freeCashflow', 0)
+        if fcf is None: fcf = 0 # 安全處理
+        
+        mkt_cap = info.get('marketCap', 1)
+        if mkt_cap is None: mkt_cap = 1
+        
+        fcf_yield = (fcf / mkt_cap) if mkt_cap > 0 else 0
+        
         return {
             '代號': display_code,
             'full_symbol': symbol,
@@ -397,6 +378,8 @@ def fetch_single_stock(ticker):
             'priceToBook': info.get('priceToBook', np.nan),
             'returnOnEquity': info.get('returnOnEquity', np.nan), 
             'debtToEquity': info.get('debtToEquity', np.nan),
+            'fcfYield': fcf_yield * 100, # 轉為百分比
+            'beta': info.get('beta', 1.0)
         }
     except: return None
 
@@ -419,7 +402,6 @@ def calculate_entropy_score(df, config):
     df = df.dropna().copy()
     if df.empty: return df, None, "No valid data found.", None
     
-    # 剛性過濾 (Hard Filter)
     if 'returnOnEquity' in df.columns:
         df = df[df['returnOnEquity'] > 0]
         
@@ -427,28 +409,30 @@ def calculate_entropy_score(df, config):
 
     df_norm = df.copy()
     
-    # Winsorization (去極端值)
+    # Winsorization
     for key, cfg in config.items():
         col = cfg['col']
-        q_low = df[col].quantile(0.05)
-        q_high = df[col].quantile(0.95)
-        df_norm[col] = df[col].clip(lower=q_low, upper=q_high)
-        
-        mn, mx = df_norm[col].min(), df_norm[col].max()
-        denom = mx - mn
-        if denom == 0: df_norm[f'{col}_n'] = 0.5
-        else:
-            if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df_norm[col] - mn) / denom
-            else: df_norm[f'{col}_n'] = (mx - df_norm[col]) / denom
+        if col in df.columns: # 確保欄位存在
+            q_low = df[col].quantile(0.05)
+            q_high = df[col].quantile(0.95)
+            df_norm[col] = df[col].clip(lower=q_low, upper=q_high)
+            
+            mn, mx = df_norm[col].min(), df_norm[col].max()
+            denom = mx - mn
+            if denom == 0: df_norm[f'{col}_n'] = 0.5
+            else:
+                if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df_norm[col] - mn) / denom
+                else: df_norm[f'{col}_n'] = (mx - df_norm[col]) / denom
             
     m = len(df)
     k = 1 / np.log(m) if m > 1 else 0
     weights = {}
     for key, cfg in config.items():
         col = cfg['col']
-        p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum() if df_norm[f'{col}_n'].sum() != 0 else 0
-        e = -k * np.sum(p * np.log(p + 1e-9))
-        weights[key] = 1 - e 
+        if col in df_norm.columns and f'{col}_n' in df_norm.columns:
+            p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum() if df_norm[f'{col}_n'].sum() != 0 else 0
+            e = -k * np.sum(p * np.log(p + 1e-9))
+            weights[key] = 1 - e 
         
     tot = sum(weights.values())
     if tot == 0: fin_w = {k: 1/len(weights) for k in weights}
@@ -456,7 +440,8 @@ def calculate_entropy_score(df, config):
         
     df['Score'] = 0
     for key, cfg in config.items():
-        df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] 
+        if f'{cfg["col"]}_n' in df_norm.columns:
+            df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] 
     df['Score'] = (df['Score']*100).round(1)
     
     return df.sort_values('Score', ascending=False), fin_w, None, df_norm
@@ -482,9 +467,11 @@ def get_radar_data(df_norm_row, config):
     categories = {'技術': [], '籌碼': [], '財報': [], '估值': []}
     for key, cfg in config.items():
         cat = cfg['category']
-        score = df_norm_row[f"{cfg['col']}_n"] * 100
-        categories[cat].append(score)
-    return {k: np.mean(v) for k, v in categories.items()}
+        col_n = f"{cfg['col']}_n"
+        if col_n in df_norm_row:
+            score = df_norm_row[col_n] * 100
+            categories[cat].append(score)
+    return {k: np.mean(v) if v else 0 for k, v in categories.items()}
 
 def plot_radar_chart(row_name, radar_data):
     fig = go.Figure()
@@ -554,8 +541,8 @@ with st.sidebar:
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ AlphaCore 智能量化戰略終端 4.4")
-    st.caption("Entropy Scoring • Factor Radar • PDF Reporting (Expert Edition)")
+    st.title("⚡ AlphaCore 智能量化戰略終端 5.5")
+    st.caption("Entropy Scoring • Factor Radar • PDF Reporting (Institutional Research Edition)")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
          st.metric("Total Scanned", f"{len(st.session_state['raw_data'])} Stocks", delta="Live Update")
@@ -591,14 +578,16 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         top_stocks = res.head(top_n)
 
         st.markdown("### 🏆 Top 10 潛力標的 (Entropy Ranking)")
+        # 【優化】加入 FCF Yield 欄位
         st.dataframe(
-            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'debtToEquity', 'Trend']],
+            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'debtToEquity', 'fcfYield', 'Trend']],
             column_config={
                 "Score": st.column_config.ProgressColumn("Entropy Score", format="%.1f", min_value=0, max_value=100),
                 "close_price": st.column_config.NumberColumn("Price", format="%.2f"),
                 "pegRatio": st.column_config.NumberColumn("PEG", format="%.2f"),
                 "priceToMA60": st.column_config.NumberColumn("MA Bias", format="%.2%"),
                 "debtToEquity": st.column_config.NumberColumn("D/E (Risk)", format="%.2f"),
+                "fcfYield": st.column_config.NumberColumn("FCF Yield %", format="%.2f%%"),
                 "Trend": st.column_config.TextColumn("配置時機 (Actionable Timing)"),
             },
             hide_index=True, use_container_width=True
@@ -630,6 +619,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 'peg': row['pegRatio'],
                                 'beta': row.get('beta', 0),
                                 'debt_eq': row.get('debtToEquity', 'N/A'),
+                                'fcf_yield': f"{row.get('fcfYield', 0):.2f}%",
                                 'ma_bias': f"{row['priceToMA60']:.2%}",
                                 'radar_data': radar,
                                 'analysis': analysis_text
@@ -701,9 +691,14 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                          if not is_analyzed:
                             with st.spinner(f"⚡ AI 正在為您撰寫 {stock_name} 的投資備忘錄..."):
                                 cl_val = get_contract_liabilities_safe(row['full_symbol']) 
+                                # 【專家級優化】注入 FCF 與 負債比 數據給 AI
+                                fcf_val = row.get('fcfYield', 0)
+                                de_val = row.get('debtToEquity', 0)
                                 real_time_data = f"""
                                 - 收盤價: {row['close_price']}
                                 - 合約負債: {cl_val}
+                                - 自由現金流收益率 (FCF Yield): {fcf_val:.2f}%
+                                - 負債權益比 (D/E): {de_val:.2f}
                                 - 因子得分: {radar_data} (滿分100)
                                 - 季線乖離: {row['priceToMA60']:.2%}
                                 """
@@ -719,6 +714,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         'score': row['Score'],
                         'peg': row['pegRatio'],
                         'debt_eq': row.get('debtToEquity', 'N/A'),
+                        'fcf_yield': f"{row.get('fcfYield', 0):.2f}%",
                         'ma_bias': f"{row['priceToMA60']:.2%}",
                         'radar_data': radar_data,
                         'analysis': st.session_state['analysis_results'].get(stock_name, None)
