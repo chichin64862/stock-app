@@ -11,6 +11,7 @@ import json
 import time
 import os
 import io
+import re  # 【新增】引入正規表達式模組，修復 PDF 生成錯誤
 from datetime import datetime
 
 # --- PDF 生成庫檢查 ---
@@ -33,47 +34,71 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 全域視覺優化 ---
+# --- 2. CSS 針對性修復 (解決白底白字問題) ---
 st.markdown("""
 <style>
-    /* 1. 基底：強制全域黑底白字 */
+    /* =========================================
+       1. 全局基底：深色模式
+       ========================================= */
     .stApp { background-color: #0e1117 !important; }
+    
+    /* 預設文字為白色 (針對大多數黑底區域) */
     body, h1, h2, h3, h4, h5, h6, p, div, span, label, li {
         color: #e6e6e6 !important;
         font-family: 'Roboto', sans-serif;
     }
 
-    /* 2. 右上角工具列與選單 (白底黑字) */
-    div[role="menu"] div, div[role="menu"] span, div[role="menu"] label {
-        color: #31333F !important;
+    /* =========================================
+       2. 【痛點修復】DataFrame 右上角配置選單 (那個白色的框框)
+       ========================================= */
+    /* 針對 Glide Data Grid 的 Column Menu */
+    /* 既然它是白底，我們強制把裡面的文字改成【深灰色】，確保看得到 */
+    div[role="menu"] div, 
+    div[role="menu"] span, 
+    div[role="menu"] label {
+        color: #31333F !important; /* 深灰色文字 */
         font-weight: 500 !important;
     }
     
-    /* 3. 下拉選單 (保持黑底) */
+    /* 針對選單內的 Checkbox 標籤 */
+    div[role="menu"] label {
+        color: #31333F !important;
+    }
+
+    /* =========================================
+       3. 【痛點修復】下拉選單 (Selectbox) - 保持黑底白字
+       ========================================= */
+    /* 選單本體 */
     div[data-baseweb="select"] > div {
         background-color: #262730 !important;
         border-color: #4b4b4b !important;
         color: white !important;
     }
+    /* 彈出列表 (Popover) */
     div[data-baseweb="popover"], ul[data-baseweb="menu"] {
-        background-color: #1f2937 !important;
+        background-color: #1f2937 !important; /* 深灰背景 */
         border: 1px solid #4b4b4b !important;
     }
-    div[data-baseweb="popover"] li, div[data-baseweb="popover"] div {
+    /* 選項文字 (維持白色，因為背景是深灰) */
+    div[data-baseweb="popover"] li, 
+    div[data-baseweb="popover"] div {
         color: #e6e6e6 !important;
     }
+    /* 滑鼠懸停 */
     li[role="option"]:hover, li[role="option"][aria-selected="true"] {
         background-color: #238636 !important;
         color: white !important;
     }
 
-    /* 4. 下載按鈕 (深色風格) */
+    /* =========================================
+       4. 【痛點修復】下載按鈕 (Download Button)
+       ========================================= */
     .stDownloadButton button {
         background-color: #1f2937 !important;
         color: #ffffff !important;
         border: 1px solid #238636 !important;
-        white-space: nowrap !important;
-        min-width: 180px !important;
+        white-space: nowrap !important; /* 禁止換行 */
+        min-width: 180px !important; /* 確保寬度足夠 */
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
@@ -82,9 +107,14 @@ st.markdown("""
         border-color: #58a6ff !important;
         color: #58a6ff !important;
     }
-    .stDownloadButton p { color: inherit !important; }
+    .stDownloadButton p {
+        color: inherit !important;
+        font-size: 1rem !important;
+    }
 
-    /* 5. Toolbar */
+    /* =========================================
+       5. DataFrame 工具列 (Toolbar)
+       ========================================= */
     [data-testid="stElementToolbar"] {
         background-color: #262730 !important;
         border: 1px solid #4b4b4b !important;
@@ -97,9 +127,14 @@ st.markdown("""
         background-color: #4b4b4b !important;
     }
 
-    /* 6. 其他 */
+    /* =========================================
+       6. 其他元件
+       ========================================= */
+    /* 輸入框 */
     input { color: #ffffff !important; caret-color: #ffffff !important; }
+    /* 側邊欄 */
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
+    /* 卡片 */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
@@ -107,6 +142,7 @@ st.markdown("""
         border: 1px solid #30363d; 
         margin-bottom: 15px;
     }
+    /* PDF 中心容器 */
     .pdf-center {
         background-color: #1f2937;
         padding: 20px;
@@ -118,7 +154,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. Session State ---
+# --- 3. 初始化 Session State ---
 if 'analysis_results' not in st.session_state: st.session_state['analysis_results'] = {}
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
@@ -136,7 +172,7 @@ proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
 
-# --- 6. Font ---
+# --- 6. 字型下載 ---
 @st.cache_resource
 def register_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -157,7 +193,7 @@ def register_chinese_font():
 
 font_ready = register_chinese_font()
 
-# --- 7. PDF 生成 ---
+# --- 7. PDF 生成引擎 (【關鍵修正】：文字處理邏輯) ---
 def create_pdf(stock_data_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -220,7 +256,19 @@ def create_pdf(stock_data_list):
         analysis = stock.get('analysis')
         if analysis:
             story.append(Paragraph("🤖 Gemini AI 戰略解讀", h3_style))
-            formatted = analysis.replace("\n", "<br/>").replace("**", "<b>").replace("**", "</b>").replace("###", "").replace("#", "")
+            
+            # 【關鍵修復】文字清洗邏輯
+            # 1. 先處理 XML 特殊字元，避免 parser 報錯
+            formatted = analysis.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            
+            # 2. 使用正規表達式處理 **粗體**，確保標籤成對出現
+            # 將 **text** 替換為 <b>text</b>
+            formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', formatted)
+            
+            # 3. 處理換行與標題
+            formatted = formatted.replace("\n", "<br/>")
+            formatted = formatted.replace("### ", "").replace("## ", "").replace("# ", "")
+            
             story.append(Paragraph(formatted, normal_style))
         else:
             story.append(Paragraph("💡 (此份報告僅包含量化數據，尚未執行 AI 深度解讀)", normal_style))
@@ -298,12 +346,10 @@ stock_map, industry_map = get_tw_stock_info()
 # 【專家級優化】指標配置：移除 Profit Margins (共線性)，新增 DebtToEquity (避險)
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
-    # 'Beta': 移除 Beta 以避免與動能策略衝突
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
     'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG', 'category': '估值'},
     'Price To Book': {'col': 'priceToBook', 'direction': '負向', 'name': 'PB比', 'category': '估值'},
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE', 'category': '財報'},
-    # 'Profit Margins': 移除，因與 ROE 高度共線性
     'Debt To Equity': {'col': 'debtToEquity', 'direction': '負向', 'name': '負債權益比', 'category': '財報'},
 }
 
@@ -350,7 +396,7 @@ def fetch_single_stock(ticker):
             'volumeRatio': vol_ratio,
             'priceToBook': info.get('priceToBook', np.nan),
             'returnOnEquity': info.get('returnOnEquity', np.nan), 
-            'debtToEquity': info.get('debtToEquity', np.nan), # 新增指標
+            'debtToEquity': info.get('debtToEquity', np.nan),
         }
     except: return None
 
@@ -373,8 +419,7 @@ def calculate_entropy_score(df, config):
     df = df.dropna().copy()
     if df.empty: return df, None, "No valid data found.", None
     
-    # 【專家級優化】1. 剛性過濾 (Hard Filter)
-    # 過濾掉 ROE < 0 (虧損公司) 或 負債比過高 (> 200, 視產業而定，這裡先從寬)
+    # 剛性過濾 (Hard Filter)
     if 'returnOnEquity' in df.columns:
         df = df[df['returnOnEquity'] > 0]
         
@@ -382,16 +427,13 @@ def calculate_entropy_score(df, config):
 
     df_norm = df.copy()
     
-    # 【專家級優化】2. Winsorization (去極端值)
+    # Winsorization (去極端值)
     for key, cfg in config.items():
         col = cfg['col']
-        # 計算 5% 和 95% 分位數
         q_low = df[col].quantile(0.05)
         q_high = df[col].quantile(0.95)
-        # 將極端值壓縮到邊界
         df_norm[col] = df[col].clip(lower=q_low, upper=q_high)
         
-        # 3. 正常化 (使用去極端值後的數據)
         mn, mx = df_norm[col].min(), df_norm[col].max()
         denom = mx - mn
         if denom == 0: df_norm[f'{col}_n'] = 0.5
@@ -399,7 +441,6 @@ def calculate_entropy_score(df, config):
             if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df_norm[col] - mn) / denom
             else: df_norm[f'{col}_n'] = (mx - df_norm[col]) / denom
             
-    # 熵值法計算權重
     m = len(df)
     k = 1 / np.log(m) if m > 1 else 0
     weights = {}
@@ -410,11 +451,8 @@ def calculate_entropy_score(df, config):
         weights[key] = 1 - e 
         
     tot = sum(weights.values())
-    # 避免權重總和為 0
-    if tot == 0: 
-        fin_w = {k: 1/len(weights) for k in weights}
-    else:
-        fin_w = {k: v/tot for k, v in weights.items()}
+    if tot == 0: fin_w = {k: 1/len(weights) for k in weights}
+    else: fin_w = {k: v/tot for k, v in weights.items()}
         
     df['Score'] = 0
     for key, cfg in config.items():
@@ -516,7 +554,7 @@ with st.sidebar:
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ AlphaCore 智能量化戰略終端 5.0")
+    st.title("⚡ AlphaCore 智能量化戰略終端 4.4")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting (Expert Edition)")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -540,14 +578,13 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
     res, w, err, df_norm = calculate_entropy_score(raw, indicators_config)
     st.session_state['df_norm'] = df_norm 
     
-    # 增加趨勢判定欄位 (Trend)
     def get_trend_label(bias):
         if bias < -0.05: return "🟢 超跌/買點"
         elif bias > 0.15: return "🔴 過熱/賣點"
         else: return "🟡 盤整/持有"
     
     if err:
-        st.error(err) # 顯示剛性過濾錯誤 (例如全被過濾掉)
+        st.error(err)
     else:
         res['Trend'] = res['priceToMA60'].apply(get_trend_label)
         top_n = 10
@@ -581,7 +618,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     bulk_data_final = []
                     for idx, row in res.iterrows():
                         stock_name = f"{row['代號']} {row['名稱']}"
-                        # 注意：經過過濾後，index 仍需對齊
                         if idx in df_norm.index:
                             norm_row = df_norm.loc[idx]
                             radar = get_radar_data(norm_row, indicators_config)
@@ -592,7 +628,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 'price': row['close_price'],
                                 'score': row['Score'],
                                 'peg': row['pegRatio'],
-                                'beta': row.get('beta', 0), # Beta 可能不存在
+                                'beta': row.get('beta', 0),
                                 'debt_eq': row.get('debtToEquity', 'N/A'),
                                 'ma_bias': f"{row['priceToMA60']:.2%}",
                                 'radar_data': radar,
