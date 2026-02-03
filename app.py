@@ -10,7 +10,20 @@ import requests
 import json
 import time
 import os
-from datetime import datetime, timedelta
+import io
+from datetime import datetime
+
+# --- PDF 生成相關庫 ---
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+except ImportError:
+    st.error("⚠️ 缺少 reportlab 套件。請在 requirements.txt 中加入 `reportlab`")
+    st.stop()
 
 # --- 1. 專業版介面設定 ---
 st.set_page_config(
@@ -20,24 +33,51 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 強制修正 ---
+# --- 2. CSS 強制修正 (修復下拉選單看不見的問題) ---
 st.markdown("""
 <style>
+    /* 全局文字顏色修正 */
     body, .stApp, p, h1, h2, h3, h4, h5, h6, span, div {
         color: #e6e6e6 !important;
         font-family: 'Roboto', 'Helvetica Neue', sans-serif;
     }
     .stApp { background-color: #0e1117; }
     [data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
+    
+    /* --- 【關鍵修復】下拉選單與輸入框樣式 --- */
+    /* 設定下拉選單的背景為深色，文字為亮色 */
+    div[data-baseweb="select"] > div {
+        background-color: #21262d !important;
+        color: #e6e6e6 !important;
+        border-color: #30363d !important;
+    }
+    /* 下拉選單彈出層的選項樣式 */
+    div[data-baseweb="popover"] div, li[role="option"] {
+        background-color: #161b22 !important;
+        color: #e6e6e6 !important;
+    }
+    /* 多選框內的標籤 (Tag) */
+    div[data-baseweb="tag"] {
+        background-color: #30363d !important;
+    }
+    /* --- 修復結束 --- */
+
+    /* 能量條樣式 */
+    .progress-label { font-size: 0.85rem; color: #8b949e; margin-bottom: 2px; }
+    .progress-bar-bg { background-color: #30363d; height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
+    .progress-bar-fill { height: 100%; border-radius: 4px; }
+    
+    /* Stock Card */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
         border-radius: 10px; 
         border: 1px solid #30363d; 
         margin-bottom: 15px;
+        transition: transform 0.2s;
     }
+    .stock-card:hover { border-color: #58a6ff; }
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
-    .score-legend { background-color: #1f2937; padding: 10px; border-radius: 5px; font-size: 0.9rem; border-left: 4px solid #a371f7; margin-bottom: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -54,12 +94,101 @@ except Exception:
     st.error("⚠️ 系統偵測不到 API Key！請確認您已在 Streamlit Cloud > Settings > Secrets 中設定 `GEMINI_API_KEY`。")
     st.stop()
 
-# --- 5. 環境設定 ---
+# --- 5. 環境與連線設定 ---
 proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
 
-# --- 6. 模型偵測與呼叫 ---
+# --- 6. 字型下載與註冊 (為 PDF 準備) ---
+@st.cache_resource
+def register_chinese_font():
+    font_path = "NotoSansTC-Regular.ttf"
+    # 如果檔案不存在，從 Google Fonts 下載
+    if not os.path.exists(font_path):
+        url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
+        # 為了簡化，這裡使用一個較小的開源字體連結，或直接使用系統字體如果是在本地
+        # 這裡我們使用一個穩定的連結下載 Firefly Sung (開源黑體) 或類似
+        # 替代方案：下載一個較小的字體檔
+        try:
+            # 使用 wqy-zenhei (文泉驛正黑) 或是 NotoSansTC (較大)
+            # 這裡演示下載一個輕量級字體
+            url = "https://github.com/justfont/open-huninn-font/releases/download/v2.0/jf-openhuninn-2.0.ttf"
+            r = requests.get(url, allow_redirects=True)
+            open(font_path, 'wb').write(r.content)
+        except:
+            pass
+    
+    try:
+        if os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+            return True
+    except:
+        return False
+    return False
+
+font_ready = register_chinese_font()
+
+# --- 7. PDF 生成函數 ---
+def create_pdf(stock_data_list):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
+    story = []
+    
+    # 定義樣式 (支援中文)
+    styles = getSampleStyleSheet()
+    font_name = 'ChineseFont' if font_ready else 'Helvetica'
+    
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, spaceAfter=20, alignment=1)
+    h2_style = ParagraphStyle('Heading2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=15, spaceAfter=10, textColor=colors.HexColor("#2E86C1"))
+    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=16, spaceAfter=10)
+    code_style = ParagraphStyle('Code', parent=styles['Code'], fontName=font_name, fontSize=9, textColor=colors.gray)
+
+    # 標題
+    story.append(Paragraph(f"QuantAlpha 深度投資戰略報告", title_style))
+    story.append(Paragraph(f"生成日期: {datetime.now().strftime('%Y-%m-%d')}", normal_style))
+    story.append(Spacer(1, 20))
+
+    for stock in stock_data_list:
+        name = stock['name']
+        price = stock['price']
+        score = stock['score']
+        analysis = stock['analysis']
+        
+        # 個股標題
+        story.append(Paragraph(f"🎯 {name} (收盤價: {price})", h2_style))
+        
+        # 數據摘要
+        summary_data = [
+            [f"Entropy Score: {score}", f"PEG: {stock.get('peg', 'N/A')}", f"Beta: {stock.get('beta', 'N/A')}"]
+        ]
+        t = Table(summary_data, colWidths=[150, 150, 150])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.whitesmoke),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 15))
+
+        # AI 分析內容 (處理換行)
+        if analysis:
+            # 將 Markdown 的 **粗體** 簡單替換 (ReportLab 支援 <b>)
+            formatted_analysis = analysis.replace("**", "<b>").replace("**", "</b>").replace("\n", "<br/>")
+            story.append(Paragraph(formatted_analysis, normal_style))
+        else:
+            story.append(Paragraph("尚未生成 AI 分析報告。", code_style))
+            
+        story.append(Spacer(1, 30))
+        story.append(Paragraph("_" * 50, normal_style))
+        story.append(Spacer(1, 30))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+# --- 8. 模型呼叫邏輯 ---
 def get_available_model(key):
     default_model = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
@@ -89,7 +218,7 @@ def call_gemini_api(prompt):
     except Exception as e:
         return f"❌ 連線逾時或錯誤: {str(e)}"
 
-# --- 7. 分析提示詞 ---
+# --- 9. 分析提示詞 ---
 HEDGE_FUND_PROMPT = """
 【角色設定】
 你現在是華爾街頂尖的避險基金經理人。請針對 **[STOCK]** 進行深度投資分析。
@@ -106,7 +235,7 @@ HEDGE_FUND_PROMPT = """
 3. 綜合決策: 給出「持有」、「買進」或「觀望」建議。
 """
 
-# --- 8. 數據與清單處理 ---
+# --- 10. 數據處理與爬蟲 ---
 @st.cache_data
 def get_tw_stock_info():
     codes = twstock.codes
@@ -128,53 +257,6 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
-# --- 9. 側邊欄設定 ---
-with st.sidebar:
-    st.title("🎛️ QuantAlpha 控制台")
-    st.markdown("---")
-    
-    scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
-    target_stocks = []
-    
-    if scan_mode == "自行輸入/多選":
-        default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
-        selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
-        target_stocks = selected
-    elif scan_mode == "🔥 熱門策略掃描":
-        strategy = st.selectbox("策略集:", ["台灣50成份股 (大型權值)", "中型100成份股 (成長潛力)", "高股息熱門股 (存股族)", "AI 供應鏈概念", "貨櫃航運三雄"])
-        if strategy == "台灣50成份股 (大型權值)":
-            codes = ["2330", "2454", "2317", "2308", "2382", "2303", "2881", "2882", "2891", "1216", "2002", "1301", "1303", "2603", "3008", "3045", "2912", "5880", "2886", "2892", "2207", "1101", "2357", "2395", "3231", "2379", "3034", "2345", "3711", "2885"]
-            target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
-        elif strategy == "中型100成份股 (成長潛力)":
-            codes = ["2344", "2376", "2383", "2368", "3443", "3661", "3529", "3035", "3037", "3017", "2313", "2324", "2352", "2353", "2356", "2327", "2385", "2408", "2409", "2449", "2451", "2474", "2492", "2498", "2542", "2609", "2610", "2615", "2618"]
-            target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
-        elif strategy == "高股息熱門股 (存股族)":
-            codes = ["2301", "2324", "2352", "2356", "2382", "2385", "2449", "2454", "2603", "3034", "3037", "3044", "3231", "3702", "3711", "4915", "4938", "4958", "5388", "5483", "6176", "6239", "8131"]
-            target_stocks = []
-            for c in codes:
-                if f"{c}.TW" in stock_map: target_stocks.append(stock_map[f"{c}.TW"])
-                elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
-        elif strategy == "AI 供應鏈概念":
-            codes = ["2330", "2317", "2382", "3231", "6669", "3443", "3661", "3035", "2376", "2368", "3017", "2301", "2356", "3037", "2308", "2421", "2454", "3034"]
-            target_stocks = []
-            for c in codes:
-                if f"{c}.TW" in stock_map: target_stocks.append(stock_map[f"{c}.TW"])
-                elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
-        elif strategy == "貨櫃航運三雄":
-            target_stocks = ["2603.TW 長榮", "2609.TW 陽明", "2615.TW 萬海"]
-            
-    elif scan_mode == "🏭 產業類股掃描":
-        all_industries = sorted(list(industry_map.keys()))
-        selected_industry = st.selectbox("選擇產業:", all_industries)
-        if selected_industry:
-            codes = industry_map[selected_industry]
-            target_stocks = [stock_map[c] for c in codes if c in stock_map]
-            
-    st.info(f"已鎖定 {len(target_stocks)} 檔標的")
-    st.markdown("---")
-    run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
-
-# --- 10. 指標與函數 ---
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Beta': {'col': 'beta', 'direction': '負向', 'name': 'Beta係數', 'category': '技術'},
@@ -187,12 +269,8 @@ indicators_config = {
 
 def fetch_single_stock(ticker):
     try:
-        # 【關鍵修復】正確的代碼切割方式
         symbol = ticker.split(' ')[0]
-        
-        # 修正顯示名稱 (避免 5274.TWO 變成 5274O 的 bug)
         display_code = symbol.split('.')[0]
-        
         stock = yf.Ticker(symbol)
         info = stock.info 
         
@@ -220,8 +298,8 @@ def fetch_single_stock(ticker):
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
 
         return {
-            '代號': display_code,  # 用於前端顯示 (如 5274)
-            'full_symbol': symbol, # 【關鍵】完整代碼 (如 5274.TWO)，給畫圖用
+            '代號': display_code,
+            'full_symbol': symbol,
             '名稱': info.get('shortName', symbol),
             'close_price': price, 
             'pegRatio': peg, 
@@ -294,7 +372,6 @@ def get_contract_liabilities_safe(symbol_code):
         else: return "無合約負債數據"
     except: return "讀取失敗"
 
-# --- 輔助函式：繪製雷達圖 ---
 def plot_radar_chart(row, df_norm_row, config):
     categories = {'技術': [], '籌碼': [], '財報': [], '估值': []}
     for key, cfg in config.items():
@@ -339,11 +416,86 @@ def render_factor_bars(radar_data):
         </div>"""
     return html
 
-# --- 11. 儀表板顯示邏輯 ---
+# --- 11. 側邊欄與執行 ---
+with st.sidebar:
+    st.title("🎛️ QuantAlpha 控制台")
+    st.markdown("---")
+    
+    scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
+    target_stocks = []
+    
+    if scan_mode == "自行輸入/多選":
+        default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
+        selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
+        target_stocks = selected
+    elif scan_mode == "🔥 熱門策略掃描":
+        strategy = st.selectbox("策略集:", ["台灣50成份股 (大型權值)", "中型100成份股 (成長潛力)", "高股息熱門股 (存股族)", "AI 供應鏈概念", "貨櫃航運三雄"])
+        if strategy == "台灣50成份股 (大型權值)":
+            codes = ["2330", "2454", "2317", "2308", "2382", "2303", "2881", "2882", "2891", "1216", "2002", "1301", "1303", "2603", "3008", "3045", "2912", "5880", "2886", "2892", "2207", "1101", "2357", "2395", "3231", "2379", "3034", "2345", "3711", "2885"]
+            target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
+        elif strategy == "中型100成份股 (成長潛力)":
+            codes = ["2344", "2376", "2383", "2368", "3443", "3661", "3529", "3035", "3037", "3017", "2313", "2324", "2352", "2353", "2356", "2327", "2385", "2408", "2409", "2449", "2451", "2474", "2492", "2498", "2542", "2609", "2610", "2615", "2618"]
+            target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
+        elif strategy == "高股息熱門股 (存股族)":
+            codes = ["2301", "2324", "2352", "2356", "2382", "2385", "2449", "2454", "2603", "3034", "3037", "3044", "3231", "3702", "3711", "4915", "4938", "4958", "5388", "5483", "6176", "6239", "8131"]
+            target_stocks = []
+            for c in codes:
+                if f"{c}.TW" in stock_map: target_stocks.append(stock_map[f"{c}.TW"])
+                elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
+        elif strategy == "AI 供應鏈概念":
+            codes = ["2330", "2317", "2382", "3231", "6669", "3443", "3661", "3035", "2376", "2368", "3017", "2301", "2356", "3037", "2308", "2421", "2454", "3034"]
+            target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
+        elif strategy == "貨櫃航運三雄":
+            target_stocks = ["2603.TW 長榮", "2609.TW 陽明", "2615.TW 萬海"]
+            
+    elif scan_mode == "🏭 產業類股掃描":
+        all_industries = sorted(list(industry_map.keys()))
+        selected_industry = st.selectbox("選擇產業:", all_industries)
+        if selected_industry:
+            codes = industry_map[selected_industry]
+            target_stocks = [stock_map[c] for c in codes if c in stock_map]
+            
+    st.info(f"已鎖定 {len(target_stocks)} 檔標的")
+    st.markdown("---")
+    run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
+
+    # --- 新增：批次下載按鈕 ---
+    if st.session_state['scan_finished'] and len(st.session_state['analysis_results']) > 0:
+        st.markdown("---")
+        st.markdown("📥 **報告下載中心**")
+        
+        # 準備全部已分析的數據
+        bulk_data = []
+        raw = st.session_state['raw_data']
+        for stock_name, analysis in st.session_state['analysis_results'].items():
+            # 找到對應的 raw data 
+            # stock_name 格式為 "2330 台積電"
+            code = stock_name.split(" ")[0]
+            row = raw[raw['代號'] == code].iloc[0]
+            bulk_data.append({
+                'name': stock_name,
+                'price': row['close_price'],
+                'score': row['Score'],
+                'peg': row['pegRatio'],
+                'beta': row['beta'],
+                'analysis': analysis
+            })
+        
+        if bulk_data:
+            pdf_data = create_pdf(bulk_data)
+            st.download_button(
+                label="📄 下載所有分析報告 (PDF)",
+                data=pdf_data,
+                file_name=f"QuantAlpha_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+
+# --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ QuantAlpha 戰略儀表板 2.0")
-    st.caption("Entropy Scoring • Factor Radar • Actionable Timing")
+    st.title("⚡ QuantAlpha 戰略儀表板 2.1")
+    st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
          st.metric("Total Scanned", f"{len(st.session_state['raw_data'])} Stocks", delta="Live Update")
@@ -366,8 +518,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
     res, w, err, df_norm = calculate_entropy_score(raw, indicators_config)
     st.session_state['df_norm'] = df_norm
     
-    if err: 
-        st.error(err)
+    if err: st.error(err)
     else:
         top_n = 10
         top_stocks = res.head(top_n)
@@ -379,7 +530,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 "Score": st.column_config.ProgressColumn("Entropy Score", format="%.1f", min_value=0, max_value=100),
                 "close_price": st.column_config.NumberColumn("Price", format="%.2f"),
                 "pegRatio": st.column_config.NumberColumn("PEG", format="%.2f"),
-                "priceToMA60": st.column_config.NumberColumn("MA Bias", format="%.2%"),
             },
             hide_index=True, use_container_width=True
         )
@@ -403,14 +553,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 with c2:
                     st.markdown("**因子貢獻解析**")
                     st.markdown(render_factor_bars(radar_data), unsafe_allow_html=True)
-                    best_factor = max(radar_data, key=radar_data.get)
-                    st.markdown(f"<div style='margin-top:10px; font-size:0.9rem; color:#00e676;'>🚀 主力優勢: <b>{best_factor}</b></div>", unsafe_allow_html=True)
                 
                 with c3:
                     st.markdown("**配置時機判定 (Trend vs Value)**")
-                    # 【修復】使用 full_symbol (如 5274.TWO) 來抓資料，確保一定抓得到
                     ticker_for_chart = row['full_symbol']
-                    
                     try:
                         stock_hist = yf.Ticker(ticker_for_chart).history(period="6mo")
                         if not stock_hist.empty:
@@ -430,16 +576,16 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                             )
                             st.plotly_chart(fig_trend, use_container_width=True)
                         else:
-                            st.warning(f"⚠️ 無法取得 {ticker_for_chart} 的歷史數據 (YFinance 回傳空值)")
+                            st.warning("⚠️ 無法取得歷史數據")
                     except Exception as e:
-                        st.error(f"圖表載入失敗: {e}")
+                        st.error("圖表載入失敗")
 
-                col_btn, _ = st.columns([1, 4])
+                col_btn, col_dl = st.columns([2, 1])
                 with col_btn:
                      if st.button(f"✨ 生成分析報告", key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
                          if not is_analyzed:
                             with st.spinner(f"⚡ AI 正在為您撰寫 {stock_name} 的投資備忘錄..."):
-                                cl_val = get_contract_liabilities_safe(row['full_symbol']) # 這裡也改用 full_symbol
+                                cl_val = get_contract_liabilities_safe(row['full_symbol']) 
                                 real_time_data = f"""
                                 - 收盤價: {row['close_price']}
                                 - 合約負債: {cl_val}
@@ -451,6 +597,28 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 st.session_state['analysis_results'][stock_name] = result
                                 st.rerun()
                 
+                # 個股 PDF 下載按鈕
+                with col_dl:
+                    if is_analyzed:
+                        # 準備單一股票數據
+                        single_stock_data = [{
+                            'name': stock_name,
+                            'price': row['close_price'],
+                            'score': row['Score'],
+                            'peg': row['pegRatio'],
+                            'beta': row['beta'],
+                            'analysis': st.session_state['analysis_results'][stock_name]
+                        }]
+                        pdf_data = create_pdf(single_stock_data)
+                        st.download_button(
+                            label="📥 下載報告",
+                            data=pdf_data,
+                            file_name=f"{stock_name}_Report.pdf",
+                            mime="application/pdf",
+                            key=f"dl_{i}",
+                            use_container_width=True
+                        )
+
                 if is_analyzed:
                     st.markdown("<div class='ai-header'>🏛️ Hedge Fund Manager Insight</div>", unsafe_allow_html=True)
                     st.markdown(st.session_state['analysis_results'][stock_name])
