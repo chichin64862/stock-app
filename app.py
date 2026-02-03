@@ -23,65 +23,69 @@ if 'raw_data' not in st.session_state:
 if 'scan_finished' not in st.session_state:
     st.session_state['scan_finished'] = False
 
-# --- 1. 設定 Gemini API (終極測試：強制寫死) ---
-# 既然這把鑰匙在 main_app.py 能用，我們就直接貼在這裡，避開 Secrets 所有可能的讀取錯誤
-# 請不要修改這行，直接用這把鑰匙跑跑看
-api_key = "AIzaSyCGDrlpjbfUFejbGNWbrmLTkb-H-c1BYVM"
+# --- 1. 安全讀取 API Key (從 Secrets) ---
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    st.error("⚠️ 系統偵測不到 API Key！請確認您已在 Streamlit Cloud > Settings > Secrets 中設定 `GEMINI_API_KEY`。")
+    st.stop()
 
-# --- 2. Proxy 設定 (完全復刻 main_app.py) ---
+# --- 2. 環境設定 (Proxy 與 SSL) ---
+# 這是讓 main_app.py 成功的關鍵設定
 proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
 
-# 【核心優化】完全復刻 main_app.py 的請求邏輯
+# --- 3. 核心功能：自動偵測可用模型 ---
+# 避免因為猜錯模型名稱導致 404
+def get_available_model(key):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+    try:
+        # 使用 verify=False 繞過可能的 SSL 憑證問題
+        response = requests.get(url, proxies=proxies, timeout=10, verify=False)
+        if response.status_code == 200:
+            data = response.json()
+            for m in data.get('models', []):
+                # 優先尋找支援內容生成的 Flash 或 Pro 模型
+                if 'generateContent' in m.get('supportedGenerationMethods', []):
+                    m_name = m['name'].replace('models/', '')
+                    if 'flash' in m_name: return m_name
+            # 如果沒找到 Flash，找 Pro
+            for m in data.get('models', []):
+                if 'generateContent' in m.get('supportedGenerationMethods', []) and 'pro' in m['name']:
+                    return m['name'].replace('models/', '')
+    except:
+        pass
+    # 預設備案
+    return "gemini-1.5-flash"
+
+# --- 4. 呼叫 Gemini API (REST 方式) ---
 def call_gemini_api(prompt):
-    # 使用 main_app.py 證實可用的模型清單
-    model_chain = [
-        'gemini-1.5-flash',      # 首選
-        'gemini-1.5-pro',        # 次選
-        'gemini-pro',            # 保底
-    ]
+    # 自動選擇當前鑰匙可用的模型
+    target_model = get_available_model(api_key)
     
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     data = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2}
     }
     
-    error_log = []
-    
-    for model_name in model_chain:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    try:
+        # 關鍵：加入 verify=False 以符合您的環境需求
+        response = requests.post(url, headers=headers, json=data, proxies=proxies, timeout=60, verify=False)
         
-        try:
-            # 【關鍵】加入 verify=False，這在 main_app.py 裡有用到，可能跟您的環境憑證有關
-            # 雖然不安全，但為了能跑，我們先加上去
-            response = requests.post(url, headers=headers, json=data, proxies=proxies, timeout=60, verify=False)
+        if response.status_code == 200:
+            return response.json()['candidates'][0]['content']['parts'][0]['text']
+        else:
+            try:
+                err_msg = response.json().get('error', {}).get('message', response.text)
+            except:
+                err_msg = response.text
+            return f"❌ 分析失敗 (模型: {target_model})\n代碼: {response.status_code}\n訊息: {err_msg}"
             
-            if response.status_code == 200:
-                return response.json()['candidates'][0]['content']['parts'][0]['text']
-            else:
-                try:
-                    err_json = response.json()
-                    err_msg = err_json.get('error', {}).get('message', response.text)
-                    status_code = response.status_code
-                except:
-                    err_msg = response.text
-                    status_code = response.status_code
-                
-                log_entry = f"❌ {model_name} (Status {status_code}): {err_msg}"
-                print(log_entry)
-                error_log.append(log_entry)
-                time.sleep(1)
-                continue
-                
-        except Exception as e:
-            log_entry = f"❌ {model_name} (連線錯誤): {str(e)}"
-            error_log.append(log_entry)
-            continue
-
-    full_report = "\n\n".join(error_log)
-    return f"⚠️ AI 分析失敗。\n使用的鑰匙：{api_key[:5]}...{api_key[-5:]}\n\n🔍 **錯誤診斷：**\n{full_report}"
+    except Exception as e:
+        return f"❌ 連線錯誤: {str(e)}"
 
 # --- 定義分析提示詞 ---
 HEDGE_FUND_PROMPT = """
@@ -99,7 +103,7 @@ HEDGE_FUND_PROMPT = """
 6. 總結與實戰建議: 給出空手者「安全買點」與持股者「停利停損點」。風險提示。
 """
 
-# --- 2. 數據與清單處理 ---
+# --- 5. 數據與清單處理 ---
 @st.cache_data
 def get_tw_stock_info():
     codes = twstock.codes
@@ -121,7 +125,7 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
-# --- 3. 側邊欄：掃描模式選擇 ---
+# --- 6. 側邊欄：掃描模式選擇 ---
 with st.sidebar:
     st.header("🎛️ 掃描控制台")
     scan_mode = st.radio("選股模式：", ["自行輸入/多選", "🔥 熱門策略掃描", "🏭 產業類股掃描"])
@@ -169,7 +173,7 @@ with st.sidebar:
     
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
-# --- 4. 指標與函數 ---
+# --- 7. 指標與函數 ---
 indicators_config = {
     'PEG Ratio': {'col': 'pegRatio', 'direction': '負向', 'name': 'PEG (估值成長比)'},
     'ROE': {'col': 'returnOnEquity', 'direction': '正向', 'name': 'ROE'},
