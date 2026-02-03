@@ -33,94 +33,78 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 全域視覺優化 (High Contrast Dark Mode) ---
+# --- 2. CSS 終極修復 (針對 Toolbar, Button, Tooltip) ---
 st.markdown("""
 <style>
-    /* 1. 基底：強制全域黑底白字 */
-    .stApp {
-        background-color: #0e1117;
-    }
-    h1, h2, h3, h4, h5, h6, p, div, span, label, li {
+    /* 1. 基底設定 */
+    .stApp { background-color: #0e1117; }
+    body, p, h1, h2, h3, h4, h5, h6, span, div, label, li {
         color: #e6e6e6 !important;
         font-family: 'Roboto', sans-serif;
     }
 
-    /* 2. 【核心修復】表格工具列 (右上角) */
+    /* 2. 【修復】DataFrame 右上角工具列 (Toolbar) */
     [data-testid="stElementToolbar"] {
-        background-color: #262730 !important; /* 深灰背景 */
+        background-color: #262730 !important;
         border: 1px solid #4b4b4b !important;
-        border-radius: 6px !important;
-        opacity: 1 !important; /* 確保不透明 */
-        z-index: 1000 !important;
+        border-radius: 8px !important;
+        opacity: 1 !important;
+        z-index: 100 !important;
     }
     [data-testid="stElementToolbar"] button {
+        color: #ffffff !important;
         border: none !important;
         background: transparent !important;
     }
-    /* 強制圖示變白 */
     [data-testid="stElementToolbar"] svg {
         fill: #ffffff !important;
-        color: #ffffff !important;
+        stroke: #ffffff !important;
     }
-    /* 滑鼠懸停變色 */
-    [data-testid="stElementToolbar"] button:hover {
-        background-color: #4b4b4b !important;
+    [data-testid="stElementToolbar"]:hover {
+        border-color: #58a6ff !important;
     }
 
-    /* 3. 【核心修復】下載按鈕 (stDownloadButton) */
-    /* 修正白底白字問題，改為深灰底白字 */
-    .stDownloadButton > button {
-        background-color: #262730 !important;
+    /* 3. 【修復】DataFrame 的 Popup 選單 (如 Show/hide columns) */
+    div[role="tooltip"], div[data-baseweb="popover"] {
+        background-color: #1f2937 !important;
         color: #ffffff !important;
         border: 1px solid #4b4b4b !important;
-        transition: all 0.3s ease;
-    }
-    .stDownloadButton > button:hover {
-        border-color: #58a6ff !important;
-        color: #58a6ff !important;
-        background-color: #1f1f1f !important;
     }
     
-    /* 4. 普通按鈕 (生成分析) */
-    .stButton > button {
-        background-color: #238636 !important; /* 綠色 */
-        color: white !important;
-        border: none !important;
+    /* 4. 【修復】下載按鈕 (stDownloadButton) */
+    /* 強制覆蓋 Streamlit 預設樣式 */
+    [data-testid="stDownloadButton"] button {
+        background-color: #1f2937 !important;
+        color: #ffffff !important;
+        border: 1px solid #238636 !important; /* 綠色邊框 */
+        border-radius: 6px !important;
+        font-weight: bold !important;
+        transition: all 0.2s ease-in-out !important;
     }
-    .stButton > button:hover {
-        background-color: #2ea043 !important;
+    [data-testid="stDownloadButton"] button:hover {
+        background-color: #238636 !important;
+        color: #ffffff !important;
+        border-color: #2ea043 !important;
+        box-shadow: 0 0 8px rgba(35, 134, 54, 0.5) !important;
+    }
+    [data-testid="stDownloadButton"] button p {
+        color: #ffffff !important; /* 確保按鈕內文字也是白色 */
     }
 
-    /* 5. 輸入框與下拉選單 (Input Fields) */
+    /* 5. 搜尋輸入框與下拉選單 */
     div[data-baseweb="select"] > div {
         background-color: #21262d !important;
         border-color: #30363d !important;
-        color: white !important;
     }
     input {
         color: #ffffff !important;
         caret-color: #ffffff !important;
     }
-    /* 下拉選單彈出層 */
-    div[data-baseweb="popover"] div {
-        background-color: #161b22 !important;
-        color: #e6e6e6 !important;
-    }
-    div[data-baseweb="popover"] li:hover {
-        background-color: #30363d !important;
-    }
-    /* 多選標籤 */
     div[data-baseweb="tag"] {
         background-color: #30363d !important;
     }
 
-    /* 6. 側邊欄 */
-    [data-testid="stSidebar"] {
-        background-color: #161b22 !important;
-        border-right: 1px solid #30363d;
-    }
-
-    /* 7. 卡片樣式 */
+    /* 6. 卡片樣式 */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
@@ -128,11 +112,15 @@ st.markdown("""
         border: 1px solid #30363d; 
         margin-bottom: 15px;
     }
-    
-    /* 8. 表格樣式微調 */
-    [data-testid="stDataFrame"] {
-        border: 1px solid #30363d;
+    .pdf-center {
+        background-color: #161b22;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #238636;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
     }
+    .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -245,7 +233,7 @@ def create_pdf(stock_data_list):
             formatted = analysis.replace("\n", "<br/>").replace("**", "<b>").replace("**", "</b>").replace("###", "").replace("#", "")
             story.append(Paragraph(formatted, normal_style))
         else:
-            story.append(Paragraph("💡 (此份報告僅包含量化數據，尚未執行 AI 深度解讀)", normal_style))
+            story.append(Paragraph("💡 (此份報告為量化數據快照，詳細 AI 解讀請在網頁上點擊生成後重新下載)", normal_style))
             
     try: doc.build(story)
     except Exception as e:
@@ -501,10 +489,56 @@ with st.sidebar:
     st.markdown("---")
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
+    # --- 批次下載 PDF (基本數據版) ---
+    if st.session_state['scan_finished'] and st.session_state['df_norm'] is not None:
+        st.markdown("---")
+        st.markdown("### 📥 報告下載中心")
+        
+        with st.container():
+            st.markdown('<div class="pdf-center">', unsafe_allow_html=True)
+            
+            # 數據準備
+            bulk_data = []
+            raw = st.session_state['raw_data']
+            res, _, _, _ = calculate_entropy_score(raw, indicators_config)
+            df_norm = st.session_state['df_norm']
+            
+            for idx, row in res.iterrows(): 
+                stock_name = f"{row['代號']} {row['名稱']}"
+                norm_row = df_norm.loc[idx] 
+                radar = get_radar_data(norm_row, indicators_config)
+                analysis_text = st.session_state['analysis_results'].get(stock_name, None)
+                
+                bulk_data.append({
+                    'name': stock_name,
+                    'price': row['close_price'],
+                    'score': row['Score'],
+                    'peg': row['pegRatio'],
+                    'beta': row['beta'],
+                    'ma_bias': f"{row['priceToMA60']:.2%}",
+                    'radar_data': radar,
+                    'analysis': analysis_text
+                })
+            
+            if bulk_data:
+                col_info, col_dl = st.columns([3, 1])
+                with col_info:
+                    st.success(f"✅ 已準備 {len(bulk_data)} 份報告 (包含基礎量化數據)。若您需要 AI 深度觀點，請先點擊下方各股的「生成分析」按鈕後，再次點擊此處下載。")
+                with col_dl:
+                    pdf_data = create_pdf(bulk_data)
+                    st.download_button(
+                        label="📑 下載全部報告 (PDF)",
+                        data=pdf_data,
+                        file_name=f"QuantAlpha_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+            st.markdown('</div>', unsafe_allow_html=True)
+
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ QuantAlpha 戰略儀表板 3.2")
+    st.title("⚡ QuantAlpha 戰略儀表板 3.3")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -526,7 +560,7 @@ if run_btn:
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     raw = st.session_state['raw_data']
     res, w, err, df_norm = calculate_entropy_score(raw, indicators_config)
-    st.session_state['df_norm'] = df_norm # 儲存供雷達圖與 PDF 使用
+    st.session_state['df_norm'] = df_norm 
     
     if err: st.error(err)
     else:
@@ -545,49 +579,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         )
 
         st.markdown("---")
-        
-        # --- 全局下載按鈕 (PDF 中心) ---
-        st.markdown("### 📥 戰略報告下載中心 (All-in-One Reports)")
-        
-        with st.container():
-            st.markdown('<div class="pdf-center">', unsafe_allow_html=True)
-            
-            # 直接準備數據 (不論有無 AI 分析)
-            if len(res) > 0:
-                col_info, col_main_dl = st.columns([3, 1])
-                with col_info:
-                    st.success(f"✅ 已準備 {len(res)} 份量化數據報告。若有點擊 AI 分析，內容將自動更新。")
-                with col_main_dl:
-                    # 重新生成 PDF 數據，確保包含最新 AI 內容
-                    bulk_data_final = []
-                    for idx, row in res.iterrows():
-                        stock_name = f"{row['代號']} {row['名稱']}"
-                        norm_row = df_norm.loc[idx]
-                        radar = get_radar_data(norm_row, indicators_config)
-                        analysis_text = st.session_state['analysis_results'].get(stock_name, None)
-                        
-                        bulk_data_final.append({
-                            'name': stock_name,
-                            'price': row['close_price'],
-                            'score': row['Score'],
-                            'peg': row['pegRatio'],
-                            'beta': row['beta'],
-                            'ma_bias': f"{row['priceToMA60']:.2%}",
-                            'radar_data': radar,
-                            'analysis': analysis_text
-                        })
-                    
-                    pdf_data_final = create_pdf(bulk_data_final)
-                    st.download_button(
-                        label="📑 下載全部報告 (PDF)",
-                        data=pdf_data_final,
-                        file_name=f"QuantAlpha_Full_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        st.markdown("---")
         st.markdown("### 🎯 深度戰略分析 (Strategic Deep Dive)")
         
         for i, (index, row) in enumerate(top_stocks.iterrows()):
@@ -599,7 +590,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 c1, c2, c3 = st.columns([1.5, 1.2, 2])
                 
-                # 計算雷達圖數據
                 norm_row = df_norm.loc[index]
                 radar_data = get_radar_data(norm_row, indicators_config)
                 
@@ -656,7 +646,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 # 個股 PDF 下載 (永遠顯示)
                 with col_dl:
-                    # 準備這檔股票的數據
                     single_data = [{
                         'name': stock_name,
                         'price': row['close_price'],
@@ -665,7 +654,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         'beta': row['beta'],
                         'ma_bias': f"{row['priceToMA60']:.2%}",
                         'radar_data': radar_data,
-                        'analysis': st.session_state['analysis_results'].get(stock_name, None) # 可能為 None
+                        'analysis': st.session_state['analysis_results'].get(stock_name, None)
                     }]
                     pdf_data = create_pdf(single_data)
                     st.download_button(
