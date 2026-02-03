@@ -13,6 +13,8 @@ import os
 import io
 import re
 from datetime import datetime
+import matplotlib.pyplot as plt # 【新增】用於生成 PDF 穩定圖表
+from math import pi
 
 # --- PDF 生成庫檢查 ---
 try:
@@ -25,12 +27,6 @@ try:
 except ImportError:
     st.error("⚠️ 缺少 reportlab 套件。請在 requirements.txt 中加入 `reportlab`")
     st.stop()
-
-# --- Kaleido 檢查 (用於圖表轉圖片) ---
-try:
-    import kaleido
-except ImportError:
-    st.warning("⚠️ 缺少 kaleido 套件。PDF 將無法包含圖表。請在 requirements.txt 中加入 `kaleido`")
 
 # --- 1. 介面設定 ---
 st.set_page_config(
@@ -174,8 +170,78 @@ def register_chinese_font():
 
 font_ready = register_chinese_font()
 
-# --- 7. 圖表繪製函數 (獨立出來供 UI 與 PDF 共用) ---
-def plot_radar_chart(row_name, radar_data):
+# --- 7. Matplotlib 靜態繪圖函數 (專供 PDF 使用) ---
+def generate_radar_img_mpl(radar_data):
+    try:
+        categories = list(radar_data.keys())
+        values = list(radar_data.values())
+        
+        # 閉合雷達圖
+        values += values[:1]
+        N = len(categories)
+        angles = [n / float(N) * 2 * pi for n in range(N)]
+        angles += angles[:1]
+        
+        # 設定中文字型 (若有支援，否則用預設避免亂碼)
+        plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans'] 
+        
+        fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
+        
+        # 繪圖
+        ax.plot(angles, values, linewidth=2, linestyle='solid', color='#00e676')
+        ax.fill(angles, values, '#00e676', alpha=0.25)
+        
+        # 標籤
+        plt.xticks(angles[:-1], categories, color='black', size=10)
+        ax.set_rlabel_position(0)
+        plt.yticks([25, 50, 75], ["25", "50", "75"], color="grey", size=7)
+        plt.ylim(0, 100)
+        
+        # 存檔到緩衝區
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', transparent=True)
+        buf.seek(0)
+        plt.close(fig) # 關閉釋放記憶體
+        return buf
+    except Exception as e:
+        return None
+
+def generate_trend_img_mpl(full_symbol, ma_bias):
+    try:
+        stock_hist = yf.Ticker(full_symbol).history(period="6mo")
+        if stock_hist.empty: return None
+        
+        # 準備數據
+        dates = stock_hist.index
+        prices = stock_hist['Close']
+        
+        fig, ax = plt.subplots(figsize=(5, 3))
+        
+        # 繪製趨勢線
+        ax.plot(dates, prices, color='#29b6f6', linewidth=2)
+        
+        # 標示最新價
+        ax.scatter(dates[-1], prices.iloc[-1], color='#00e676', s=50, zorder=5)
+        
+        # 標題與樣式
+        trend_status = "Overheated" if ma_bias > 0.15 else ("Value Zone" if ma_bias < -0.05 else "Momentum")
+        ax.set_title(f"Trend: {trend_status}", color='black', fontsize=12)
+        
+        # 網格與邊框
+        ax.grid(True, linestyle='--', alpha=0.3)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        
+        # 存檔
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', transparent=True)
+        buf.seek(0)
+        plt.close(fig)
+        return buf
+    except: return None
+
+# --- 8. UI 互動式繪圖函數 (Plotly) ---
+def plot_radar_chart_ui(row_name, radar_data):
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
         r=list(radar_data.values()), theta=list(radar_data.keys()),
@@ -188,7 +254,7 @@ def plot_radar_chart(row_name, radar_data):
     )
     return fig
 
-def plot_trend_chart(full_symbol, ma_bias):
+def plot_trend_chart_ui(full_symbol, ma_bias):
     try:
         stock_hist = yf.Ticker(full_symbol).history(period="6mo")
         if stock_hist.empty: return None
@@ -211,7 +277,7 @@ def plot_trend_chart(full_symbol, ma_bias):
         return fig_trend
     except: return None
 
-# --- 8. PDF 生成引擎 (含圖表) ---
+# --- 9. PDF 生成引擎 ---
 def create_pdf(stock_data_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -264,43 +330,32 @@ def create_pdf(stock_data_list):
         story.append(t)
         story.append(Spacer(1, 15))
 
-        # --- 【關鍵功能】圖表轉圖片並插入 PDF ---
+        # --- 【關鍵修復】使用 Matplotlib 產生靜態圖表並插入 PDF ---
         radar = stock.get('radar_data', {})
         ma_bias_val = float(stock.get('ma_bias', '0').strip('%')) / 100
-        
-        # 1. 產生 Plotly 圖表物件
-        fig_radar = plot_radar_chart(name, radar)
-        # 為了 PDF 顯示，調整顏色為深色字體
-        fig_radar.update_layout(paper_bgcolor='white', font=dict(color='black'))
-        fig_radar.update_polars(bgcolor='#f0f2f6', radialaxis=dict(color='black'))
-        
-        fig_trend = plot_trend_chart(stock['full_symbol'], ma_bias_val)
+        full_symbol = stock.get('full_symbol', '')
         
         charts_row = []
-        try:
-            # 2. 轉為靜態圖片 (需要 kaleido)
-            if fig_radar:
-                img_bytes_radar = fig_radar.to_image(format="png", width=300, height=250)
-                charts_row.append(Image(io.BytesIO(img_bytes_radar), width=200, height=160))
+        
+        # 1. 產生雷達圖 (Matplotlib)
+        radar_buf = generate_radar_img_mpl(radar)
+        if radar_buf:
+            charts_row.append(Image(radar_buf, width=200, height=200))
             
-            if fig_trend:
-                # 調整趨勢圖顏色以適應白底 PDF
-                fig_trend.update_layout(paper_bgcolor='white', plot_bgcolor='white', font=dict(color='black'))
-                fig_trend.update_xaxes(showgrid=False, color='black')
-                fig_trend.update_yaxes(showgrid=True, gridcolor='#eee', color='black')
-                
-                img_bytes_trend = fig_trend.to_image(format="png", width=300, height=250)
-                charts_row.append(Image(io.BytesIO(img_bytes_trend), width=200, height=160))
-                
-            # 3. 放入表格並排顯示
-            if charts_row:
-                story.append(Paragraph("📈 戰略因子與趨勢分析", h3_style))
-                c_table = Table([charts_row], colWidths=[230, 230])
-                c_table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'TOP')]))
-                story.append(c_table)
-                story.append(Spacer(1, 10))
-        except Exception as e:
-            story.append(Paragraph(f"(圖表生成失敗: 請確認已安裝 kaleido 套件)", normal_style))
+        # 2. 產生趨勢圖 (Matplotlib)
+        trend_buf = generate_trend_img_mpl(full_symbol, ma_bias_val)
+        if trend_buf:
+            charts_row.append(Image(trend_buf, width=250, height=150))
+            
+        # 3. 放入表格並排顯示
+        if charts_row:
+            story.append(Paragraph("📈 戰略因子與趨勢分析", h3_style))
+            # 根據圖表數量調整寬度
+            col_w = 460 / len(charts_row)
+            c_table = Table([charts_row], colWidths=[col_w] * len(charts_row))
+            c_table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
+            story.append(c_table)
+            story.append(Spacer(1, 10))
 
         # --- AI 分析 ---
         analysis = stock.get('analysis')
@@ -322,7 +377,7 @@ def create_pdf(stock_data_list):
     buffer.seek(0)
     return buffer
 
-# --- 9. Gemini API ---
+# --- 10. Gemini API ---
 def get_available_model(key):
     default_model = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
@@ -371,7 +426,7 @@ HEDGE_FUND_PROMPT = """
 [DATA_CONTEXT]
 """
 
-# --- 10. 數據處理 ---
+# --- 11. 數據處理 ---
 @st.cache_data
 def get_tw_stock_info():
     codes = twstock.codes
@@ -557,44 +612,7 @@ def calculate_entropy_score(df, config):
     
     return df.sort_values('Score', ascending=False), fin_w, None, df_norm
 
-def get_contract_liabilities_safe(symbol_code):
-    try:
-        if not symbol_code.endswith('.TW') and not symbol_code.endswith('.TWO'): symbol_code += '.TW'
-        stock = yf.Ticker(symbol_code)
-        bs = stock.balance_sheet
-        if bs.empty: return "無財報數據"
-        target_keys = ['Contract Liabilities', 'Deferred Revenue']
-        val = None
-        for key in target_keys:
-            matches = [k for k in bs.index if key in k]
-            if matches:
-                val = bs.loc[matches[0]].iloc[0]
-                break
-        if val is not None and not pd.isna(val): return f"{val / 100000000:.2f} 億元"
-        else: return "無合約負債數據"
-    except: return "讀取失敗"
-
-def get_radar_data(df_norm_row, config):
-    categories = {'技術': [], '籌碼': [], '財報': [], '估值': []}
-    for key, cfg in config.items():
-        cat = cfg['category']
-        col_n = f"{cfg['col']}_n"
-        if col_n in df_norm_row:
-            score = df_norm_row[col_n] * 100
-            categories[cat].append(score)
-    return {k: np.mean(v) if v else 0 for k, v in categories.items()}
-
-def render_factor_bars(radar_data):
-    html = ""
-    colors = {'技術': '#29b6f6', '籌碼': '#ab47bc', '財報': '#ffca28', '估值': '#ef5350'}
-    for cat, score in radar_data.items():
-        color = colors.get(cat, '#8b949e')
-        blocks = int(score / 10)
-        visual_bar = "■" * blocks + "░" * (10 - blocks)
-        html += f"""<div style="margin-bottom: 8px;"><div style="display:flex; justify-content:space-between; font-size:0.85rem; color:#e6e6e6;"><span><span style="color:{color};">●</span> {cat}</span><span>{score:.0f}%</span></div><div style="font-family: monospace; color:{color}; letter-spacing: 2px;">{visual_bar}</div></div>"""
-    return html
-
-# --- 11. 側邊欄與執行 ---
+# --- 12. 主儀表板與流程 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
     st.markdown("---")
@@ -642,7 +660,6 @@ with st.sidebar:
     st.markdown("---")
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
-# --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
     st.title("⚡ 熵值決策選股及AI深度分析平台")
@@ -751,7 +768,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 'radar_data': radar,
                                 'analysis': analysis_text,
                                 'action': row['Action Plan'],
-                                'full_symbol': row['full_symbol'] # 傳入完整代號供圖表使用
+                                'full_symbol': row['full_symbol']
                             })
                     
                     if bulk_data_final:
@@ -782,7 +799,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     radar_data = get_radar_data(norm_row, indicators_config)
                 
                     with c1:
-                        fig_radar = plot_radar_chart(row['名稱'], radar_data)
+                        # 這裡使用 UI 專用的 Plotly 繪圖
+                        fig_radar = plot_radar_chart_ui(row['名稱'], radar_data)
                         st.plotly_chart(fig_radar, use_container_width=True)
                     
                     with c2:
@@ -791,7 +809,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 with c3:
                     st.markdown("**配置時機判定 (Trend vs Value)**")
-                    fig_trend = plot_trend_chart(row['full_symbol'], row['priceToMA60'])
+                    # 這裡使用 UI 專用的 Plotly 繪圖
+                    fig_trend = plot_trend_chart_ui(row['full_symbol'], row['priceToMA60'])
                     if fig_trend:
                         st.plotly_chart(fig_trend, use_container_width=True)
                     else:
