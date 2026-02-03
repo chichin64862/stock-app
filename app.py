@@ -44,24 +44,21 @@ st.markdown("""
     .stApp { background-color: #0e1117; }
     [data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
     
-    /* --- 【關鍵修復】DataFrame 工具列 (右上角眼睛、下載) --- */
-    /* 強制設定工具列容器背景 */
+    /* --- DataFrame 工具列 (右上角眼睛、下載) --- */
     div[data-testid="stElementToolbar"] {
-        background-color: #262730 !important; /* 深灰色背景 */
+        background-color: #262730 !important;
         border: 1px solid #4b4b4b !important;
         border-radius: 8px !important;
-        opacity: 1 !important; /* 確保不透明 */
+        opacity: 1 !important;
     }
-    /* 強制設定工具列按鈕與圖示顏色 */
     div[data-testid="stElementToolbar"] button {
         color: #ffffff !important;
         background-color: transparent !important;
     }
     div[data-testid="stElementToolbar"] svg {
-        fill: #ffffff !important; /* 強制圖示為白色 */
+        fill: #ffffff !important;
         color: #ffffff !important;
     }
-    /* 滑鼠懸停效果 */
     div[data-testid="stElementToolbar"] button:hover {
         background-color: #4b4b4b !important;
         color: #58a6ff !important;
@@ -70,7 +67,7 @@ st.markdown("""
         fill: #58a6ff !important;
     }
 
-    /* --- 【關鍵修復】搜尋輸入框 (Input) --- */
+    /* --- 搜尋輸入框 (Input) --- */
     div[data-baseweb="select"] > div {
         background-color: #21262d !important;
         border-color: #30363d !important;
@@ -132,7 +129,7 @@ proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
 
-# --- 6. 字型下載與註冊 (解決 PDF 中文亂碼) ---
+# --- 6. 字型下載與註冊 ---
 @st.cache_resource
 def register_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -141,8 +138,7 @@ def register_chinese_font():
         try:
             r = requests.get(url, allow_redirects=True, timeout=10)
             if r.status_code == 200:
-                with open(font_path, 'wb') as f:
-                    f.write(r.content)
+                with open(font_path, 'wb') as f: f.write(r.content)
             else: return False
         except: return False
     try:
@@ -159,6 +155,7 @@ def create_pdf(stock_data_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
+    
     styles = getSampleStyleSheet()
     font_name = 'ChineseFont' if font_ready else 'Helvetica'
     
@@ -200,12 +197,14 @@ def create_pdf(stock_data_list):
             story.append(Paragraph(formatted_analysis, normal_style))
         else:
             story.append(Paragraph("（尚未生成 AI 分析報告）", meta_style))
+            
     try: doc.build(story)
     except Exception as e:
         buffer = io.BytesIO()
         c = SimpleDocTemplate(buffer)
         story = [Paragraph(f"PDF Error: {str(e)}", styles['Normal'])]
         c.build(story)
+
     buffer.seek(0)
     return buffer
 
@@ -471,7 +470,7 @@ with st.sidebar:
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ QuantAlpha 戰略儀表板 2.4")
+    st.title("⚡ QuantAlpha 戰略儀表板 2.5")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -516,21 +515,20 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         # --- 全局下載按鈕 (PDF 中心) ---
         st.markdown("### 📥 戰略報告下載中心 (All-in-One Reports)")
         
-        # 使用一個明顯的容器框住
         with st.container():
             st.markdown('<div class="pdf-center">', unsafe_allow_html=True)
             
-            # 判斷是否有分析結果
             if len(st.session_state['analysis_results']) > 0:
                 col_info, col_main_dl = st.columns([3, 1])
                 with col_info:
                     st.success(f"✅ 已生成 {len(st.session_state['analysis_results'])} 份個股分析報告，準備就緒。")
                 with col_main_dl:
-                    # 準備全部已分析的數據
                     bulk_data = []
+                    # 【關鍵修正】：遍歷已分析的結果，並從 res (已算分) 的表中找數據
                     for stock_name, analysis in st.session_state['analysis_results'].items():
                         code = stock_name.split(" ")[0]
-                        match_rows = raw[raw['代號'] == code]
+                        # 這裡改用 res，確保有 'Score' 欄位
+                        match_rows = res[res['代號'] == code]
                         if not match_rows.empty:
                             row = match_rows.iloc[0]
                             bulk_data.append({
@@ -559,7 +557,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         st.markdown("---")
         st.markdown("### 🎯 深度戰略分析 (Strategic Deep Dive)")
         
-        # --- 個股卡片迴圈 ---
         for i, (index, row) in enumerate(top_stocks.iterrows()):
             stock_name = f"{row['代號']} {row['名稱']}"
             is_analyzed = (stock_name in st.session_state['analysis_results'])
@@ -601,7 +598,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         else: st.warning("⚠️ 無法取得歷史數據")
                     except Exception as e: st.error("圖表載入失敗")
 
-                # 操作按鈕區
                 col_btn, col_dl = st.columns([3, 1])
                 with col_btn:
                      if st.button(f"✨ 生成分析報告", key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
@@ -619,7 +615,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 st.session_state['analysis_results'][stock_name] = result
                                 st.rerun()
                 
-                # 個股下載按鈕
                 with col_dl:
                     if is_analyzed:
                         single_data = [{
