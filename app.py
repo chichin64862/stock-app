@@ -12,7 +12,7 @@ import time
 import os
 from datetime import datetime, timedelta
 
-# --- 1. 專業版介面設定 (FinTech Dark Theme) ---
+# --- 1. 專業版介面設定 ---
 st.set_page_config(
     page_title="QuantAlpha | 熵值法 x Gemini 戰略分析", 
     page_icon="⚡", 
@@ -20,49 +20,24 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 強制修正：高對比深色主題 & 能量條樣式 ---
+# --- 2. CSS 強制修正 ---
 st.markdown("""
 <style>
-    /* 全局文字顏色修正 */
     body, .stApp, p, h1, h2, h3, h4, h5, h6, span, div {
         color: #e6e6e6 !important;
         font-family: 'Roboto', 'Helvetica Neue', sans-serif;
     }
     .stApp { background-color: #0e1117; }
     [data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
-    
-    /* 能量條樣式 */
-    .progress-label { font-size: 0.85rem; color: #8b949e; margin-bottom: 2px; }
-    .progress-bar-bg { background-color: #30363d; height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
-    .progress-bar-fill { height: 100%; border-radius: 4px; }
-    
-    /* 因子標籤 */
-    .factor-tag {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: bold;
-        margin-right: 5px;
-        background-color: #21262d;
-        border: 1px solid #30363d;
-    }
-    
-    /* AI Header */
-    .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
-    
-    /* 卡片樣式 */
     .stock-card {
         background-color: #161b22; 
         padding: 20px; 
         border-radius: 10px; 
         border: 1px solid #30363d; 
         margin-bottom: 15px;
-        transition: transform 0.2s;
     }
-    .stock-card:hover {
-        border-color: #58a6ff;
-    }
+    .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+    .score-legend { background-color: #1f2937; padding: 10px; border-radius: 5px; font-size: 0.9rem; border-left: 4px solid #a371f7; margin-bottom: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -70,7 +45,7 @@ st.markdown("""
 if 'analysis_results' not in st.session_state: st.session_state['analysis_results'] = {}
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
-if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None # 用於雷達圖
+if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
 
 # --- 4. 安全讀取 API Key ---
 try:
@@ -79,7 +54,7 @@ except Exception:
     st.error("⚠️ 系統偵測不到 API Key！請確認您已在 Streamlit Cloud > Settings > Secrets 中設定 `GEMINI_API_KEY`。")
     st.stop()
 
-# --- 5. 環境與連線設定 ---
+# --- 5. 環境設定 ---
 proxies = {}
 if os.getenv("HTTP_PROXY"): proxies["http"] = os.getenv("HTTP_PROXY")
 if os.getenv("HTTPS_PROXY"): proxies["https"] = os.getenv("HTTPS_PROXY")
@@ -95,11 +70,7 @@ def get_available_model(key):
             for m in data.get('models', []):
                 if 'generateContent' in m.get('supportedGenerationMethods', []) and 'flash' in m['name']:
                     return m['name'].replace('models/', '')
-            for m in data.get('models', []):
-                if 'generateContent' in m.get('supportedGenerationMethods', []) and 'pro' in m['name']:
-                    return m['name'].replace('models/', '')
-    except:
-        pass
+    except: pass
     return default_model
 
 def call_gemini_api(prompt):
@@ -121,8 +92,7 @@ def call_gemini_api(prompt):
 # --- 7. 分析提示詞 ---
 HEDGE_FUND_PROMPT = """
 【角色設定】
-你現在是華爾街頂尖的避險基金經理人，專精於「價值投資」與「成長潛力挖掘」。
-請針對 **[STOCK]** 進行深度投資分析。
+你現在是華爾街頂尖的避險基金經理人。請針對 **[STOCK]** 進行深度投資分析。
 
 【⚠️ 重要指令】
 請務必依據下方提供的 **[最新市場即時數據]** 進行分析。
@@ -131,9 +101,9 @@ HEDGE_FUND_PROMPT = """
 [DATA_CONTEXT]
 
 【分析維度】
-1. 訂單能見度 (Revenue Visibility): **重點分析「合約負債」**。若數值很高或有成長，請解讀為未來營收爆發的領先指標。
-2. 因子雷達解讀 (Factor Analysis): 根據技術、籌碼、基本面、估值四大面向，指出該股的最強項與最弱項。
-3. 綜合決策: 引用最新收盤價，給出「持有」、「買進」或「觀望」建議。
+1. 訂單能見度 (Revenue Visibility): 重點分析「合約負債」。
+2. 因子雷達解讀: 根據技術、籌碼、基本面、估值四大面向分析。
+3. 綜合決策: 給出「持有」、「買進」或「觀望」建議。
 """
 
 # --- 8. 數據與清單處理 ---
@@ -178,10 +148,18 @@ with st.sidebar:
         elif strategy == "中型100成份股 (成長潛力)":
             codes = ["2344", "2376", "2383", "2368", "3443", "3661", "3529", "3035", "3037", "3017", "2313", "2324", "2352", "2353", "2356", "2327", "2385", "2408", "2409", "2449", "2451", "2474", "2492", "2498", "2542", "2609", "2610", "2615", "2618"]
             target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
-        # ... (其他策略可保留，為節省篇幅省略部分重複代碼，邏輯一致) ...
+        elif strategy == "高股息熱門股 (存股族)":
+            codes = ["2301", "2324", "2352", "2356", "2382", "2385", "2449", "2454", "2603", "3034", "3037", "3044", "3231", "3702", "3711", "4915", "4938", "4958", "5388", "5483", "6176", "6239", "8131"]
+            target_stocks = []
+            for c in codes:
+                if f"{c}.TW" in stock_map: target_stocks.append(stock_map[f"{c}.TW"])
+                elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
         elif strategy == "AI 供應鏈概念":
             codes = ["2330", "2317", "2382", "3231", "6669", "3443", "3661", "3035", "2376", "2368", "3017", "2301", "2356", "3037", "2308", "2421", "2454", "3034"]
-            target_stocks = [f"{c}.TW {stock_map.get(f'{c}.TW', '').split(' ')[-1]}" for c in codes if f"{c}.TW" in stock_map]
+            target_stocks = []
+            for c in codes:
+                if f"{c}.TW" in stock_map: target_stocks.append(stock_map[f"{c}.TW"])
+                elif f"{c}.TWO" in stock_map: target_stocks.append(stock_map[f"{c}.TWO"])
         elif strategy == "貨櫃航運三雄":
             target_stocks = ["2603.TW 長榮", "2609.TW 陽明", "2615.TW 萬海"]
             
@@ -196,8 +174,7 @@ with st.sidebar:
     st.markdown("---")
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
-# --- 10. 指標與函數 (加入類別標籤) ---
-# 這裡我們將指標分類，以便後續繪製雷達圖
+# --- 10. 指標與函數 ---
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Beta': {'col': 'beta', 'direction': '負向', 'name': 'Beta係數', 'category': '技術'},
@@ -210,7 +187,12 @@ indicators_config = {
 
 def fetch_single_stock(ticker):
     try:
+        # 【關鍵修復】正確的代碼切割方式
         symbol = ticker.split(' ')[0]
+        
+        # 修正顯示名稱 (避免 5274.TWO 變成 5274O 的 bug)
+        display_code = symbol.split('.')[0]
+        
         stock = yf.Ticker(symbol)
         info = stock.info 
         
@@ -238,7 +220,8 @@ def fetch_single_stock(ticker):
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
 
         return {
-            '代號': symbol.replace(".TW", "").replace(".TWO", ""),
+            '代號': display_code,  # 用於前端顯示 (如 5274)
+            'full_symbol': symbol, # 【關鍵】完整代碼 (如 5274.TWO)，給畫圖用
             '名稱': info.get('shortName', symbol),
             'close_price': price, 
             'pegRatio': peg, 
@@ -270,8 +253,6 @@ def calculate_entropy_score(df, config):
     df = df.dropna().copy()
     if df.empty: return df, None, "No valid data found.", None
     df_norm = df.copy()
-    
-    # 1. 正規化 (0-1)
     for key, cfg in config.items():
         col = cfg['col']
         mn, mx = df[col].min(), df[col].max()
@@ -280,8 +261,6 @@ def calculate_entropy_score(df, config):
         else:
             if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df[col] - mn) / denom
             else: df_norm[f'{col}_n'] = (mx - df[col]) / denom
-    
-    # 2. 熵值權重計算
     m = len(df)
     k = 1 / np.log(m) if m > 1 else 0
     weights = {}
@@ -290,16 +269,12 @@ def calculate_entropy_score(df, config):
         p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum() if df_norm[f'{col}_n'].sum() != 0 else 0
         e = -k * np.sum(p * np.log(p + 1e-9))
         weights[key] = 1 - e 
-    
     tot = sum(weights.values())
     fin_w = {k: v/tot for k, v in weights.items()}
-    
-    # 3. 計算總分
     df['Score'] = 0
     for key, cfg in config.items():
         df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] 
     df['Score'] = (df['Score']*100).round(1)
-    
     return df.sort_values('Score', ascending=False), fin_w, None, df_norm
 
 def get_contract_liabilities_safe(symbol_code):
@@ -308,7 +283,7 @@ def get_contract_liabilities_safe(symbol_code):
         stock = yf.Ticker(symbol_code)
         bs = stock.balance_sheet
         if bs.empty: return "無財報數據"
-        target_keys = ['Contract Liabilities', 'Deferred Revenue', 'Current Contract Liabilities']
+        target_keys = ['Contract Liabilities', 'Deferred Revenue']
         val = None
         for key in target_keys:
             matches = [k for k in bs.index if key in k]
@@ -321,16 +296,11 @@ def get_contract_liabilities_safe(symbol_code):
 
 # --- 輔助函式：繪製雷達圖 ---
 def plot_radar_chart(row, df_norm_row, config):
-    # 彙整四大面向得分
     categories = {'技術': [], '籌碼': [], '財報': [], '估值': []}
-    
     for key, cfg in config.items():
         cat = cfg['category']
-        # 取出該指標的正規化得分 (0-1) * 100
         score = df_norm_row[f"{cfg['col']}_n"] * 100
         categories[cat].append(score)
-    
-    # 計算平均分
     radar_data = {k: np.mean(v) for k, v in categories.items()}
     
     fig = go.Figure()
@@ -342,12 +312,8 @@ def plot_radar_chart(row, df_norm_row, config):
         line_color='#00e676',
         fillcolor='rgba(0, 230, 118, 0.2)'
     ))
-    
     fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 100], color='#8b949e'),
-            bgcolor='rgba(0,0,0,0)'
-        ),
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100], color='#8b949e'), bgcolor='rgba(0,0,0,0)'),
         showlegend=False,
         margin=dict(t=20, b=20, l=20, r=20),
         paper_bgcolor='rgba(0,0,0,0)',
@@ -356,29 +322,21 @@ def plot_radar_chart(row, df_norm_row, config):
     )
     return fig, radar_data
 
-# --- 輔助函式：HTML 能量條 ---
 def render_factor_bars(radar_data):
     html = ""
-    # 顏色定義
     colors = {'技術': '#29b6f6', '籌碼': '#ab47bc', '財報': '#ffca28', '估值': '#ef5350'}
-    
     for cat, score in radar_data.items():
         color = colors.get(cat, '#8b949e')
-        # 製作 ■■■■■ 視覺效果
-        blocks = int(score / 10) # 10分一格
+        blocks = int(score / 10)
         visual_bar = "■" * blocks + "░" * (10 - blocks)
-        
         html += f"""
         <div style="margin-bottom: 8px;">
             <div style="display:flex; justify-content:space-between; font-size:0.85rem; color:#e6e6e6;">
                 <span><span style="color:{color};">●</span> {cat}</span>
                 <span>{score:.0f}%</span>
             </div>
-            <div style="font-family: monospace; color:{color}; letter-spacing: 2px;">
-                {visual_bar}
-            </div>
-        </div>
-        """
+            <div style="font-family: monospace; color:{color}; letter-spacing: 2px;">{visual_bar}</div>
+        </div>"""
     return html
 
 # --- 11. 儀表板顯示邏輯 ---
@@ -406,7 +364,7 @@ if run_btn:
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     raw = st.session_state['raw_data']
     res, w, err, df_norm = calculate_entropy_score(raw, indicators_config)
-    st.session_state['df_norm'] = df_norm # 儲存正規化數據供雷達圖使用
+    st.session_state['df_norm'] = df_norm
     
     if err: 
         st.error(err)
@@ -415,8 +373,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         top_stocks = res.head(top_n)
 
         st.markdown("### 🏆 Top 10 潛力標的 (Entropy Ranking)")
-        
-        # 列表顯示
         st.dataframe(
             top_stocks[['代號', '名稱', 'close_price', 'Score', 'pegRatio', 'priceToMA60', 'beta']],
             column_config={
@@ -435,44 +391,34 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             stock_name = f"{row['代號']} {row['名稱']}"
             is_analyzed = (stock_name in st.session_state['analysis_results'])
             
-            # --- 卡片式佈局 ---
             with st.container():
                 st.markdown(f"""<div class="stock-card"><h3>{stock_name} <span style="font-size:0.6em;color:#8b949e">NT$ {row['close_price']}</span></h3>""", unsafe_allow_html=True)
                 
-                # 佈局：左側雷達圖 + 中間因子條 + 右側時機圖
                 c1, c2, c3 = st.columns([1.5, 1.2, 2])
-                
-                # 1. 左側：雷達圖
                 with c1:
-                    # 抓取該股票的正規化數據
                     norm_row = df_norm.loc[index]
                     fig_radar, radar_data = plot_radar_chart(row, norm_row, indicators_config)
                     st.plotly_chart(fig_radar, use_container_width=True)
                 
-                # 2. 中間：因子貢獻度 (文字能量條)
                 with c2:
                     st.markdown("**因子貢獻解析**")
                     st.markdown(render_factor_bars(radar_data), unsafe_allow_html=True)
-                    
-                    # 顯示最強因子
                     best_factor = max(radar_data, key=radar_data.get)
                     st.markdown(f"<div style='margin-top:10px; font-size:0.9rem; color:#00e676;'>🚀 主力優勢: <b>{best_factor}</b></div>", unsafe_allow_html=True)
                 
-                # 3. 右側：最佳配置時機 (Time Series Trend)
                 with c3:
                     st.markdown("**配置時機判定 (Trend vs Value)**")
-                    # 模擬繪製股價與均線圖 (這裡需即時抓取歷史數據)
+                    # 【修復】使用 full_symbol (如 5274.TWO) 來抓資料，確保一定抓得到
+                    ticker_for_chart = row['full_symbol']
+                    
                     try:
-                        stock_hist = yf.Ticker(row['代號'].split()[0]).history(period="6mo")
+                        stock_hist = yf.Ticker(ticker_for_chart).history(period="6mo")
                         if not stock_hist.empty:
                             fig_trend = go.Figure()
-                            # 股價線
                             fig_trend.add_trace(go.Scatter(x=stock_hist.index, y=stock_hist['Close'], mode='lines', name='Price', line=dict(color='#29b6f6', width=2)))
-                            # 標註目前位置
                             last_price = stock_hist['Close'].iloc[-1]
                             fig_trend.add_trace(go.Scatter(x=[stock_hist.index[-1]], y=[last_price], mode='markers', marker=dict(color='#00e676', size=10), name='Current'))
                             
-                            # 判斷時機 (簡單邏輯：乖離率負值且分數高 = 最佳買點)
                             timing_msg = "🟢 最佳佈局點 (Value Zone)" if row['priceToMA60'] < 0 else "🟡 持有/觀察 (Momentum)"
                             if row['priceToMA60'] > 0.15: timing_msg = "🔴 留意過熱 (Overheated)"
                             
@@ -484,17 +430,16 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                             )
                             st.plotly_chart(fig_trend, use_container_width=True)
                         else:
-                            st.write("無法取得歷史數據")
-                    except:
-                        st.write("圖表載入中...")
+                            st.warning(f"⚠️ 無法取得 {ticker_for_chart} 的歷史數據 (YFinance 回傳空值)")
+                    except Exception as e:
+                        st.error(f"圖表載入失敗: {e}")
 
-                # --- AI 分析按鈕 ---
                 col_btn, _ = st.columns([1, 4])
                 with col_btn:
                      if st.button(f"✨ 生成分析報告", key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
                          if not is_analyzed:
                             with st.spinner(f"⚡ AI 正在為您撰寫 {stock_name} 的投資備忘錄..."):
-                                cl_val = get_contract_liabilities_safe(row['代號'])
+                                cl_val = get_contract_liabilities_safe(row['full_symbol']) # 這裡也改用 full_symbol
                                 real_time_data = f"""
                                 - 收盤價: {row['close_price']}
                                 - 合約負債: {cl_val}
@@ -510,7 +455,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     st.markdown("<div class='ai-header'>🏛️ Hedge Fund Manager Insight</div>", unsafe_allow_html=True)
                     st.markdown(st.session_state['analysis_results'][stock_name])
                     
-                st.markdown("</div>", unsafe_allow_html=True) # End card
+                st.markdown("</div>", unsafe_allow_html=True) 
 
 elif not st.session_state['scan_finished']:
     st.info("👈 請在左側選擇掃描策略，點擊 **「啟動全自動掃描」** 開始量化分析。")
