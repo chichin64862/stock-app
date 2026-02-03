@@ -13,7 +13,7 @@ import os
 import io
 import re
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 from math import pi
 
@@ -40,94 +40,24 @@ st.set_page_config(
 # --- 2. CSS 針對性修復 ---
 st.markdown("""
 <style>
-    /* 1. 全局基底 */
     .stApp { background-color: #0e1117 !important; }
-    body, h1, h2, h3, h4, h5, h6, p, div, span, label, li {
-        color: #e6e6e6 !important;
-        font-family: 'Roboto', sans-serif;
-    }
-
-    /* 2. DataFrame 右上角配置選單 */
-    div[role="menu"] div, div[role="menu"] span, div[role="menu"] label {
-        color: #31333F !important;
-        font-weight: 500 !important;
-    }
+    body, h1, h2, h3, h4, h5, h6, p, div, span, label, li { color: #e6e6e6 !important; font-family: 'Roboto', sans-serif; }
+    div[role="menu"] div, div[role="menu"] span, div[role="menu"] label { color: #31333F !important; font-weight: 500 !important; }
     div[role="menu"] label { color: #31333F !important; }
-
-    /* 3. 下拉選單 */
-    div[data-baseweb="select"] > div {
-        background-color: #262730 !important;
-        border-color: #4b4b4b !important;
-        color: white !important;
-    }
-    div[data-baseweb="popover"], ul[data-baseweb="menu"] {
-        background-color: #ffffff !important; 
-        border: 1px solid #cccccc !important;
-    }
-    div[data-baseweb="popover"] li, 
-    div[data-baseweb="popover"] div, 
-    li[role="option"] {
-        color: #000000 !important;
-        font-weight: 500 !important;
-    }
-    li[role="option"]:hover, 
-    li[role="option"][aria-selected="true"] {
-        background-color: #238636 !important;
-        color: #ffffff !important;
-    }
-
-    /* 4. 下載按鈕 */
-    .stDownloadButton button {
-        background-color: #1f2937 !important;
-        color: #ffffff !important;
-        border: 1px solid #238636 !important;
-        white-space: nowrap !important;
-        min-width: 180px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-    }
-    .stDownloadButton button:hover {
-        border-color: #58a6ff !important;
-        color: #58a6ff !important;
-    }
+    div[data-baseweb="select"] > div { background-color: #262730 !important; border-color: #4b4b4b !important; color: white !important; }
+    div[data-baseweb="popover"], ul[data-baseweb="menu"] { background-color: #ffffff !important; border: 1px solid #cccccc !important; }
+    div[data-baseweb="popover"] li, div[data-baseweb="popover"] div, li[role="option"] { color: #000000 !important; font-weight: 500 !important; }
+    li[role="option"]:hover, li[role="option"][aria-selected="true"] { background-color: #238636 !important; color: #ffffff !important; }
+    .stDownloadButton button { background-color: #1f2937 !important; color: #ffffff !important; border: 1px solid #238636 !important; white-space: nowrap !important; min-width: 180px !important; display: flex !important; align-items: center !important; justify-content: center !important; }
+    .stDownloadButton button:hover { border-color: #58a6ff !important; color: #58a6ff !important; }
     .stDownloadButton p { color: inherit !important; font-size: 1rem !important; }
-
-    /* 5. Toolbar */
-    [data-testid="stElementToolbar"] {
-        background-color: #262730 !important;
-        border: 1px solid #4b4b4b !important;
-    }
-    [data-testid="stElementToolbar"] svg {
-        fill: #ffffff !important;
-        color: #ffffff !important;
-    }
-    [data-testid="stElementToolbar"] button:hover {
-        background-color: #4b4b4b !important;
-    }
-
-    /* 6. 輸入框 */
-    input { 
-        color: #ffffff !important; 
-        caret-color: #ffffff !important;
-        background-color: #262730 !important; 
-    }
-    
+    [data-testid="stElementToolbar"] { background-color: #262730 !important; border: 1px solid #4b4b4b !important; }
+    [data-testid="stElementToolbar"] svg { fill: #ffffff !important; color: #ffffff !important; }
+    [data-testid="stElementToolbar"] button:hover { background-color: #4b4b4b !important; }
+    input { color: #ffffff !important; caret-color: #ffffff !important; background-color: #262730 !important; }
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
-    .stock-card {
-        background-color: #161b22; 
-        padding: 20px; 
-        border-radius: 10px; 
-        border: 1px solid #30363d; 
-        margin-bottom: 15px;
-    }
-    .pdf-center {
-        background-color: #1f2937;
-        padding: 20px;
-        border-radius: 8px;
-        border-left: 5px solid #238636;
-        margin-bottom: 20px;
-    }
+    .stock-card { background-color: #161b22; padding: 20px; border-radius: 10px; border: 1px solid #30363d; margin-bottom: 15px; }
+    .pdf-center { background-color: #1f2937; padding: 20px; border-radius: 8px; border-left: 5px solid #238636; margin-bottom: 20px; }
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
@@ -180,9 +110,7 @@ def generate_radar_img_mpl(radar_data):
         N = len(categories)
         angles = [n / float(N) * 2 * pi for n in range(N)]
         angles += angles[:1]
-        
         plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans'] 
-        
         fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
         ax.plot(angles, values, linewidth=2, linestyle='solid', color='#00e676')
         ax.fill(angles, values, '#00e676', alpha=0.25)
@@ -190,33 +118,38 @@ def generate_radar_img_mpl(radar_data):
         ax.set_rlabel_position(0)
         plt.yticks([25, 50, 75], ["25", "50", "75"], color="grey", size=7)
         plt.ylim(0, 100)
-        
         buf = io.BytesIO()
         plt.savefig(buf, format='png', bbox_inches='tight', transparent=True)
         buf.seek(0)
         plt.close(fig)
         return buf
-    except Exception as e:
-        return None
+    except: return None
 
 def generate_trend_img_mpl(full_symbol, ma_bias):
     try:
         stock_hist = yf.Ticker(full_symbol).history(period="6mo")
+        if stock_hist.empty:
+            try:
+                code = full_symbol.split('.')[0]
+                stock = twstock.Stock(code)
+                hist_data = stock.fetch_31()
+                if hist_data:
+                    dates = [d.date for d in hist_data]
+                    prices = [d.close for d in hist_data]
+                    stock_hist = pd.DataFrame({'Close': prices}, index=dates)
+            except: pass
         if stock_hist.empty: return None
-        
-        dates = stock_hist.index
+        if isinstance(stock_hist.index[0], datetime): dates = stock_hist.index
+        else: dates = range(len(stock_hist))
         prices = stock_hist['Close']
-        
         fig, ax = plt.subplots(figsize=(5, 3))
         ax.plot(dates, prices, color='#29b6f6', linewidth=2)
         ax.scatter(dates[-1], prices.iloc[-1], color='#00e676', s=50, zorder=5)
-        
         trend_status = "Overheated" if ma_bias > 0.15 else ("Value Zone" if ma_bias < -0.05 else "Momentum")
         ax.set_title(f"Trend: {trend_status}", color='black', fontsize=12)
         ax.grid(True, linestyle='--', alpha=0.3)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        
         buf = io.BytesIO()
         plt.savefig(buf, format='png', bbox_inches='tight', transparent=True)
         buf.seek(0)
@@ -241,16 +174,23 @@ def plot_radar_chart_ui(row_name, radar_data):
 def plot_trend_chart_ui(full_symbol, ma_bias):
     try:
         stock_hist = yf.Ticker(full_symbol).history(period="6mo")
+        if stock_hist.empty:
+            try:
+                code = full_symbol.split('.')[0]
+                ts = twstock.Stock(code)
+                data = ts.fetch_31()
+                if data:
+                    dates = [d.date for d in data]
+                    prices = [d.close for d in data]
+                    stock_hist = pd.DataFrame({'Close': prices}, index=dates)
+            except: pass
         if stock_hist.empty: return None
-        
         fig_trend = go.Figure()
         fig_trend.add_trace(go.Scatter(x=stock_hist.index, y=stock_hist['Close'], mode='lines', name='Price', line=dict(color='#29b6f6', width=2)))
         last_price = stock_hist['Close'].iloc[-1]
         fig_trend.add_trace(go.Scatter(x=[stock_hist.index[-1]], y=[last_price], mode='markers', marker=dict(color='#00e676', size=10), name='Current'))
-        
         timing_msg = "Value Zone" if ma_bias < -0.05 else "Momentum"
         if ma_bias > 0.15: timing_msg = "Overheated"
-        
         fig_trend.update_layout(
             title=dict(text=timing_msg, font=dict(size=14, color='#e6e6e6')),
             xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#30363d'),
@@ -266,10 +206,8 @@ def create_pdf(stock_data_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
-    
     styles = getSampleStyleSheet()
     font_name = 'ChineseFont' if font_ready else 'Helvetica'
-    
     title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=22, spaceAfter=20, alignment=1, textColor=colors.HexColor("#2C3E50"))
     h2_style = ParagraphStyle('Heading2', parent=styles['Heading2'], fontName=font_name, fontSize=16, spaceBefore=15, spaceAfter=10, textColor=colors.HexColor("#2980B9"))
     h3_style = ParagraphStyle('Heading3', parent=styles['Heading3'], fontName=font_name, fontSize=12, spaceBefore=10, textColor=colors.HexColor("#16A085"))
@@ -292,7 +230,7 @@ def create_pdf(stock_data_list):
 
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
         peg = stock.get('peg', 'N/A')
-        if peg is None or peg == 'nan': peg = 'N/A'
+        if pd.isna(peg) or peg == 'nan': peg = 'N/A'
         
         t_data = [
             ["指標", "數值", "指標", "數值"],
@@ -319,12 +257,9 @@ def create_pdf(stock_data_list):
         
         charts_row = []
         radar_buf = generate_radar_img_mpl(radar)
-        if radar_buf:
-            charts_row.append(Image(radar_buf, width=200, height=200))
-            
+        if radar_buf: charts_row.append(Image(radar_buf, width=200, height=200))
         trend_buf = generate_trend_img_mpl(full_symbol, ma_bias_val)
-        if trend_buf:
-            charts_row.append(Image(trend_buf, width=250, height=150))
+        if trend_buf: charts_row.append(Image(trend_buf, width=250, height=150))
             
         if charts_row:
             story.append(Paragraph("📈 戰略因子與趨勢分析", h3_style))
@@ -377,7 +312,6 @@ def call_gemini_api(prompt):
         else: return f"❌ 分析失敗 (Code {response.status_code})"
     except Exception as e: return f"❌ 連線逾時或錯誤: {str(e)}"
 
-# Prompt
 HEDGE_FUND_PROMPT = """
 【指令】
 請針對 **[STOCK]** 撰寫一份客觀的「投資決策分析報告」。
@@ -423,7 +357,6 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
-# 指標配置
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
@@ -434,15 +367,22 @@ indicators_config = {
     'FCF Yield': {'col': 'fcfYield', 'direction': '正向', 'name': 'FCF收益率', 'category': '財報'},
 }
 
-# 【關鍵修復】: 創建一個偽裝的 Session
-def get_session():
+# --- 【關鍵修復】: User-Agent 輪替 + Proxy 接口 ---
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15'
+]
+
+def get_session(proxy_url=None):
     s = requests.Session()
-    s.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    })
+    s.headers.update({'User-Agent': random.choice(USER_AGENTS)})
+    if proxy_url:
+        s.proxies = {"http": proxy_url, "https": proxy_url}
     return s
 
-def fetch_single_stock(ticker):
+def fetch_single_stock(ticker, proxy=None):
     try:
         ticker = ticker.strip()
         parts = ticker.split(' ')
@@ -459,33 +399,29 @@ def fetch_single_stock(ticker):
         
         display_code = symbol.split('.')[0]
         
-        # 【關鍵修復】: 傳入 session 並加入重試邏輯 (Retry Logic)
-        session = get_session()
+        session = get_session(proxy)
         stock = yf.Ticker(symbol, session=session)
         
-        info = None
+        info = {}
         price = None
         
-        # 嘗試最多 3 次
-        for attempt in range(3):
+        # 1. 嘗試完整 info
+        try:
+            info = stock.info
+            price = info.get('currentPrice', info.get('previousClose', None))
+        except Exception:
+            info = {}
+            
+        # 2. 嘗試 fast_info
+        if price is None:
             try:
-                info = stock.info
-                price = info.get('currentPrice', info.get('previousClose', None))
-                
-                # 雙重檢查
-                if price is None:
-                    price = stock.fast_info.last_price
-                    if price:
-                        info['currentPrice'] = price
-                        info['marketCap'] = stock.fast_info.market_cap
-                        info['previousClose'] = stock.fast_info.previous_close
-                
-                if price is not None:
-                    break # 成功抓到，跳出迴圈
-                
-            except Exception:
-                time.sleep(random.uniform(1, 2)) # 失敗等待隨機秒數
-                
+                price = stock.fast_info.last_price
+                if price:
+                    info['currentPrice'] = price
+                    info['marketCap'] = stock.fast_info.market_cap
+                    info['previousClose'] = stock.fast_info.previous_close
+            except Exception: pass
+        
         if price is None: return None
 
         name_en = info.get('shortName', '')
@@ -493,7 +429,6 @@ def fetch_single_stock(ticker):
 
         peg = info.get('pegRatio', None)
         beta = info.get('beta', 1.0)
-        
         ma50 = info.get('fiftyDayAverage', price) 
         bias = (price / ma50) - 1 if ma50 and ma50 > 0 else 0
         
@@ -529,15 +464,18 @@ def fetch_single_stock(ticker):
         }
     except: return None
 
-def get_stock_data_concurrent(selected_list):
+# 【關鍵修復】: 加入 st.cache_data 減少請求次數
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_stock_data_cached(selected_list, proxy_url=None):
     data = []
     failed_stocks = []
-    progress_bar = st.progress(0, text="初始化平台資料庫...")
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor: # 降低併發數以防被鎖
-        future_to_ticker = {executor.submit(fetch_single_stock, t): t for t in selected_list}
-        completed = 0
-        total = len(selected_list)
+    # 降低併發數 (max_workers=3)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor: 
+        # 使用 lambda 將 proxy 傳入 fetch_single_stock
+        future_to_ticker = {executor.submit(fetch_single_stock, t, proxy_url): t for t in selected_list}
+        
+        # 由於 cache 內不能顯示進度條，這裡改用簡單的 loop 等待
         for future in concurrent.futures.as_completed(future_to_ticker):
             ticker = future_to_ticker[future]
             try:
@@ -549,18 +487,13 @@ def get_stock_data_concurrent(selected_list):
             except:
                 failed_stocks.append(ticker)
             
-            # 隨機延遲，模擬人類行為
-            time.sleep(random.uniform(0.1, 0.3)) 
-            completed += 1
-            progress_bar.progress(completed / total, text=f"正在掃描市場數據: {completed}/{total}...")
+            # 隨機延遲
+            time.sleep(random.uniform(0.5, 1.2))
             
-    progress_bar.empty()
-    if failed_stocks:
-        st.warning(f"⚠️ 部分股票數據抓取失敗 (可能是 Yahoo Finance 連線阻擋): {', '.join(failed_stocks)}")
-    return pd.DataFrame(data)
+    return pd.DataFrame(data), failed_stocks
 
 def calculate_entropy_score(df, config):
-    if df.empty: return df, None, "數據抓取為空，請檢查代號是否正確。", None
+    if df.empty: return df, None, "數據抓取為空，請檢查代號是否正確或稍後再試。", None
     
     df_norm = df.copy()
     
@@ -657,6 +590,11 @@ with st.sidebar:
     st.caption("🔍 若找不到股票，請直接輸入代號 (如 1802):")
     manual_input = st.text_input("手動輸入代號:", placeholder="例如: 1802 或 2330", label_visibility="collapsed")
     
+    # 【關鍵新增】Proxy 設定區
+    with st.expander("🛡️ Proxy 設定 (選填)", expanded=False):
+        st.caption("若遇到 IP 封鎖 (Failed to fetch)，請嘗試設定 Proxy")
+        user_proxy = st.text_input("Proxy URL", placeholder="http://user:pass@ip:port")
+    
     if scan_mode == "自行輸入/多選":
         default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
         selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
@@ -710,10 +648,16 @@ if run_btn:
         st.session_state['analysis_results'] = {}
         st.session_state['raw_data'] = None
         st.session_state['df_norm'] = None
-        raw = get_stock_data_concurrent(target_stocks)
+        
+        # 使用快取函式
+        with st.spinner("🚀 正在掃描市場數據 (已啟用快取以加速並防止封鎖)..."):
+            raw, failed_stocks = get_stock_data_cached(target_stocks, user_proxy if user_proxy else None)
+            
         if not raw.empty:
             st.session_state['raw_data'] = raw
             st.session_state['scan_finished'] = True
+            if failed_stocks:
+                st.warning(f"⚠️ 部分股票數據抓取失敗: {', '.join(failed_stocks)}")
             st.rerun()
         else:
             st.error("❌ 掃描失敗：無法獲取任何股票數據，請檢查代號是否正確。")
