@@ -67,7 +67,6 @@ if 'analysis_results' not in st.session_state: st.session_state['analysis_result
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
 if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
-# 新增：儲存官方全市場數據，避免重複下載
 if 'market_fundamentals' not in st.session_state: st.session_state['market_fundamentals'] = {}
 
 # --- 4. API Key ---
@@ -223,17 +222,17 @@ def create_pdf(stock_data_list):
 
         story.append(Paragraph("📊 核心數據概覽 (Key Metrics)", h3_style))
         
-        # 使用新指標顯示
         pe_val = stock.get('pe', 'N/A')
         pb_val = stock.get('pb', 'N/A')
         yield_val = stock.get('yield', 'N/A')
+        volatility = stock.get('volatility', 'N/A')
         
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
             [f"本益比 (P/E)", f"{pe_val}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
             [f"股價淨值比 (P/B)", f"{pb_val}", f"殖利率 (Yield)", f"{yield_val}%"],
-            [f"合成 ROE", f"{stock.get('roe_syn', 'N/A')}%", f"Beta", f"{stock.get('beta', 'N/A')}"],
+            [f"合成 ROE", f"{stock.get('roe_syn', 'N/A')}%", f"波動率 (Vol)", f"{volatility}"],
         ]
         t = Table(t_data, colWidths=[100, 130, 100, 130])
         t.setStyle(TableStyle([
@@ -354,20 +353,20 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
-# --- 【核心修改】指標配置更換為官方數據欄位 ---
+# --- 【核心升級】數學家認證的指標配置 ---
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
+    'Volatility': {'col': 'volatility', 'direction': '負向', 'name': '波動率', 'category': '風險'}, # 新增：風險指標
     'P/E Ratio': {'col': 'pe', 'direction': '負向', 'name': '本益比', 'category': '估值'},
     'P/B Ratio': {'col': 'pb', 'direction': '負向', 'name': '淨值比', 'category': '估值'},
     'Dividend Yield': {'col': 'yield', 'direction': '正向', 'name': '殖利率', 'category': '財報'},
     'Synthetic ROE': {'col': 'roe_syn', 'direction': '正向', 'name': '合成ROE', 'category': '財報'},
 }
 
-# --- 【關鍵】TWSE/TPEX 官方開放數據連接器 ---
+# --- TWSE/TPEX 官方開放數據連接器 ---
 @st.cache_data(ttl=3600)
 def fetch_market_fundamentals():
-    """下載全市場個股本益比、殖利率、股價淨值比 (官方 Open Data)"""
     market_data = {}
     
     # 1. 上市 (TWSE)
@@ -405,60 +404,62 @@ def fetch_market_fundamentals():
     return market_data
 
 def get_radar_data(df_norm_row, config):
-    categories = {'技術': [], '籌碼': [], '財報': [], '估值': []}
+    categories = {'技術': [], '籌碼': [], '財報': [], '估值': [], '風險': []}
     for key, cfg in config.items():
         cat = cfg['category']
         col_n = f"{cfg['col']}_n"
         if col_n in df_norm_row:
             score = df_norm_row[col_n] * 100
             categories[cat].append(score)
-    return {k: np.mean(v) if v else 0 for k, v in categories.items()}
+    # 移除空類別
+    return {k: np.mean(v) if v else 0 for k, v in categories.items() if v}
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_hybrid_data(tickers_list):
     results = []
-    
-    # 1. 獲取官方基本面數據 (Map) - 這一步很快且不會被鎖
     fund_map = fetch_market_fundamentals()
     
-    # 2. 批量獲取 Yahoo 股價 (只抓價格與量，這是 Yahoo 最不容易擋的部分)
     try:
         symbols = [t.split(' ')[0] for t in tickers_list]
-        # threads=False 避免被當攻擊
-        data = yf.download(symbols, period="3mo", group_by='ticker', progress=False, threads=False)
+        # 抓 6 個月資料以計算波動率
+        data = yf.download(symbols, period="6mo", group_by='ticker', progress=False, threads=False)
         
-        # 解析數據
         for ticker_full in tickers_list:
             parts = ticker_full.split(' ')
             symbol = parts[0]
             name = parts[1] if len(parts) > 1 else symbol
             code = symbol.split('.')[0]
             
-            # 預設值
             price = np.nan
             ma_bias = 0
             vol_ratio = 1.0
+            volatility = 0.05 # 預設低波動
             
-            # 從 Yahoo Data 提取
             try:
                 df = data if len(symbols) == 1 else (data[symbol] if symbol in data else pd.DataFrame())
                 if not df.empty and 'Close' in df.columns:
-                    latest = df.iloc[-1]
-                    price_val = latest['Close']
-                    if not pd.isna(price_val):
-                        price = float(price_val)
-                        # 技術指標
-                        ma60 = df['Close'].rolling(window=60).mean().iloc[-1]
-                        if not pd.isna(ma60) and ma60 > 0:
-                            ma_bias = (price / ma60) - 1
-                        
-                        vol_curr = df['Volume'].iloc[-1]
-                        vol_avg = df['Volume'].rolling(window=20).mean().iloc[-1]
-                        if not pd.isna(vol_avg) and vol_avg > 0:
-                            vol_ratio = vol_curr / vol_avg
+                    # 移除無效交易日
+                    df = df.dropna(subset=['Close'])
+                    if not df.empty:
+                        latest = df.iloc[-1]
+                        price = float(latest['Close'])
+                        if not pd.isna(price):
+                            # 技術指標
+                            ma60 = df['Close'].rolling(window=60).mean().iloc[-1]
+                            if not pd.isna(ma60) and ma60 > 0:
+                                ma_bias = (price / ma60) - 1
+                            
+                            vol_curr = df['Volume'].iloc[-1]
+                            vol_avg = df['Volume'].rolling(window=20).mean().iloc[-1]
+                            if not pd.isna(vol_avg) and vol_avg > 0:
+                                vol_ratio = vol_curr / vol_avg
+                                
+                            # 【新增】計算波動率 (風險指標)
+                            pct_change = df['Close'].pct_change()
+                            volatility = pct_change.std() * (252 ** 0.5) # 年化波動率
             except: pass
             
-            # 若 Yahoo 失敗，嘗試 TWSE 補價 (救援)
+            # TWSE 救援 (僅補價格)
             if pd.isna(price):
                 try:
                     realtime = twstock.realtime.get(code)
@@ -468,18 +469,21 @@ def fetch_hybrid_data(tickers_list):
                              p_str = realtime['realtime'].get('best_bid_price', [None])[0]
                         if p_str and p_str != '-': 
                             price = float(p_str)
-                            name = realtime['info']['name'] # 確保名稱正確
+                            name = realtime['info']['name'] 
                 except: pass
             
-            # 若有價格，進行數據合併
             if not pd.isna(price):
-                # 從官方 Map 獲取真實財報數據
                 f_data = fund_map.get(code, {'pe': 0, 'pb': 0, 'yield': 0})
                 
-                # 計算合成 ROE
+                # 【邏輯修正】合成 ROE 虧損懲罰
                 roe_syn = 0
                 if f_data['pe'] > 0 and f_data['pb'] > 0:
                     roe_syn = (f_data['pb'] / f_data['pe']) * 100
+                elif f_data['pe'] == 0: # 官方 PE=0 代表虧損
+                    roe_syn = -5.0 # 給予負 ROE 懲罰
+                
+                # 容錯：波動率若為 NaN
+                if pd.isna(volatility): volatility = 0.5
                 
                 results.append({
                     '代號': code,
@@ -488,12 +492,12 @@ def fetch_hybrid_data(tickers_list):
                     'close_price': price,
                     'priceToMA60': ma_bias, 
                     'volumeRatio': vol_ratio,
+                    'volatility': volatility,
                     'pe': f_data['pe'],
                     'pb': f_data['pb'],
                     'yield': f_data['yield'],
                     'roe_syn': roe_syn,
                     'beta': 1.0,
-                    # 舊欄位補 NaN 以防報錯
                     'pegRatio': np.nan, 'debtToEquity': np.nan, 'fcfYield': np.nan
                 })
                 
@@ -504,49 +508,64 @@ def fetch_hybrid_data(tickers_list):
 def calculate_entropy_score(df, config):
     if df.empty: return df, None, "數據抓取為空，請檢查代號是否正確。", None
     df_norm = df.copy()
+    
     for key, cfg in config.items():
         col = cfg['col']
         if col not in df.columns: df[col] = 0
         
-        # 數據清洗：0 值處理
-        if col == 'pe': df[col] = df[col].replace(0, 500) # 本益比0視為無限大
-        if col == 'pb': df[col] = df[col].replace(0, 10)  # 淨值比0視為高估
+        # 數據清洗：0 值處理 (極端值懲罰)
+        if col == 'pe': df[col] = df[col].replace(0, 500) # 虧損股 PE=500
+        if col == 'pb': df[col] = df[col].replace(0, 10)
         
+        # 處理 NaN
         if cfg['direction'] == '正向': fill_val = df[col].min()
         else: fill_val = df[col].max()
-        
         df[col] = df[col].fillna(fill_val)
-        df_norm[col] = df[col]
         
-        q_low = df[col].quantile(0.05); q_high = df[col].quantile(0.95)
-        df_norm[col] = df[col].clip(lower=q_low, upper=q_high)
-        mn, mx = df_norm[col].min(), df_norm[col].max()
+        # 正規化 (Min-Max)
+        mn, mx = df[col].min(), df[col].max()
         denom = mx - mn
-        if denom == 0: df_norm[f'{col}_n'] = 0.5
+        if denom == 0: 
+            df_norm[f'{col}_n'] = 0.5 # 無差異
         else:
-            if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df_norm[col] - mn) / denom
-            else: df_norm[f'{col}_n'] = (mx - df_norm[col]) / denom
+            if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df[col] - mn) / denom
+            else: df_norm[f'{col}_n'] = (mx - df[col]) / denom
             
-    m = len(df); k = 1 / np.log(m) if m > 1 else 0; weights = {}
+        # 【數學修正】平移演算法 (Shifted Entropy)
+        # 避免 ln(0)，統一平移 0.001
+        df_norm[f'{col}_n'] = df_norm[f'{col}_n'] + 0.001 
+            
+    m = len(df)
+    k = 1 / np.log(m) if m > 1 else 0
+    weights = {}
+    
     for key, cfg in config.items():
         col = cfg['col']
         if f'{col}_n' in df_norm.columns:
-            p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum() if df_norm[f'{col}_n'].sum() != 0 else 0
-            e = -k * np.sum(p * np.log(p + 1e-9))
+            # 重新歸一化以計算機率
+            p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum()
+            # 計算熵值
+            e = -k * np.sum(p * np.log(p))
             weights[key] = 1 - e 
+            
     tot = sum(weights.values())
     if tot == 0: fin_w = {k: 1/len(weights) for k in weights}
     else: fin_w = {k: v/tot for k, v in weights.items()}
+    
     df['Score'] = 0
     for key, cfg in config.items():
         if f'{cfg["col"]}_n' in df_norm.columns:
-            df['Score'] += fin_w[key] * df_norm[f'{cfg["col"]}_n'] 
+            # 扣掉平移量再加權 (還原真實分數)
+            raw_score = df_norm[f'{cfg["col"]}_n'] - 0.001
+            df['Score'] += fin_w[key] * raw_score
+            
     df['Score'] = (df['Score']*100).round(1)
     return df.sort_values('Score', ascending=False), fin_w, None, df_norm
 
 def render_factor_bars(radar_data):
     html = ""
-    colors = {'技術': '#29b6f6', '籌碼': '#ab47bc', '財報': '#ffca28', '估值': '#ef5350'}
+    # 新增風險顏色
+    colors = {'技術': '#29b6f6', '籌碼': '#ab47bc', '財報': '#ffca28', '估值': '#ef5350', '風險': '#8d6e63'}
     for cat, score in radar_data.items():
         color = colors.get(cat, '#8b949e')
         blocks = int(score / 10)
@@ -637,7 +656,6 @@ if run_btn:
             st.error("❌ 掃描失敗：所有來源皆無回應，請稍後再試。")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
-    # 更新：檢查欄位是否包含新的指標
     if 'pe' not in st.session_state['raw_data'].columns:
         st.session_state['raw_data'] = None
         st.rerun()
@@ -720,6 +738,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 'fcf_yield': f"{row.get('yield', 0):.2f}%",
                                 'roe_syn': f"{row.get('roe_syn', 0):.2f}%",
                                 'ma_bias': f"{row['priceToMA60']:.2%}",
+                                'volatility': f"{row.get('volatility', 0):.2%}", # PDF 顯示波動率
                                 'radar_data': radar,
                                 'analysis': analysis_text,
                                 'action': row['Action Plan'],
@@ -729,7 +748,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     if bulk_data_final:
                         pdf_data_final = create_pdf(bulk_data_final)
                         st.download_button(
-                            label="📑 下載全部報告 (PDF)",
+                            label="📑 下載個股 PDF",
                             data=pdf_data_final,
                             file_name=f"AlphaCore_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
                             mime="application/pdf",
