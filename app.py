@@ -13,7 +13,7 @@ import os
 import io
 import re
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 import matplotlib.pyplot as plt
 from math import pi
 
@@ -128,19 +128,8 @@ def generate_radar_img_mpl(radar_data):
 def generate_trend_img_mpl(full_symbol, ma_bias):
     try:
         stock_hist = yf.Ticker(full_symbol).history(period="6mo")
-        if stock_hist.empty:
-            try:
-                code = full_symbol.split('.')[0]
-                stock = twstock.Stock(code)
-                hist_data = stock.fetch_31()
-                if hist_data:
-                    dates = [d.date for d in hist_data]
-                    prices = [d.close for d in hist_data]
-                    stock_hist = pd.DataFrame({'Close': prices}, index=dates)
-            except: pass
         if stock_hist.empty: return None
-        if isinstance(stock_hist.index[0], datetime): dates = stock_hist.index
-        else: dates = range(len(stock_hist))
+        dates = stock_hist.index
         prices = stock_hist['Close']
         fig, ax = plt.subplots(figsize=(5, 3))
         ax.plot(dates, prices, color='#29b6f6', linewidth=2)
@@ -174,16 +163,6 @@ def plot_radar_chart_ui(row_name, radar_data):
 def plot_trend_chart_ui(full_symbol, ma_bias):
     try:
         stock_hist = yf.Ticker(full_symbol).history(period="6mo")
-        if stock_hist.empty:
-            try:
-                code = full_symbol.split('.')[0]
-                ts = twstock.Stock(code)
-                data = ts.fetch_31()
-                if data:
-                    dates = [d.date for d in data]
-                    prices = [d.close for d in data]
-                    stock_hist = pd.DataFrame({'Close': prices}, index=dates)
-            except: pass
         if stock_hist.empty: return None
         fig_trend = go.Figure()
         fig_trend.add_trace(go.Scatter(x=stock_hist.index, y=stock_hist['Close'], mode='lines', name='Price', line=dict(color='#29b6f6', width=2)))
@@ -367,91 +346,122 @@ indicators_config = {
     'FCF Yield': {'col': 'fcfYield', 'direction': '正向', 'name': 'FCF收益率', 'category': '財報'},
 }
 
-# --- 【關鍵修復】: User-Agent 輪替 + Proxy 接口 ---
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15'
-]
+# --- 【關鍵升級】批量下載引擎 (Batch Engine) ---
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_batch_data(tickers_list):
+    """
+    使用 yfinance.download 進行批量下載，繞過單次請求的限制。
+    注意：此模式下僅能獲取技術面數據 (Price, MA, Vol)，財報數據將設為 NaN。
+    """
+    try:
+        # 清洗代號
+        symbols = [t.split(' ')[0] for t in tickers_list]
+        
+        # 1. 批量下載 (1次請求)
+        data = yf.download(symbols, period="6mo", group_by='ticker', progress=False, threads=True)
+        
+        results = []
+        
+        # 2. 解析數據
+        # 如果只有一檔股票，DataFrame 結構會不同，需標準化
+        if len(symbols) == 1:
+            sym = symbols[0]
+            # 模擬多層級結構以便統一處理
+            cols = pd.MultiIndex.from_product([[sym], data.columns])
+            data.columns = cols
+            
+        for ticker_full in tickers_list:
+            parts = ticker_full.split(' ')
+            symbol = parts[0]
+            name = parts[1] if len(parts) > 1 else symbol
+            
+            try:
+                # 取得該股票的 DataFrame
+                df = data[symbol].copy()
+                
+                # 檢查是否有數據 (全部 NaN 則跳過)
+                if df['Close'].isnull().all():
+                    continue
+                    
+                # 計算技術指標
+                latest = df.iloc[-1]
+                price = latest['Close']
+                
+                # 若最新價也是 NaN (可能停牌)，跳過
+                if pd.isna(price): continue
+                
+                # MA60 乖離
+                ma60 = df['Close'].rolling(window=60).mean().iloc[-1]
+                bias = (price / ma60) - 1 if (not pd.isna(ma60) and ma60 > 0) else 0
+                
+                # 量能比
+                vol_curr = df['Volume'].iloc[-1]
+                vol_avg = df['Volume'].rolling(window=20).mean().iloc[-1] # 用月均量
+                vol_ratio = (vol_curr / vol_avg) if (not pd.isna(vol_avg) and vol_avg > 0) else 1.0
+                
+                # 建構結果 (財報數據全部填 NaN)
+                results.append({
+                    '代號': symbol.split('.')[0],
+                    'full_symbol': symbol,
+                    '名稱': name,
+                    'close_price': float(price),
+                    'pegRatio': np.nan, 
+                    'priceToMA60': bias, 
+                    'volumeRatio': vol_ratio,
+                    'priceToBook': np.nan,
+                    'returnOnEquity': np.nan, 
+                    'debtToEquity': np.nan,
+                    'fcfYield': np.nan, 
+                    'beta': 1.0
+                })
+            except Exception:
+                continue
+                
+        return pd.DataFrame(results)
+    except Exception as e:
+        return pd.DataFrame()
 
-def get_session(proxy_url=None):
-    s = requests.Session()
-    s.headers.update({'User-Agent': random.choice(USER_AGENTS)})
-    if proxy_url:
-        s.proxies = {"http": proxy_url, "https": proxy_url}
-    return s
-
+# 既有的單檔抓取 (保留給少量股票使用)
 def fetch_single_stock(ticker, proxy=None):
+    # (此函式保持原樣，用於少量股票的詳細分析)
     try:
         ticker = ticker.strip()
         parts = ticker.split(' ')
         symbol = parts[0]
+        name_zh = parts[1] if len(parts) > 1 else symbol
         
-        if len(parts) > 1:
-            name_zh = parts[1]
-        else:
-            name_zh = symbol 
-        
-        if not (symbol.endswith('.TW') or symbol.endswith('.TWO')):
-            if symbol.isdigit() and len(symbol) == 4:
-                symbol += '.TW'
-        
-        display_code = symbol.split('.')[0]
-        
-        session = get_session(proxy)
-        stock = yf.Ticker(symbol, session=session)
-        
-        info = {}
-        price = None
-        
-        # 1. 嘗試完整 info
+        stock = yf.Ticker(symbol)
         try:
             info = stock.info
             price = info.get('currentPrice', info.get('previousClose', None))
-        except Exception:
+        except: 
             info = {}
+            price = None
             
-        # 2. 嘗試 fast_info
         if price is None:
             try:
                 price = stock.fast_info.last_price
                 if price:
                     info['currentPrice'] = price
-                    info['marketCap'] = stock.fast_info.market_cap
-                    info['previousClose'] = stock.fast_info.previous_close
-            except Exception: pass
-        
+            except: pass
+            
         if price is None: return None
-
-        name_en = info.get('shortName', '')
-        final_name = f"{name_zh} ({name_en})" if name_en else name_zh
 
         peg = info.get('pegRatio', None)
         beta = info.get('beta', 1.0)
         ma50 = info.get('fiftyDayAverage', price) 
         bias = (price / ma50) - 1 if ma50 and ma50 > 0 else 0
-        
         vol_curr = info.get('volume', 0)
         vol_avg = info.get('averageVolume', 0)
-        if vol_curr == 0:
-             try:
-                hist = stock.history(period="5d")
-                if not hist.empty:
-                    vol_curr = hist['Volume'].iloc[-1]
-                    vol_avg = hist['Volume'].mean()
-             except: pass
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
-        
         fcf = info.get('freeCashflow', 0)
         mkt_cap = info.get('marketCap', 1)
-        if mkt_cap is None: mkt_cap = 1
-        fcf_yield = (fcf / mkt_cap) if (fcf is not None and mkt_cap > 0) else 0
+        fcf_yield = (fcf / mkt_cap) if (fcf and mkt_cap) else 0
         
         return {
-            '代號': display_code,
+            '代號': symbol.split('.')[0],
             'full_symbol': symbol,
-            '名稱': final_name,
+            '名稱': name_zh,
             'close_price': price, 
             'pegRatio': peg, 
             'priceToMA60': bias, 
@@ -464,36 +474,32 @@ def fetch_single_stock(ticker, proxy=None):
         }
     except: return None
 
-# 【關鍵修復】: 加入 st.cache_data 減少請求次數
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_stock_data_cached(selected_list, proxy_url=None):
-    data = []
-    failed_stocks = []
+def get_stock_data_concurrent(selected_list):
+    # 【關鍵升級】智慧切換模式
+    # 如果股票數量 > 5，強制使用「批量下載模式」 (Batch Mode) 以防封鎖
+    if len(selected_list) > 5:
+        st.toast("🔥 啟動「戰略批量掃描模式」 (僅技術面數據，速度最佳)", icon="🚀")
+        return fetch_batch_data(selected_list)
     
-    # 降低併發數 (max_workers=3)
+    # 少量股票則維持「精細模式」 (Detail Mode)
+    data = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor: 
-        # 使用 lambda 將 proxy 傳入 fetch_single_stock
-        future_to_ticker = {executor.submit(fetch_single_stock, t, proxy_url): t for t in selected_list}
+        future_to_ticker = {executor.submit(fetch_single_stock, t): t for t in selected_list}
+        completed = 0
+        total = len(selected_list)
+        progress_bar = st.progress(0, text="初始化精細掃描...")
         
-        # 由於 cache 內不能顯示進度條，這裡改用簡單的 loop 等待
         for future in concurrent.futures.as_completed(future_to_ticker):
-            ticker = future_to_ticker[future]
-            try:
-                result = future.result()
-                if result: 
-                    data.append(result)
-                else:
-                    failed_stocks.append(ticker)
-            except:
-                failed_stocks.append(ticker)
+            res = future.result()
+            if res: data.append(res)
+            completed += 1
+            progress_bar.progress(completed / total, text=f"掃描中: {completed}/{total}")
+            time.sleep(0.5)
             
-            # 隨機延遲
-            time.sleep(random.uniform(0.5, 1.2))
-            
-    return pd.DataFrame(data), failed_stocks
+    return pd.DataFrame(data)
 
 def calculate_entropy_score(df, config):
-    if df.empty: return df, None, "數據抓取為空，請檢查代號是否正確或稍後再試。", None
+    if df.empty: return df, None, "數據抓取為空，請檢查代號是否正確。", None
     
     df_norm = df.copy()
     
@@ -590,11 +596,6 @@ with st.sidebar:
     st.caption("🔍 若找不到股票，請直接輸入代號 (如 1802):")
     manual_input = st.text_input("手動輸入代號:", placeholder="例如: 1802 或 2330", label_visibility="collapsed")
     
-    # 【關鍵新增】Proxy 設定區
-    with st.expander("🛡️ Proxy 設定 (選填)", expanded=False):
-        st.caption("若遇到 IP 封鎖 (Failed to fetch)，請嘗試設定 Proxy")
-        user_proxy = st.text_input("Proxy URL", placeholder="http://user:pass@ip:port")
-    
     if scan_mode == "自行輸入/多選":
         default_selection = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海"]
         selected = st.multiselect("選擇股票:", options=sorted(list(stock_map.values())), default=[s for s in default_selection if s in stock_map.values()])
@@ -648,16 +649,10 @@ if run_btn:
         st.session_state['analysis_results'] = {}
         st.session_state['raw_data'] = None
         st.session_state['df_norm'] = None
-        
-        # 使用快取函式
-        with st.spinner("🚀 正在掃描市場數據 (已啟用快取以加速並防止封鎖)..."):
-            raw, failed_stocks = get_stock_data_cached(target_stocks, user_proxy if user_proxy else None)
-            
+        raw = get_stock_data_concurrent(target_stocks)
         if not raw.empty:
             st.session_state['raw_data'] = raw
             st.session_state['scan_finished'] = True
-            if failed_stocks:
-                st.warning(f"⚠️ 部分股票數據抓取失敗: {', '.join(failed_stocks)}")
             st.rerun()
         else:
             st.error("❌ 掃描失敗：無法獲取任何股票數據，請檢查代號是否正確。")
