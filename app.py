@@ -33,68 +33,93 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 全域視覺優化 ---
+# --- 2. CSS 暴力修正 (針對您提出的三個痛點) ---
 st.markdown("""
 <style>
-    /* 全局強制深色背景與白字 */
+    /* =========================================
+       1. 基底：強制全域黑底白字
+       ========================================= */
     .stApp { background-color: #0e1117 !important; }
     body, h1, h2, h3, h4, h5, h6, p, div, span, label, li {
         color: #e6e6e6 !important;
         font-family: 'Roboto', sans-serif;
     }
 
-    /* DataFrame 工具列修復 */
-    [data-testid="stElementToolbar"] {
-        background-color: #262730 !important;
-        border: 1px solid #4b4b4b !important;
-        border-radius: 6px !important;
-        z-index: 99999 !important;
-    }
-    [data-testid="stElementToolbar"] button { border: none !important; background: transparent !important; }
-    [data-testid="stElementToolbar"] svg { fill: #ffffff !important; color: #ffffff !important; }
-    [data-testid="stElementToolbar"] button:hover { background-color: #4b4b4b !important; }
-
-    /* Popover 彈出選單修復 (Show/hide columns) */
-    div[data-baseweb="popover"], ul[data-baseweb="menu"] {
-        background-color: #1f2937 !important;
-        border: 1px solid #4b4b4b !important;
-    }
-    div[data-baseweb="popover"] li, div[data-baseweb="popover"] div { color: #e6e6e6 !important; }
-    li[role="option"]:hover, li[role="option"][aria-selected="true"] {
-        background-color: #238636 !important;
-        color: white !important;
-    }
-
-    /* 下載按鈕修復 */
-    [data-testid="stDownloadButton"] button {
-        background-color: #1f2937 !important;
-        color: #ffffff !important;
-        border: 1px solid #4b4b4b !important;
-        transition: all 0.3s ease;
-    }
-    [data-testid="stDownloadButton"] button:hover {
-        border-color: #58a6ff !important;
-        color: #58a6ff !important;
-        background-color: #262730 !important;
-    }
-    [data-testid="stDownloadButton"] button p { color: inherit !important; }
-
-    /* 輸入框與其他元件 */
+    /* =========================================
+       2. 【痛點修復】選擇產業/下拉選單 (圖1問題)
+       ========================================= */
+    /* 修正選單本體的背景 */
     div[data-baseweb="select"] > div {
-        background-color: #21262d !important;
-        border-color: #30363d !important;
+        background-color: #262730 !important;
+        border-color: #4b4b4b !important;
         color: white !important;
     }
-    input { color: #ffffff !important; caret-color: #ffffff !important; }
-    [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
     
-    .stock-card {
-        background-color: #161b22; 
-        padding: 20px; 
-        border-radius: 10px; 
-        border: 1px solid #30363d; 
-        margin-bottom: 15px;
+    /* 修正「彈出列表」的背景 (最關鍵的修正) */
+    ul[data-baseweb="menu"], 
+    div[data-baseweb="popover-content"],
+    div[data-baseweb="popover"] {
+        background-color: #1f2937 !important; /* 深灰背景 */
+        border: 1px solid #4b4b4b !important;
     }
+    
+    /* 修正列表內的選項文字 */
+    li[role="option"] {
+        color: #ffffff !important; /* 白字 */
+    }
+    
+    /* 修正滑鼠懸停時的顏色 */
+    li[role="option"]:hover, li[role="option"][aria-selected="true"] {
+        background-color: #238636 !important; /* 綠色背景 */
+        color: #ffffff !important;
+    }
+
+    /* =========================================
+       3. 【痛點修復】表格右上角工具列 (圖3問題)
+       ========================================= */
+    /* 強制定位並覆蓋背景色 */
+    [data-testid="stElementToolbar"] {
+        background-color: #262730 !important; /* 深色背景 */
+        border: 1px solid #4b4b4b !important;
+        color: #ffffff !important;
+    }
+    
+    /* 覆蓋按鈕樣式 */
+    [data-testid="stElementToolbar"] button {
+        background-color: transparent !important;
+        border: none !important;
+        color: #ffffff !important;
+    }
+    
+    /* 強制 SVG 圖示變白 */
+    [data-testid="stElementToolbar"] svg {
+        fill: #ffffff !important;
+        stroke: #ffffff !important;
+    }
+    
+    /* 滑鼠懸停效果 */
+    [data-testid="stElementToolbar"] button:hover {
+        background-color: #4b4b4b !important;
+    }
+
+    /* =========================================
+       4. 【痛點修復】下載按鈕與排版 (圖2問題)
+       ========================================= */
+    /* 強制按鈕文字不換行 */
+    .stDownloadButton button {
+        white-space: nowrap !important;
+        width: 100% !important;
+        background-color: #1f2937 !important;
+        border: 1px solid #238636 !important;
+        color: white !important;
+    }
+    .stDownloadButton button:hover {
+        background-color: #238636 !important;
+        border-color: #ffffff !important;
+        color: white !important;
+    }
+    
+    /* PDF 中心容器優化 */
     .pdf-center {
         background-color: #1f2937;
         padding: 15px 20px;
@@ -104,6 +129,24 @@ st.markdown("""
         display: flex;
         align-items: center;
         justify-content: space-between;
+    }
+
+    /* =========================================
+       5. 其他元件優化
+       ========================================= */
+    /* 輸入框文字 */
+    input { color: #ffffff !important; caret-color: #ffffff !important; }
+    
+    /* 側邊欄 */
+    [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
+    
+    /* 卡片 */
+    .stock-card {
+        background-color: #161b22; 
+        padding: 20px; 
+        border-radius: 10px; 
+        border: 1px solid #30363d; 
+        margin-bottom: 15px;
     }
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
 </style>
@@ -280,7 +323,6 @@ def get_tw_stock_info():
             full_code = f"{code}{suffix}"
             name = info.name
             industry = info.group
-            # 格式：2330.TW 台積電
             stock_dict[full_code] = f"{full_code} {name}"
             if industry not in industry_dict: industry_dict[industry] = []
             industry_dict[industry].append(full_code)
@@ -298,21 +340,16 @@ indicators_config = {
     'Profit Margins': {'col': 'profitMargins', 'direction': '正向', 'name': '淨利率', 'category': '財報'},
 }
 
-def fetch_single_stock(ticker_str):
+def fetch_single_stock(ticker):
     try:
-        # ticker_str 來自選單，格式如 "2330.TW 台積電"
-        parts = ticker_str.split(' ')
-        symbol = parts[0]  # 2330.TW
-        name_zh = parts[1] if len(parts) > 1 else symbol # 台積電
+        parts = ticker.split(' ')
+        symbol = parts[0]
+        name_zh = parts[1] if len(parts) > 1 else symbol
         
         display_code = symbol.split('.')[0]
         stock = yf.Ticker(symbol)
         info = stock.info 
-        
-        # 嘗試抓取英文名稱
         name_en = info.get('shortName', '')
-        
-        # 【關鍵修改】組合名稱：中文 + (英文)
         final_name = f"{name_zh} ({name_en})" if name_en else name_zh
 
         peg = info.get('pegRatio', None)
@@ -320,13 +357,11 @@ def fetch_single_stock(ticker_str):
         growth = info.get('revenueGrowth', 0) 
         if peg is None and pe is not None and growth > 0: peg = pe / (growth * 100)
         elif peg is None: peg = 2.5 
-        
         price = info.get('currentPrice', info.get('previousClose', 0))
         ma50 = info.get('fiftyDayAverage', price) 
         bias = (price / ma50) - 1 if ma50 and ma50 > 0 else 0
         beta = info.get('beta', 1.0)
         if beta is None: beta = 1.0
-        
         vol_avg = info.get('averageVolume', 0)
         vol_curr = info.get('volume', 0)
         if vol_curr == 0 or vol_avg == 0:
@@ -337,11 +372,10 @@ def fetch_single_stock(ticker_str):
                     vol_avg = hist['Volume'].mean()
             except: pass
         vol_ratio = (vol_curr / vol_avg) if vol_avg > 0 else 1.0
-        
         return {
             '代號': display_code,
             'full_symbol': symbol,
-            '名稱': final_name, # 使用組合後的中英名稱
+            '名稱': final_name,
             'close_price': price, 
             'pegRatio': peg, 
             'priceToMA60': bias, 
@@ -486,57 +520,10 @@ with st.sidebar:
     st.markdown("---")
     run_btn = st.button("🚀 啟動全自動掃描", type="primary", use_container_width=True)
 
-    # --- 批次下載 PDF (基本數據版) ---
-    if st.session_state['scan_finished'] and st.session_state['df_norm'] is not None:
-        st.markdown("---")
-        st.markdown("### 📥 報告下載中心")
-        
-        with st.container():
-            st.markdown('<div class="pdf-center">', unsafe_allow_html=True)
-            
-            # 數據準備
-            bulk_data = []
-            raw = st.session_state['raw_data']
-            res, _, _, _ = calculate_entropy_score(raw, indicators_config)
-            df_norm = st.session_state['df_norm']
-            
-            for idx, row in res.iterrows(): 
-                stock_name = f"{row['代號']} {row['名稱']}"
-                norm_row = df_norm.loc[idx] 
-                radar = get_radar_data(norm_row, indicators_config)
-                analysis_text = st.session_state['analysis_results'].get(stock_name, None)
-                
-                bulk_data.append({
-                    'name': stock_name,
-                    'price': row['close_price'],
-                    'score': row['Score'],
-                    'peg': row['pegRatio'],
-                    'beta': row['beta'],
-                    'ma_bias': f"{row['priceToMA60']:.2%}",
-                    'radar_data': radar,
-                    'analysis': analysis_text
-                })
-            
-            if bulk_data:
-                # 【關鍵修改】優化排版與對齊
-                col_info, col_dl = st.columns([0.7, 0.3], vertical_alignment="center")
-                with col_info:
-                    st.success(f"✅ 已準備 {len(bulk_data)} 份報告。若有點擊 AI 分析，內容將自動更新。")
-                with col_dl:
-                    pdf_data = create_pdf(bulk_data)
-                    st.download_button(
-                        label="📑 下載全部報告 (PDF)",
-                        data=pdf_data,
-                        file_name=f"QuantAlpha_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-            st.markdown('</div>', unsafe_allow_html=True)
-
 # --- 12. 主儀表板 ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ AlphaCore 智能量化戰略終端 4.1")
+    st.title("⚡ AlphaCore 智能量化戰略終端 4.2")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -585,6 +572,53 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             },
             hide_index=True, use_container_width=True
         )
+
+        st.markdown("---")
+        st.markdown("### 📥 戰略報告下載中心 (All-in-One Reports)")
+        
+        with st.container():
+            st.markdown('<div class="pdf-center">', unsafe_allow_html=True)
+            
+            # 直接準備數據
+            if len(res) > 0:
+                # 【優化】調整按鈕容器比例，避免換行
+                col_info, col_dl = st.columns([2, 1], vertical_alignment="center")
+                with col_info:
+                    st.success(f"✅ 已準備 {len(res)} 份量化數據報告。點擊 AI 分析後，內容將自動更新。")
+                with col_dl:
+                    # 準備數據
+                    bulk_data_final = []
+                    for idx, row in res.iterrows():
+                        stock_name = f"{row['代號']} {row['名稱']}"
+                        
+                        # 安全匹配
+                        code_match = df_norm[df_norm['代號'] == row['代號']]
+                        if not code_match.empty:
+                            norm_row = code_match.iloc[0]
+                            radar = get_radar_data(norm_row, indicators_config)
+                            analysis_text = st.session_state['analysis_results'].get(stock_name, None)
+                            
+                            bulk_data_final.append({
+                                'name': stock_name,
+                                'price': row['close_price'],
+                                'score': row['Score'],
+                                'peg': row['pegRatio'],
+                                'beta': row['beta'],
+                                'ma_bias': f"{row['priceToMA60']:.2%}",
+                                'radar_data': radar,
+                                'analysis': analysis_text
+                            })
+                    
+                    if bulk_data_final:
+                        pdf_data_final = create_pdf(bulk_data_final)
+                        st.download_button(
+                            label="📄 下載全部報告 (PDF)",
+                            data=pdf_data_final,
+                            file_name=f"QuantAlpha_Full_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+            st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("---")
         st.markdown("### 🎯 深度戰略分析 (Strategic Deep Dive)")
@@ -636,7 +670,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         else: st.warning("⚠️ 無法取得歷史數據")
                     except Exception as e: st.error("圖表載入失敗")
 
-                # 按鈕區 (AI 生成 + 個股下載)
                 col_btn, col_dl = st.columns([3, 1])
                 
                 with col_btn:
