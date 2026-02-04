@@ -20,24 +20,31 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Quality Growth)", 
-    page_icon="💎", 
+    page_title="熵值決策選股平台 (Auto-Heal Fix)", 
+    page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS ---
+# --- 2. CSS 專業儀表板風格 ---
 st.markdown("""
 <style>
+    /* 全域深色 */
     .stApp { background-color: #0e1117 !important; }
+    
+    /* 側邊欄 */
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
+    
+    /* 文字顏色 */
     h1, h2, h3, p, span, div, label { color: #e6e6e6 !important; font-family: 'Roboto', sans-serif; }
     
+    /* 下拉選單修正 */
     div[role="listbox"] ul { background-color: #262730 !important; }
     li[role="option"] { color: white !important; background-color: #262730 !important; }
     li[role="option"]:hover { background-color: #238636 !important; }
     input { background-color: #0d1117 !important; color: white !important; border: 1px solid #30363d !important; }
     
+    /* 【核心】專業戰略卡片 */
     .stock-card { 
         background-color: #1f2937; 
         padding: 20px; 
@@ -46,24 +53,35 @@ st.markdown("""
         margin-bottom: 25px; 
         box-shadow: 0 4px 10px rgba(0,0,0,0.5);
     }
+    
+    /* 卡片標題列 */
     .card-header {
-        display: flex; justify-content: space-between; align-items: center;
-        border-bottom: 1px solid #374151; padding-bottom: 12px; margin-bottom: 15px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #374151;
+        padding-bottom: 12px;
+        margin-bottom: 15px;
     }
     .header-title { font-size: 1.6rem; font-weight: 700; color: #ffffff; }
     .header-price { font-size: 1.2rem; color: #9ca3af; margin-left: 10px; }
     
-    /* 標籤系統 */
+    /* 標籤 */
     .tag { padding: 4px 10px; border-radius: 15px; font-size: 0.85rem; font-weight: bold; margin-left: 8px; }
     .tag-strategy { background-color: #238636; color: white; border: 1px solid #2ea043; }
     .tag-buffett { background-color: #FFD700; color: black; border: 1px solid #b39700; }
     .tag-sector { background-color: #3b82f6; color: white; border: 1px solid #2563eb; }
-    .tag-warn { background-color: #b91c1c; color: white; border: 1px solid #ef4444; } /* 虛胖警告 */
-    .tag-quality { background-color: #7c3aed; color: white; border: 1px solid #8b5cf6; } /* 高品質 */
+    .tag-warn { background-color: #b91c1c; color: white; border: 1px solid #ef4444; }
+    .tag-quality { background-color: #7c3aed; color: white; border: 1px solid #8b5cf6; }
     
+    /* 中間數據網格 */
     .metrics-grid {
-        display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
-        background-color: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        background-color: rgba(0,0,0,0.2);
+        padding: 15px;
+        border-radius: 8px;
     }
     .metric-item { display: flex; justify-content: space-between; align-items: center; }
     .m-label { color: #9ca3af; font-size: 0.9rem; }
@@ -71,12 +89,19 @@ st.markdown("""
     .m-high { color: #4ade80; } 
     .m-warn { color: #f87171; }
     
+    /* AI 分析區塊 */
     .ai-box {
-        background-color: #2d333b; border-left: 4px solid #58a6ff;
-        padding: 15px; margin-top: 15px; border-radius: 4px;
-        font-size: 0.95rem; line-height: 1.6; color: #e6e6e6;
+        background-color: #2d333b;
+        border-left: 4px solid #58a6ff;
+        padding: 15px;
+        margin-top: 15px;
+        border-radius: 4px;
+        font-size: 0.95rem;
+        line-height: 1.6;
+        color: #e6e6e6;
     }
     
+    /* 下載按鈕 */
     .stDownloadButton button { background-color: #374151 !important; border: 1px solid #4b5563 !important; color: white !important; width: 100%; }
     .stDownloadButton button:hover { border-color: #60a5fa !important; color: #60a5fa !important; }
 </style>
@@ -96,7 +121,7 @@ except Exception:
     st.error("⚠️ 系統偵測不到 API Key！")
     st.stop()
 
-# --- 5. 字型 ---
+# --- 5. 字型下載與註冊 ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -114,7 +139,7 @@ def setup_chinese_font():
 
 font_ready = setup_chinese_font()
 
-# --- 6. 數據引擎 (新增 EPS Growth 與毛利率) ---
+# --- 6. 數據引擎 ---
 def get_tw_stock_list():
     try:
         import twstock
@@ -145,9 +170,9 @@ def get_stock_data(symbol):
             'pe': info.get('trailingPE'),
             'peg': info.get('pegRatio'),
             'pb': info.get('priceToBook'),
-            'rev_growth': info.get('revenueGrowth'), # 營收成長
-            'eps_growth': info.get('earningsGrowth'), # 【新增】EPS 成長
-            'gross_margins': info.get('grossMargins'), # 【新增】毛利率
+            'rev_growth': info.get('revenueGrowth'),
+            'eps_growth': info.get('earningsGrowth'),
+            'gross_margins': info.get('grossMargins'),
             'yield': info.get('dividendYield'),
             'roe': info.get('returnOnEquity'),
             'beta': info.get('beta'),
@@ -216,7 +241,6 @@ def batch_scan_stocks(stock_list, tej_data=None):
                             ma60 = closes.rolling(60).mean().iloc[-1]
                             if not pd.isna(ma60): ma_bias = (price / ma60) - 1
                     
-                    # 財報
                     if pd.isna(price): price = y_data.get('close_price')
                     pe = y_data.get('pe')
                     pb = y_data.get('pb')
@@ -224,7 +248,6 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     raw_dy = y_data.get('yield')
                     if raw_dy: dy = raw_dy * 100 
                     
-                    # 成長數據 (單位修正)
                     raw_rev = y_data.get('rev_growth')
                     if raw_rev: rev_growth = raw_rev * 100
                     
@@ -261,14 +284,14 @@ def batch_scan_stocks(stock_list, tej_data=None):
             except: continue
     
     df = pd.DataFrame(results)
-    # 補齊欄位
+    # 強制補齊欄位 (包含新指標)
     cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'eps_growth', 'gross_margins', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
     for c in cols:
         if c not in df.columns: df[c] = np.nan
         
     return df, history_map
 
-# --- 8. 評分邏輯 (引入品質因子) ---
+# --- 8. 評分邏輯 ---
 def get_sector_config(industry):
     config = {
         'Volatility': {'col': 'volatility', 'dir': 'min', 'w': 1, 'cat': '風險'}, 
@@ -277,7 +300,7 @@ def get_sector_config(industry):
         config.update({
             'PEG': {'col': 'peg', 'dir': 'min', 'w': 1.5, 'cat': '成長'},
             'Rev Growth': {'col': 'rev_growth', 'dir': 'max', 'w': 1.0, 'cat': '成長'},
-            'EPS Growth': {'col': 'eps_growth', 'dir': 'max', 'w': 1.5, 'cat': '成長'}, # 【重點】EPS權重加重
+            'EPS Growth': {'col': 'eps_growth', 'dir': 'max', 'w': 1.5, 'cat': '成長'},
             'P/E': {'col': 'pe', 'dir': 'min', 'w': 1.0, 'cat': '價值'},
         })
     elif industry == 'Finance': 
@@ -309,17 +332,29 @@ def check_buffett_criteria(row):
 
 def calculate_score(df, use_buffett=False):
     if df.empty: return df, None
+    
+    # 【關鍵修復】自動補欄機制 (Auto-Heal Schema)
+    # 防止舊資料缺欄位導致 KeyError
+    required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'peg', 'volatility', 'roe', 'priceToMA60']
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = np.nan # 自動補上缺失欄位
+    
     df_norm = df.copy()
     scores = []
     plans = []
     buffett_tags = []
     quality_tags = []
     
-    fill_map = {'pe': 50, 'pb': 5, 'yield': 0, 'rev_growth': 0, 'eps_growth': 0, 'gross_margins': 0, 'peg': 5, 'volatility': 0.5, 'roe': 0, 'priceToMA60': 0}
+    fill_map = {c: 0 for c in required_cols}
+    fill_map['pe'] = 50
+    fill_map['peg'] = 5
+    fill_map['volatility'] = 0.5
+    
     calc_df = df.fillna(fill_map)
 
     for idx, row in calc_df.iterrows():
-        config = get_sector_config(row['industry'])
+        config = get_sector_config(row.get('industry', 'General'))
         total_score = 0
         total_weight = 0
         
@@ -341,18 +376,16 @@ def calculate_score(df, use_buffett=False):
         
         scores.append(round(final, 1))
         
-        # 【核心邏輯】成長品質檢查
+        # 戰略判斷
         rev = row.get('rev_growth', 0)
         eps = row.get('eps_growth', 0)
         ma = row.get('priceToMA60', 0)
         
-        # 標籤判斷
         q_tag = ""
-        if rev > 20 and eps < 0: q_tag = "Profitless" # 虛胖
-        elif rev > 15 and eps > 15: q_tag = "Quality" # 高品質
+        if rev > 20 and eps < 0: q_tag = "Profitless"
+        elif rev > 15 and eps > 15: q_tag = "Quality"
         quality_tags.append(q_tag)
         
-        # 戰略判斷
         if q_tag == "Profitless": plans.append("⚠️ 虛胖警告 (Profitless)")
         elif final > 75 and q_tag == "Quality": plans.append("💎 高品質爆發 (Quality Buy)")
         elif final > 75: plans.append("🚀 爆發成長 (Buy)")
@@ -474,7 +507,6 @@ def create_pdf(stock_data):
     story.append(Paragraph(f"標的: {stock_data['名稱']} ({stock_data['代號']})", h2_style))
     story.append(Paragraph(f"戰略指令: {stock_data['Strategy']}", normal_style))
     
-    # 判斷是否顯示虛胖警告
     rev_g = stock_data.get('rev_growth', 0)
     eps_g = stock_data.get('eps_growth', 0)
     if rev_g > 20 and eps_g < 0:
@@ -485,8 +517,8 @@ def create_pdf(stock_data):
     metrics_data = [
         ['收盤價', f"{stock_data['close_price']}", '熵值分數', f"{stock_data.get('Score', 'N/A')}"],
         ['本益比 (P/E)', f"{stock_data.get('pe', 'N/A')}", 'PEG Ratio', f"{stock_data.get('peg', 'N/A')}"],
-        ['營收成長', f"{stock_data.get('rev_growth', 0):.2f}%", 'EPS 成長', f"{stock_data.get('eps_growth', 0):.2f}%"], # 新增欄位
-        ['毛利率', f"{stock_data.get('gross_margins', 0):.2f}%", '殖利率', f"{stock_data.get('yield', 0):.2f}%"], # 新增欄位
+        ['營收成長', f"{stock_data.get('rev_growth', 0):.2f}%", 'EPS 成長', f"{stock_data.get('eps_growth', 0):.2f}%"],
+        ['毛利率', f"{stock_data.get('gross_margins', 0):.2f}%", '殖利率', f"{stock_data.get('yield', 0):.2f}%"],
         ['波動率', f"{stock_data.get('volatility', 0)*100:.1f}%", '季線乖離', f"{stock_data.get('priceToMA60', 0)*100:.1f}%"]
     ]
     
@@ -572,8 +604,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 34.0")
-    st.caption("Quality Growth Model + Profitless Trap Filter")
+    st.title("⚡ 熵值決策選股平台 34.1")
+    st.caption("Auto-Heal Schema + Quality Growth + Pro Dashboard")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
