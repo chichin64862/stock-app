@@ -20,13 +20,13 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Auto-Heal Fix)", 
+    page_title="熵值決策選股平台 (TC AI + Multi-File)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 專業儀表板風格 ---
+# --- 2. CSS 專業儀表板風格 (保持不變) ---
 st.markdown("""
 <style>
     /* 全域深色 */
@@ -193,20 +193,39 @@ def sanitize_data(df):
         df['yield'] = df['yield'].apply(lambda x: x/100 if x > 20 else x)
     return df
 
-def process_tej_upload(uploaded_file):
-    if uploaded_file is None: return None
-    try:
-        if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
-        else: df = pd.read_excel(uploaded_file)
-        df.columns = [str(c).strip() for c in df.columns]
-        code_col = next((c for c in df.columns if '代號' in c or 'Code' in c), None)
-        if not code_col: return None
-        tej_map = {}
-        for _, row in df.iterrows():
-            raw_code = str(row[code_col]).split('.')[0].strip()
-            tej_map[raw_code] = row.to_dict()
-        return tej_map
-    except: return None
+# 【核心修改】支援多檔上傳並合併
+def process_tej_upload(uploaded_files):
+    if not uploaded_files: return None
+    tej_map = {}
+    
+    # 確保是列表 (雖然 accept_multiple_files=True 會回傳列表，但做個防呆)
+    if not isinstance(uploaded_files, list):
+        uploaded_files = [uploaded_files]
+        
+    for uploaded_file in uploaded_files:
+        try:
+            if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
+            else: df = pd.read_excel(uploaded_file)
+            
+            # 清理欄位名稱
+            df.columns = [str(c).strip() for c in df.columns]
+            
+            # 尋找代號欄位
+            code_col = next((c for c in df.columns if '代號' in c or 'Code' in c), None)
+            if not code_col: continue # 略過沒有代號的檔案
+            
+            for _, row in df.iterrows():
+                # 處理代號 (去除 .TW 等後綴，只留數字以便對應)
+                raw_code = str(row[code_col]).split('.')[0].strip()
+                
+                # 如果該代號已存在，更新資料 (Merge)；若無，新增
+                if raw_code in tej_map:
+                    tej_map[raw_code].update(row.to_dict())
+                else:
+                    tej_map[raw_code] = row.to_dict()
+        except: continue # 略過壞檔
+        
+    return tej_map
 
 # --- 7. 批量掃描 ---
 @st.cache_data(ttl=300, show_spinner=False)
@@ -262,7 +281,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
                 if tej_data and code in tej_data:
                     t_row = tej_data[code]
                     for k, v in t_row.items():
-                        if '法人' in k: chips = float(v) if v != '-' else 0
+                        if '法人' in k or 'Chips' in k: chips = float(v) if v != '-' else 0
 
                 if (pd.isna(peg) or peg == 0) and not pd.isna(pe) and not pd.isna(rev_growth):
                     peg = calculate_synthetic_peg(pe, rev_growth/100)
@@ -284,7 +303,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
             except: continue
     
     df = pd.DataFrame(results)
-    # 強制補齊欄位 (包含新指標)
+    # Auto-Heal Columns
     cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'eps_growth', 'gross_margins', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
     for c in cols:
         if c not in df.columns: df[c] = np.nan
@@ -333,12 +352,9 @@ def check_buffett_criteria(row):
 def calculate_score(df, use_buffett=False):
     if df.empty: return df, None
     
-    # 【關鍵修復】自動補欄機制 (Auto-Heal Schema)
-    # 防止舊資料缺欄位導致 KeyError
     required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'peg', 'volatility', 'roe', 'priceToMA60']
     for col in required_cols:
-        if col not in df.columns:
-            df[col] = np.nan # 自動補上缺失欄位
+        if col not in df.columns: df[col] = np.nan
     
     df_norm = df.copy()
     scores = []
@@ -347,16 +363,12 @@ def calculate_score(df, use_buffett=False):
     quality_tags = []
     
     fill_map = {c: 0 for c in required_cols}
-    fill_map['pe'] = 50
-    fill_map['peg'] = 5
-    fill_map['volatility'] = 0.5
-    
+    fill_map['pe'] = 50; fill_map['peg'] = 5; fill_map['volatility'] = 0.5
     calc_df = df.fillna(fill_map)
 
     for idx, row in calc_df.iterrows():
         config = get_sector_config(row.get('industry', 'General'))
-        total_score = 0
-        total_weight = 0
+        total_score = 0; total_weight = 0
         
         for name, setting in config.items():
             val = row.get(setting['col'])
@@ -369,18 +381,13 @@ def calculate_score(df, use_buffett=False):
             total_weight += setting['w']
             
         final = total_score / total_weight if total_weight > 0 else 50
-        
         is_buffett = check_buffett_criteria(row)
         buffett_tags.append("🏅" if is_buffett else "")
         if use_buffett and is_buffett: final = min(100, final + 15)
         
         scores.append(round(final, 1))
         
-        # 戰略判斷
-        rev = row.get('rev_growth', 0)
-        eps = row.get('eps_growth', 0)
-        ma = row.get('priceToMA60', 0)
-        
+        rev = row.get('rev_growth', 0); eps = row.get('eps_growth', 0); ma = row.get('priceToMA60', 0)
         q_tag = ""
         if rev > 20 and eps < 0: q_tag = "Profitless"
         elif rev > 15 and eps > 15: q_tag = "Quality"
@@ -433,7 +440,6 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     if history_df is None or history_df.empty: return None
     history_df['MA60'] = history_df['Close'].rolling(window=60).mean()
     current_price = history_df['Close'].iloc[-1]
-    
     bias_pct = ma_bias * 100
     if bias_pct > 15: status_text = f"🔴 留意過熱"
     elif bias_pct > 5: status_text = f"🔥 動能強勢"
@@ -447,7 +453,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     fig.add_trace(go.Scatter(x=[history_df.index[-1]], y=[current_price], mode='markers', marker=dict(color='#00e676', size=10), showlegend=False))
 
     fig.update_layout(
-        title=dict(text=f"<b>配置時機 (Trend)</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>", font=dict(color='white', size=16), y=0.95),
+        title=dict(text=f"<b>配置時機判定</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>", font=dict(color='white', size=16), y=0.95),
         xaxis=dict(showgrid=False, linecolor='#4b5563', tickfont=dict(color='#9ca3af')),
         yaxis=dict(showgrid=True, gridcolor='#374151', tickfont=dict(color='#9ca3af')),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
@@ -456,7 +462,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     )
     return fig
 
-# --- 10. AI 與 PDF ---
+# --- 10. AI 與 PDF (繁中鎖定) ---
 def get_valid_model(key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
@@ -493,7 +499,6 @@ def create_pdf(stock_data):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
-    
     font_name = 'ChineseFont' if font_ready else 'Helvetica'
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, alignment=1, spaceAfter=20)
@@ -503,15 +508,12 @@ def create_pdf(stock_data):
     story.append(Paragraph(f"熵值決策選股及AI深度分析報告", title_style))
     story.append(Paragraph(f"生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
-    
     story.append(Paragraph(f"標的: {stock_data['名稱']} ({stock_data['代號']})", h2_style))
     story.append(Paragraph(f"戰略指令: {stock_data['Strategy']}", normal_style))
     
-    rev_g = stock_data.get('rev_growth', 0)
-    eps_g = stock_data.get('eps_growth', 0)
+    rev_g = stock_data.get('rev_growth', 0); eps_g = stock_data.get('eps_growth', 0)
     if rev_g > 20 and eps_g < 0:
         story.append(Paragraph(f"⚠️ 警告：檢測到虛胖成長 (營收大增但獲利衰退)，請留意毛利率與費用控管。", normal_style))
-    
     story.append(Spacer(1, 10))
     
     metrics_data = [
@@ -521,7 +523,6 @@ def create_pdf(stock_data):
         ['毛利率', f"{stock_data.get('gross_margins', 0):.2f}%", '殖利率', f"{stock_data.get('yield', 0):.2f}%"],
         ['波動率', f"{stock_data.get('volatility', 0)*100:.1f}%", '季線乖離', f"{stock_data.get('priceToMA60', 0)*100:.1f}%"]
     ]
-    
     t = Table(metrics_data, colWidths=[100, 130, 100, 130])
     t.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), font_name),
@@ -546,28 +547,30 @@ def create_pdf(stock_data):
                 
     try: doc.build(story)
     except Exception as e: print(e)
-    
     buffer.seek(0)
     return buffer
 
+# 【核心修改】AI 提示詞：強制繁體中文
 AI_PROMPT = """
-請扮演華爾街基金經理人，分析 [STOCK] ([SECTOR])。
+請扮演華爾街基金經理人，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
 數據：PE=[PE], PEG=[PEG], 營收成長=[REV]%, EPS成長=[EPS_G]%, 毛利率=[GM]%, ROE=[ROE]%.
 重點：
 1. **成長品質**：營收與EPS是否同步成長？是否存在「虛胖」(營收增但EPS減)？
 2. **估值風險**：PEG是否合理？
 3. **結論**：給出操作建議。
+請務必使用**繁體中文**回答。
 """
 
 # --- 11. 主程式 ---
 with st.sidebar:
     st.title("🎛️ 決策控制台")
     
-    with st.expander("📂 匯入 TEJ (選填)"):
-        uploaded = st.file_uploader("上傳 CSV/Excel", type=['csv','xlsx'])
-        if uploaded: 
-            st.session_state['tej_data'] = process_tej_upload(uploaded)
-            st.success(f"已載入 TEJ 數據")
+    # 【核心修改】支援多檔上傳
+    with st.expander("📂 匯入 TEJ (支援多檔)"):
+        uploaded_files = st.file_uploader("上傳 CSV/Excel", type=['csv','xlsx'], accept_multiple_files=True)
+        if uploaded_files: 
+            st.session_state['tej_data'] = process_tej_upload(uploaded_files)
+            st.success(f"已載入 TEJ 數據 (共 {len(uploaded_files)} 檔)")
 
     use_buffett = st.checkbox("🎩 啟用巴菲特選股", value=False)
     
@@ -604,8 +607,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 34.1")
-    st.caption("Auto-Heal Schema + Quality Growth + Pro Dashboard")
+    st.title("⚡ 熵值決策選股平台 35.0")
+    st.caption("Traditional Chinese AI + Multi-File Upload + Quality Growth")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
