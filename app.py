@@ -18,13 +18,13 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Trend Dashboard)", 
-    page_icon="🦅", 
+    page_title="熵值決策選股平台 (AI Debug)", 
+    page_icon="🤖", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 強制修復 (深色底 + 純白數據文字) ---
+# --- 2. CSS 強制修復 (深色底 + 白字) ---
 st.markdown("""
 <style>
     /* 全域設定 */
@@ -68,6 +68,9 @@ st.markdown("""
     /* 按鈕 */
     .stButton button { background-color: #238636; color: white; border: none; font-weight: bold; }
     .stButton button:hover { background-color: #2ea043; }
+    
+    /* 錯誤訊息框 */
+    .error-box { color: #ff6b6b; background-color: #3d1212; padding: 10px; border-radius: 5px; border: 1px solid #ff6b6b; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -75,15 +78,14 @@ st.markdown("""
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
-# K 線獨立儲存
 if 'history_storage' not in st.session_state: st.session_state['history_storage'] = {}
 
-# --- 4. API Key ---
+# --- 4. API Key 檢測 ---
+api_key = None
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
-    st.error("⚠️ 系統偵測不到 API Key！")
-    st.stop()
+    pass # 稍後在側邊欄處理
 
 # --- 5. 字型 ---
 @st.cache_resource
@@ -127,11 +129,7 @@ def get_stock_data_full(symbol):
     try:
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
         ticker = yf.Ticker(symbol)
-        
-        # 1. 財報 (Info)
         info = ticker.info 
-        
-        # 2. K線 (History) - 確保有數據
         hist = ticker.history(period="6mo")
         
         data = {
@@ -179,7 +177,7 @@ def process_tej_upload(uploaded_file):
 @st.cache_data(ttl=300, show_spinner=False)
 def batch_scan_stocks(stock_list, tej_data=None):
     results = []
-    history_map = {} # K線儲存庫
+    history_map = {} 
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         future_to_stock = {executor.submit(get_stock_data_full, s.split(' ')[0]): s for s in stock_list}
@@ -196,10 +194,9 @@ def batch_scan_stocks(stock_list, tej_data=None):
                 chips = 0; ma_bias = 0
 
                 if y_data:
-                    # 處理 K 線
                     hist = y_data.get('history')
                     if hist is not None and not hist.empty:
-                        history_map[code] = hist # 存入字典
+                        history_map[code] = hist 
                         closes = hist['Close']
                         if len(closes) > 10:
                             price = float(closes.iloc[-1])
@@ -207,7 +204,6 @@ def batch_scan_stocks(stock_list, tej_data=None):
                             ma60 = closes.rolling(60).mean().iloc[-1]
                             if not pd.isna(ma60): ma_bias = (price / ma60) - 1
                     
-                    # 處理財報
                     if pd.isna(price): price = y_data.get('close_price')
                     pe = y_data.get('pe')
                     pb = y_data.get('pb')
@@ -320,13 +316,14 @@ def calculate_score(df, use_buffett=False):
             
         scores.append(round(final, 1))
         
-        # 戰略狀態判斷 (文字顯示用)
-        ma_bias = row.get('priceToMA60', 0)
-        if ma_bias > 0.15: plans.append("留意過熱 (Overheated)")
-        elif ma_bias > 0.05: plans.append("動能強勢 (Strong)")
-        elif ma_bias > -0.05: plans.append("穩健持有 (Hold)")
-        elif ma_bias > -0.15: plans.append("價值區域 (Value Zone)")
-        else: plans.append("趨勢轉空 (Avoid)")
+        rev = row.get('rev_growth', 0)
+        peg = row.get('peg', 100)
+        ma = row.get('priceToMA60', 0)
+        
+        if final > 75 and rev > 20: plans.append("🚀 爆發成長")
+        elif final > 60: plans.append("🟡 穩健持有")
+        elif ma < -0.1: plans.append("🟢 超跌反彈")
+        else: plans.append("⛔ 觀望")
             
     df['Score'] = scores
     df['Strategy'] = plans
@@ -356,21 +353,21 @@ def plot_radar_chart_ui(title, radar_data):
         fill='toself', name=title, line_color='#00e676', fillcolor='rgba(0, 230, 118, 0.2)'
     ))
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#4b5563'), bgcolor='rgba(0,0,0,0)'),
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#4b5563'),
+            bgcolor='rgba(0,0,0,0)'
+        ),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(t=20, b=20, l=30, r=30), height=250, font=dict(color='#e6e6e6')
+        margin=dict(t=20, b=20, l=30, r=30), height=250,
+        font=dict(color='#e6e6e6')
     )
     return fig
 
-# 【核心】趨勢儀表板 (符合您第2張圖的要求)
 def plot_trend_dashboard(title, history_df, ma_bias):
     if history_df is None or history_df.empty: return None
-    
-    # 計算季線
     history_df['MA60'] = history_df['Close'].rolling(window=60).mean()
     current_price = history_df['Close'].iloc[-1]
     
-    # 決定燈號狀態文字
     bias_pct = ma_bias * 100
     if bias_pct > 15: status_text = f"🔴 留意過熱 (Overheated)"
     elif bias_pct > 5: status_text = f"🔥 動能強勢 (Strong)"
@@ -378,50 +375,38 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     elif bias_pct > -15: status_text = f"🟢 超跌/價值 (Value Zone)"
     else: status_text = f"⛔ 趨勢轉空 (Avoid)"
     
-    # 繪圖
     fig = go.Figure()
-    
-    # 股價線 (亮藍)
-    fig.add_trace(go.Scatter(
-        x=history_df.index, y=history_df['Close'], 
-        name='Price', line=dict(color='#29b6f6', width=2.5)
-    ))
-    # 季線 (金黃)
-    fig.add_trace(go.Scatter(
-        x=history_df.index, y=history_df['MA60'], 
-        name='MA60', line=dict(color='#ffca28', width=1.5, dash='dash')
-    ))
-    
-    # 標示最新價格點
-    fig.add_trace(go.Scatter(
-        x=[history_df.index[-1]], y=[current_price],
-        mode='markers', marker=dict(color='#00e676', size=10), showlegend=False
-    ))
+    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['Close'], name='Price', line=dict(color='#29b6f6', width=2.5)))
+    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['MA60'], name='MA60', line=dict(color='#ffca28', width=1.5, dash='dash')))
+    fig.add_trace(go.Scatter(x=[history_df.index[-1]], y=[current_price], mode='markers', marker=dict(color='#00e676', size=10), showlegend=False))
 
     fig.update_layout(
-        title=dict(
-            text=f"<b>配置時機判定 (Trend vs Value)</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>",
-            font=dict(color='white', size=16),
-            y=0.95
-        ),
+        title=dict(text=f"<b>配置時機判定</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>", font=dict(color='white', size=16), y=0.95),
         xaxis=dict(showgrid=False, linecolor='#4b5563', tickfont=dict(color='#9ca3af')),
         yaxis=dict(showgrid=True, gridcolor='#374151', tickfont=dict(color='#9ca3af')),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
         margin=dict(t=60, b=20, l=0, r=0), height=250,
-        showlegend=False,
-        hovermode="x unified"
+        showlegend=False, hovermode="x unified"
     )
     return fig
 
+# 【核心修復】AI 分析函式 (顯示真實錯誤)
 def call_ai(prompt):
+    if not api_key:
+        return "<div class='error-box'>⚠️ 錯誤：未設定 API Key，無法執行 AI 分析。</div>"
+        
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
+    
     try:
-        r = requests.post(url, headers=headers, json=data)
-        return r.json()['candidates'][0]['content']['parts'][0]['text']
-    except: return "AI 分析連線失敗。"
+        r = requests.post(url, headers=headers, json=data, timeout=10) # 10秒逾時
+        if r.status_code == 200:
+            return r.json()['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return f"<div class='error-box'>❌ API 錯誤 ({r.status_code}): {r.text}</div>"
+    except Exception as e:
+        return f"<div class='error-box'>❌ 連線例外: {str(e)}</div>"
 
 def create_pdf(stock_data):
     buffer = io.BytesIO()
@@ -447,6 +432,10 @@ AI_PROMPT = """
 # --- 10. 主程式 ---
 with st.sidebar:
     st.title("🎛️ 決策控制台")
+    
+    # Key 狀態
+    if api_key: st.success("🔑 API Key 已載入")
+    else: st.error("🔒 未偵測到 API Key")
     
     st.markdown("### 1️⃣ 數據源與匯入")
     with st.expander("📂 匯入 TEJ (選填)"):
@@ -482,22 +471,21 @@ with st.sidebar:
     if st.button("🚀 啟動全自動掃描", type="primary"):
         st.session_state['scan_finished'] = False
         with st.spinner("正在挖掘 Yahoo 數據 (含股價、財報、趨勢)..."):
-            # 【關鍵】接收兩個回傳值：表格與 K 線字典
             raw, hist_map = batch_scan_stocks(target_stocks, st.session_state['tej_data'])
             raw = sanitize_data(raw)
             st.session_state['raw_data'] = raw
-            st.session_state['history_storage'] = hist_map # 存入 Session
+            st.session_state['history_storage'] = hist_map 
             st.session_state['scan_finished'] = True
             st.rerun()
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 29.0")
-    st.caption("Professional Trend Dashboard + White Data Text")
+    st.title("⚡ 熵值決策選股平台 30.0")
+    st.caption("AI Debug Mode + Visual Master + Robust Data")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
-    hist_storage = st.session_state.get('history_storage', {}) # 讀取 K 線字典
+    hist_storage = st.session_state.get('history_storage', {})
     
     if df.empty:
         st.error("❌ 查無數據，請檢查代號或網路。")
@@ -537,7 +525,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], radar_data), use_container_width=True)
                 
                 with c2:
-                    # 【關鍵修正】使用 data-text-container 類別，確保白色字體
                     st.markdown(f"""
                     <div class='data-text-container'>
                         <div><span class='data-label'>營收成長</span> <span class='data-highlight'>{row.get('rev_growth', 0):.2f}%</span></div>
@@ -552,15 +539,13 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     if b1.button(f"✨ AI 分析", key=f"ai_{idx}"):
                         p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[PRICE]", str(row['close_price'])).replace("[BIAS]", str(round(row.get('priceToMA60',0)*100,1)))
                         an = call_ai(p_txt)
-                        st.info(an)
+                        st.markdown(f"<div class='ai-header'>🤖 AI 觀點</div>{an}", unsafe_allow_html=True)
                     
                     pdf = create_pdf(row.to_dict())
                     b2.download_button("📥 下載報告", pdf, f"{code}.pdf", key=f"dl_{idx}")
 
                 with c3:
-                    # 【關鍵修正】繪製動態儀表板趨勢圖
                     if code in hist_storage and not hist_storage[code].empty:
-                        # 傳入 MA Bias 以便畫出正確的標題與燈號
                         st.plotly_chart(plot_trend_dashboard(row['名稱'], hist_storage[code], row.get('priceToMA60', 0)), use_container_width=True)
                     else:
                         st.warning("無歷史股價數據")
