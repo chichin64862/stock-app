@@ -4,25 +4,22 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import twstock
 import concurrent.futures
 import requests
-import json
-import time
 import io
+import os
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
-import os
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股及AI深度分析平台 (Final Fix)", 
-    page_icon="🔥", 
+    page_title="熵值決策選股平台 (Buffett & Industry)", 
+    page_icon="🎩", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
@@ -35,28 +32,25 @@ st.markdown("""
     div[role="menu"] div, div[role="menu"] span, div[role="menu"] label { color: #31333F !important; font-weight: 500 !important; }
     div[data-baseweb="select"] > div { background-color: #262730 !important; border-color: #4b4b4b !important; color: white !important; }
     .stDownloadButton button { background-color: #1f2937 !important; border: 1px solid #238636 !important; width: 100%; }
-    .stDownloadButton button:hover { border-color: #58a6ff !important; color: #58a6ff !important; }
     .stock-card { background-color: #161b22; padding: 20px; border-radius: 10px; border: 1px solid #30363d; margin-bottom: 15px; }
-    .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
-    div[data-testid="stExpander"] { background-color: #1f2937 !important; border: 1px solid #374151; }
+    .buffett-tag { background-color: #ffd700; color: #000; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8em; margin-left: 8px; }
+    .sector-tag { background-color: #2e7d32; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 3. Session State ---
-if 'analysis_results' not in st.session_state: st.session_state['analysis_results'] = {}
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
-if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
 
 # --- 4. API Key ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
-    st.error("⚠️ 系統偵測不到 API Key！請確認您已在 Streamlit Cloud > Settings > Secrets 中設定 `GEMINI_API_KEY`。")
+    st.error("⚠️ 系統偵測不到 API Key！")
     st.stop()
 
-# --- 5. 字型下載 ---
+# --- 5. 字型 ---
 @st.cache_resource
 def register_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -68,51 +62,34 @@ def register_chinese_font():
                 with open(font_path, 'wb') as f: f.write(r.content)
         except: return False
     try:
-        if os.path.exists(font_path):
-            pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
-            return True
+        pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+        return True
     except: return False
     return False
 
 font_ready = register_chinese_font()
 
-# --- 6. 核心數據引擎 (分離式架構) ---
-
-@st.cache_data
-def get_tw_stock_info():
-    """取得台股代號列表"""
-    codes = twstock.codes
-    stock_dict = {} 
-    industry_dict = {} 
-    for code, info in codes.items():
-        if info.type == '股票':
-            if info.market == '上市': suffix = '.TW'
-            elif info.market == '上櫃': suffix = '.TWO'
-            else: continue
-            full_code = f"{code}{suffix}"
-            name = info.name
-            industry = info.group
-            stock_dict[full_code] = f"{full_code} {name}"
-            if industry not in industry_dict: industry_dict[industry] = []
-            industry_dict[industry].append(full_code)
-    return stock_dict, industry_dict
-
-stock_map, industry_map = get_tw_stock_info()
-
-def get_fundamental_info(symbol):
-    """第二層：單獨抓取基本面 (Info) - 容易失敗，需獨立處理"""
+# --- 6. 核心數據引擎 ---
+def get_stock_fundamentals(symbol):
     try:
+        if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
         ticker = yf.Ticker(symbol)
-        info = ticker.info
-        return {
+        info = ticker.info 
+        
+        # 關鍵數據提取
+        data = {
+            'close_price': info.get('currentPrice') or info.get('previousClose'),
             'pe': info.get('trailingPE'),
-            'pb': info.get('priceToBook'),
             'peg': info.get('pegRatio'),
-            'rev_growth': info.get('revenueGrowth'),
-            'yield': info.get('dividendYield')
+            'pb': info.get('priceToBook'),
+            'rev_growth': info.get('revenueGrowth'), # 0.25 = 25%
+            'yield': info.get('dividendYield'),
+            'roe': info.get('returnOnEquity'), # 巴菲特關鍵指標
+            'beta': info.get('beta'),
+            'sector': info.get('sector', 'Unknown')
         }
-    except:
-        return {}
+        return data
+    except: return None
 
 def calculate_synthetic_peg(pe, growth_rate):
     if pe and growth_rate and growth_rate > 0:
@@ -134,189 +111,216 @@ def process_tej_upload(uploaded_file):
         return tej_map
     except: return None
 
+# --- 7. 批量掃描 ---
 @st.cache_data(ttl=600, show_spinner=False)
-def batch_scan_stocks_v2(stock_list, tej_data=None):
-    """
-    V2 掃描邏輯：
-    1. 先用 yf.download 批量抓 K 線 (這部分最穩，保證有股價)。
-    2. 再用 ThreadPool 補抓 info (財報)。
-    3. 最後合併，確保至少有價格和技術指標。
-    """
+def batch_scan_stocks(stock_list, tej_data=None):
     results = []
-    symbols = [s.split(' ')[0] for s in stock_list]
-    
-    # 1. 批量抓取價格與技術面 (穩如泰山)
+    # 定義基礎 K 線數據以計算波動率
     try:
-        # 下載 6 個月數據以計算 MA60 和波動率
-        history_data = yf.download(symbols, period="6mo", group_by='ticker', progress=False, threads=True)
-    except:
-        history_data = pd.DataFrame()
+        symbols = [s.split(' ')[0] + ('.TW' if not s.endswith('.TW') else '') for s in stock_list]
+        hist_data = yf.download(symbols, period="6mo", progress=False)
+    except: hist_data = pd.DataFrame()
 
-    # 2. 平行抓取基本面 (盡力而為)
-    fundamentals_map = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_stock = {executor.submit(get_fundamental_info, s): s for s in symbols}
+        future_to_stock = {executor.submit(get_stock_fundamentals, s.split(' ')[0]): s for s in stock_list}
+        
         for future in concurrent.futures.as_completed(future_to_stock):
-            s = future_to_stock[future]
+            stock_str = future_to_stock[future]
             try:
-                fundamentals_map[s] = future.result()
-            except:
-                fundamentals_map[s] = {}
+                code = stock_str.split(' ')[0].split('.')[0]
+                name = stock_str.split(' ')[1] if len(stock_str.split(' ')) > 1 else code
+                y_data = future.result()
+                
+                # 初始化
+                price = np.nan; pe = np.nan; pb = np.nan; dy = np.nan
+                rev_growth = np.nan; peg = np.nan; roe = np.nan; volatility = 0.5
+                chips = 0
+                
+                # 1. 計算波動率 (風險指標)
+                try:
+                    s_sym = f"{code}.TW"
+                    if not hist_data.empty and s_sym in hist_data['Close']:
+                        closes = hist_data['Close'][s_sym].dropna()
+                        if len(closes) > 30:
+                            price = float(closes.iloc[-1]) # 確保價格最新
+                            volatility = closes.pct_change().std() * (252**0.5)
+                except: pass
 
-    # 3. 整合數據
-    for stock_str in stock_list:
-        symbol = stock_str.split(' ')[0]
-        code = symbol.split('.')[0]
-        name = stock_str.split(' ')[1] if len(stock_str.split(' ')) > 1 else code
-        
-        # 初始化
-        price = np.nan; ma_bias = 0; volatility = 0
-        pe = np.nan; pb = np.nan; dy = np.nan; rev_growth = np.nan; peg = np.nan; chips = 0
-        
-        # A. 填入技術面
-        try:
-            if len(symbols) == 1: df = history_data
-            else: df = history_data[symbol]
-            
-            if not df.empty and 'Close' in df.columns:
-                # 移除空值行
-                df = df.dropna(subset=['Close'])
-                if not df.empty:
-                    price = float(df['Close'].iloc[-1])
-                    # 計算 MA60 乖離
-                    ma60 = df['Close'].rolling(60).mean().iloc[-1]
-                    if not pd.isna(ma60): ma_bias = (price / ma60) - 1
-                    # 計算波動率
-                    volatility = df['Close'].pct_change().std() * (252 ** 0.5)
-        except: pass
-        
-        # B. 填入基本面
-        fund = fundamentals_map.get(symbol, {})
-        pe = fund.get('pe')
-        pb = fund.get('pb')
-        peg = fund.get('peg')
-        rev_growth = fund.get('rev_growth')
-        if fund.get('yield'): dy = fund.get('yield') * 100
-        if rev_growth: rev_growth = rev_growth * 100
-        
-        # C. TEJ 覆蓋
-        if tej_data and code in tej_data:
-            t_row = tej_data[code]
-            for k, v in t_row.items():
-                if '本益比' in k or 'PE' in k: pe = float(v) if v != '-' else pe
-                if '淨值比' in k or 'PB' in k: pb = float(v) if v != '-' else pb
-                if '殖利率' in k or 'Yield' in k: dy = float(v) if v != '-' else dy
-                if '營收成長' in k or 'Growth' in k: rev_growth = float(v) if v != '-' else rev_growth
-                if '法人' in k or 'Chips' in k: chips = float(v) if v != '-' else chips
+                # 2. 填入基本面
+                if y_data:
+                    if pd.isna(price): price = y_data.get('close_price')
+                    pe = y_data.get('pe')
+                    pb = y_data.get('pb')
+                    roe = y_data.get('roe')
+                    if y_data.get('yield'): dy = y_data.get('yield') * 100 
+                    if y_data.get('rev_growth'): rev_growth = y_data.get('rev_growth') * 100
+                    peg = y_data.get('peg')
+                
+                # 3. TEJ 覆蓋
+                if tej_data and code in tej_data:
+                    t_row = tej_data[code]
+                    for k, v in t_row.items():
+                        if '法人' in k: chips = float(v) if v != '-' else 0
 
-        # D. 合成 PEG
-        if (pd.isna(peg) or peg == 0) and not pd.isna(pe) and not pd.isna(rev_growth):
-            peg = calculate_synthetic_peg(pe, rev_growth/100)
-            
-        # 簡單產業判斷
-        industry = 'General'
-        if code in ['2330', '2454', '2303', '3034', '3035', '2379']: industry = 'Semicon'
-        elif code.startswith('28'): industry = 'Finance'
-        elif code in ['2501', '2505', '5522']: industry = 'Construction'
+                # 4. 合成 PEG
+                if (pd.isna(peg) or peg == 0) and not pd.isna(pe) and not pd.isna(rev_growth):
+                    peg = calculate_synthetic_peg(pe, rev_growth/100)
 
-        # 只要有代號就加入，就算沒股價 (會顯示 NaN)
-        results.append({
-            '代號': code, '名稱': name, 'full_symbol': symbol,
-            'close_price': price,
-            'pe': pe, 'pb': pb, 'yield': dy,
-            'rev_growth': rev_growth, 'peg': peg, 'chips': chips,
-            'priceToMA60': ma_bias, 'volatility': volatility,
-            'industry': industry
-        })
-        
+                # 5. 自動判斷產業 (用於動態權重)
+                industry = 'General'
+                if code in ['2330', '2454', '2303', '3034', '3035', '2379', '2382', '3231', '3017', '3661']: 
+                    industry = 'Semicon' # 半導體/電子
+                elif code.startswith('28'): 
+                    industry = 'Finance' # 金融
+                elif code in ['1101', '1301', '1303', '2002', '2603', '2609', '2615']: 
+                    industry = 'Cyclical' # 傳產/循環
+                    
+                if not pd.isna(price):
+                    results.append({
+                        '代號': code, '名稱': name, 'close_price': price,
+                        'pe': pe, 'pb': pb, 'yield': dy, 'roe': roe,
+                        'rev_growth': rev_growth, 'peg': peg, 'chips': chips,
+                        'volatility': volatility, 'industry': industry
+                    })
+            except: continue
+    
+    if not results: return pd.DataFrame(columns=['代號', '名稱'])
     return pd.DataFrame(results)
 
-# --- 7. 熵值模型 ---
-def get_entropy_config(industry):
-    # 通用配置
+# --- 8. 【關鍵】動態產業權重與巴菲特邏輯 ---
+
+def get_sector_config(industry):
+    """
+    依據產業特性設計的權重配置
+    """
+    # 基礎配置 (所有產業通用)
     config = {
-        'Price vs MA60': {'col': 'priceToMA60', 'dir': 'min', 'w': 1, 'cat': '動能'},
-        'Volatility': {'col': 'volatility', 'dir': 'min', 'w': 1, 'cat': '風險'},
-        'P/E': {'col': 'pe', 'dir': 'min', 'w': 1, 'cat': '價值'},
-        'P/B': {'col': 'pb', 'dir': 'min', 'w': 1, 'cat': '價值'},
+        'Volatility': {'col': 'volatility', 'dir': 'min', 'w': 1, 'cat': '風險'}, # 低波動
     }
     
-    if industry == 'Semicon': # 成長型
-        config['Rev Growth'] = {'col': 'rev_growth', 'dir': 'max', 'w': 2, 'cat': '成長'}
-        config['PEG'] = {'col': 'peg', 'dir': 'min', 'w': 1.5, 'cat': '成長'}
-    elif industry == 'Finance': # 價值型
-        config['Yield'] = {'col': 'yield', 'dir': 'max', 'w': 2, 'cat': '價值'}
-    else: # 一般
-        config['Rev Growth'] = {'col': 'rev_growth', 'dir': 'max', 'w': 1, 'cat': '成長'}
-        config['Yield'] = {'col': 'yield', 'dir': 'max', 'w': 1, 'cat': '價值'}
-        
+    if industry == 'Semicon': 
+        # 半導體/電子：看爆發力 (PEG, 營收成長)
+        config.update({
+            'PEG': {'col': 'peg', 'dir': 'min', 'w': 2.0, 'cat': '成長'}, # PEG最重要
+            'Rev Growth': {'col': 'rev_growth', 'dir': 'max', 'w': 1.5, 'cat': '成長'},
+            'P/E': {'col': 'pe', 'dir': 'min', 'w': 1.0, 'cat': '價值'},
+        })
+    elif industry == 'Finance': 
+        # 金融：看殖利率與淨值 (存股邏輯)
+        config.update({
+            'Yield': {'col': 'yield', 'dir': 'max', 'w': 2.0, 'cat': '價值'}, # 殖利率最重要
+            'P/B': {'col': 'pb', 'dir': 'min', 'w': 1.5, 'cat': '價值'},
+            'ROE': {'col': 'roe', 'dir': 'max', 'w': 1.0, 'cat': '財報'},
+        })
+    elif industry == 'Cyclical':
+        # 傳產/循環：看本益比位階
+        config.update({
+            'P/E': {'col': 'pe', 'dir': 'min', 'w': 2.0, 'cat': '價值'}, # 本益比最重要
+            'P/B': {'col': 'pb', 'dir': 'min', 'w': 1.0, 'cat': '價值'},
+            'Yield': {'col': 'yield', 'dir': 'max', 'w': 1.0, 'cat': '財報'},
+        })
+    else: 
+        # 一般產業：均衡
+        config.update({
+            'P/E': {'col': 'pe', 'dir': 'min', 'w': 1.5, 'cat': '價值'},
+            'Rev Growth': {'col': 'rev_growth', 'dir': 'max', 'w': 1.0, 'cat': '成長'},
+            'Yield': {'col': 'yield', 'dir': 'max', 'w': 1.0, 'cat': '財報'},
+        })
     return config
 
-def calculate_score(df):
+def check_buffett_criteria(row):
+    """
+    巴菲特選股邏輯：護城河檢測
+    1. 高 ROE (>15%)
+    2. 低波動 (<35%)
+    3. 合理估值 (PE < 25 或 PEG < 1.5)
+    """
+    roe = row.get('roe', 0)
+    vol = row.get('volatility', 1.0)
+    pe = row.get('pe', 100)
+    peg = row.get('peg', 100)
+    
+    # 轉換 ROE (Yahoo 給小數)
+    if roe and roe < 1: roe = roe * 100 
+    if pd.isna(roe): roe = 0
+    
+    score = 0
+    if roe > 15: score += 1
+    if vol < 0.35: score += 1
+    if (pe < 25 and pe > 0) or (peg < 1.5 and peg > 0): score += 1
+    
+    return score >= 2 # 符合兩項以上才算
+
+def calculate_score(df, use_buffett=False):
     if df.empty: return df, None
     df_norm = df.copy()
     scores = []
     plans = []
+    buffett_tags = []
     
-    # 填補空值以進行計算 (只影響分數，不影響顯示)
-    fill_map = {
-        'pe': 50, 'pb': 5, 'yield': 0, 'rev_growth': 0, 'peg': 5, 
-        'priceToMA60': 0, 'volatility': 0.5
-    }
+    # 填補空值
+    fill_map = {'pe': 50, 'pb': 5, 'yield': 0, 'rev_growth': 0, 'peg': 5, 'volatility': 0.5, 'roe': 0}
     calc_df = df.fillna(fill_map)
 
     for idx, row in calc_df.iterrows():
+        # 1. 取得該產業的權重配置
         config = get_entropy_config(row['industry'])
         total_score = 0
         total_weight = 0
         
+        # 2. 計算加權分數
         for name, setting in config.items():
             val = row.get(setting['col'])
             all_vals = calc_df[setting['col']]
             
-            # 排名百分位
             rank = all_vals.rank(pct=True).get(idx, 0.5)
             if setting['dir'] == 'max': norm = rank
             else: norm = 1 - rank
             
-            # 存入 df_norm
+            # 存入 df_norm 供雷達圖
             df_norm.loc[idx, f'{setting["cat"]}_n'] = norm * 100
             
             total_score += norm * 100 * setting['w']
             total_weight += setting['w']
             
         final = total_score / total_weight if total_weight > 0 else 50
+        
+        # 3. 巴菲特加分邏輯
+        is_buffett = check_buffett_criteria(row)
+        buffett_tags.append("🏅" if is_buffett else "")
+        
+        if use_buffett and is_buffett:
+            final += 15 # 護城河加分
+            if final > 100: final = 100
+            
         scores.append(round(final, 1))
         
-        # 策略判斷
+        # 4. 戰略指令
         rev = row.get('rev_growth', 0)
         peg = row.get('peg', 100)
-        ma = row.get('priceToMA60', 0)
         
-        if final > 70 and rev > 20:
-            plans.append("🚀 爆發成長")
+        if final > 75 and rev > 20:
+            plans.append("🚀 爆發成長 (Strong Buy)")
         elif final > 60:
-            plans.append("🟡 穩健持有")
-        elif ma < -0.1:
-            plans.append("🟢 超跌反彈")
+            plans.append("🟡 穩健持有 (Hold)")
         else:
-            plans.append("⛔ 觀望")
+            plans.append("⛔ 觀望 (Wait)")
             
     df['Score'] = scores
     df['Strategy'] = plans
+    df['Buffett'] = buffett_tags
     return df.sort_values('Score', ascending=False), df_norm
 
-# --- 8. 繪圖與 AI ---
+# --- 9. 繪圖與 AI ---
 def get_radar_data(df_norm_row):
-    cats = {'價值': 0, '成長': 0, '動能': 0, '風險': 0}
-    counts = {'價值': 0, '成長': 0, '動能': 0, '風險': 0}
+    cats = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
+    counts = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
     for col in df_norm_row.index:
         if col.endswith('_n'):
             cat = col.split('_')[0]
             if cat in cats:
                 cats[cat] += df_norm_row[col]
                 counts[cat] += 1
-    
     radar = {}
     for k, v in cats.items():
         if counts[k] > 0: radar[k] = v / counts[k]
@@ -333,17 +337,6 @@ def plot_radar_chart_ui(title, radar_data):
                       margin=dict(t=20, b=20, l=20, r=20), height=250)
     return fig
 
-def create_pdf(stock_data):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    story = [Paragraph(f"Analysis Report: {stock_data['名稱']}", getSampleStyleSheet()['Heading1'])]
-    for k, v in stock_data.items():
-        story.append(Paragraph(f"{k}: {v}", getSampleStyleSheet()['Normal']))
-    try: doc.build(story)
-    except: pass
-    buffer.seek(0)
-    return buffer
-
 def call_ai(prompt):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
@@ -353,64 +346,74 @@ def call_ai(prompt):
         return r.json()['candidates'][0]['content']['parts'][0]['text']
     except: return "AI 連線失敗。"
 
+def create_pdf(stock_data):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    story = [Paragraph(f"Analysis: {stock_data['名稱']}", getSampleStyleSheet()['Heading1'])]
+    for k, v in stock_data.items():
+        story.append(Paragraph(f"{k}: {v}", getSampleStyleSheet()['Normal']))
+    try: doc.build(story)
+    except: pass
+    buffer.seek(0)
+    return buffer
+
 AI_PROMPT = """
-請針對 [STOCK] 進行投資分析，重點在於「未來半年的爆發力」與「下檔風險」。
-數據：PE=[PE], PEG=[PEG], 營收成長=[REV]%, 波動率=[VOL]%.
-請給出操作建議 (買進/觀望/賣出) 與關鍵觀察點。
+請扮演華爾街基金經理人，分析 [STOCK]。
+重點檢查：
+1. **成長爆發力**：營收成長=[REV]%, PEG=[PEG] (若PEG<1.5且成長>20%，請強調為爆發股)。
+2. **巴菲特指標**：ROE=[ROE] (是否>15%?), 護城河穩固嗎？
+3. **估值風險**：PE=[PE], 殖利率=[YIELD]%。
+給出未來6個月操作建議。
 """
 
-# --- 9. 主程式 ---
+# --- 10. 主程式 ---
 with st.sidebar:
     st.title("🎛️ 決策控制台")
     
-    # 恢復選單功能
-    st.markdown("### 1️⃣ 匯入數據")
-    uploaded = st.file_uploader("📂 上傳 TEJ (選填)", type=['csv','xlsx'])
-    if uploaded: 
-        st.session_state['tej_data'] = process_tej_upload(uploaded)
-        st.success(f"已載入 TEJ 數據")
+    st.markdown("### 1️⃣ 數據源與匯入")
+    with st.expander("📂 匯入 TEJ (選填)"):
+        uploaded = st.file_uploader("上傳 CSV/Excel", type=['csv','xlsx'])
+        if uploaded: 
+            st.session_state['tej_data'] = process_tej_upload(uploaded)
+            st.success(f"已載入 TEJ 數據")
 
-    st.markdown("### 2️⃣ 選股模式")
+    st.markdown("### 2️⃣ 策略設定")
+    # 【關鍵新增】巴菲特開關
+    use_buffett = st.checkbox("🎩 啟用巴菲特選股邏輯 (價值+護城河)", value=False)
+    if use_buffett:
+        st.caption("✅ 已啟用：高 ROE、低波動之標的將獲得額外加分。")
+
     scan_mode = st.radio("模式選擇", ["🔥 熱門策略", "🏭 產業掃描", "⌨️ 自訂輸入"])
     
     target_stocks = []
     if scan_mode == "⌨️ 自訂輸入":
-        # 恢復自訂輸入
-        default = ["2330.TW 台積電", "2317.TW 鴻海", "2454.TW 聯發科"]
+        default = ["2330.TW 台積電", "2317.TW 鴻海", "2454.TW 聯發科", "2881.TW 富邦金"]
         selected = st.multiselect("選擇股票", sorted(list(stock_map.values())), default=[s for s in default if s in stock_map.values()])
-        manual = st.text_input("手動輸入代號 (例如 2603)", "")
+        manual = st.text_input("手動輸入代號", "")
         target_stocks = selected
         if manual: target_stocks.append(f"{manual}.TW")
-        
     elif scan_mode == "🏭 產業掃描":
-        # 恢復產業掃描
         ind_list = sorted(list(industry_map.keys()))
         ind = st.selectbox("選擇產業", ind_list)
-        if ind:
-            codes = industry_map[ind]
-            target_stocks = [stock_map[c] for c in codes if c in stock_map]
-            
+        if ind: target_stocks = [stock_map[c] for c in industry_map[ind] if c in stock_map]
     else:
-        # 熱門策略
-        strat = st.selectbox("策略集", ["台灣50", "AI供應鏈", "高股息"])
-        if strat == "台灣50": target_stocks = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海", "2308.TW 台達電", "2881.TW 富邦金"]
+        strat = st.selectbox("策略集", ["台灣50", "AI供應鏈", "金融股"])
+        if strat == "台灣50": target_stocks = ["2330.TW", "2454.TW", "2317.TW", "2308.TW", "2881.TW"]
         elif strat == "AI供應鏈": target_stocks = ["2330.TW", "2382.TW", "3231.TW", "3017.TW", "3661.TW"]
-        else: target_stocks = ["2301.TW", "0056.TW", "2886.TW", "1101.TW"]
+        else: target_stocks = ["2881.TW", "2882.TW", "2886.TW", "2891.TW"]
 
-    st.info(f"已鎖定 {len(target_stocks)} 檔標的")
-    
     if st.button("🚀 啟動全自動掃描", type="primary"):
         st.session_state['scan_finished'] = False
-        with st.spinner("正在進行分離式數據抓取 (確保數據完整性)..."):
-            raw = batch_scan_stocks_v2(target_stocks, st.session_state['tej_data'])
+        with st.spinner("正在進行深度數據分析 (含產業動態權重)..."):
+            raw = batch_scan_stocks(target_stocks, st.session_state['tej_data'])
             st.session_state['raw_data'] = raw
             st.session_state['scan_finished'] = True
             st.rerun()
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 21.0")
-    st.caption("Hybrid Data Fetch + Full UI Restored")
+    st.title("⚡ 熵值決策選股平台 22.0")
+    st.caption("Dynamic Sector Weighting + Buffett Logic + Stable Data")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -418,28 +421,32 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
     if df.empty:
         st.error("❌ 查無數據，請檢查代號或網路。")
     else:
-        final_df, df_norm = calculate_score(df)
+        final_df, df_norm = calculate_score(df, use_buffett)
         
         st.subheader("🏆 潛力標的排行")
         st.dataframe(
-            final_df[['代號', '名稱', 'close_price', 'Score', 'Strategy', 'pe', 'rev_growth', 'peg', 'yield', 'chips']],
+            final_df[['代號', '名稱', 'industry', 'Score', 'Buffett', 'Strategy', 'pe', 'rev_growth', 'peg', 'yield', 'roe']],
             column_config={
-                "Score": st.column_config.ProgressColumn("綜合戰力", min_value=0, max_value=100, format="%.1f"),
-                "close_price": st.column_config.NumberColumn("股價", format="$%.1f"),
-                "pe": st.column_config.NumberColumn("本益比"),
+                "industry": st.column_config.TextColumn("產業屬性"),
+                "Score": st.column_config.ProgressColumn("戰力分數", min_value=0, max_value=100, format="%.1f"),
+                "Buffett": st.column_config.TextColumn("巴菲特"),
                 "rev_growth": st.column_config.NumberColumn("營收成長", format="%.2f%%"),
+                "roe": st.column_config.NumberColumn("ROE", format="%.2f%%"),
                 "peg": st.column_config.NumberColumn("PEG"),
-                "chips": st.column_config.NumberColumn("法人籌碼(TEJ)"),
+                "yield": st.column_config.NumberColumn("殖利率", format="%.2f%%"),
             },
             use_container_width=True, hide_index=True
         )
         
         st.markdown("---")
-        st.subheader("🎯 深度戰略分析 (UI 已恢復)")
+        st.subheader("🎯 深度戰略分析")
         
-        for idx, row in final_df.head(5).iterrows(): # 顯示前5名避免過長
+        for idx, row in final_df.head(5).iterrows():
             with st.container():
-                st.markdown(f"<div class='stock-card'><h3>{row['名稱']} ({row['代號']}) <span style='font-size:0.8em;color:#00e676'>{row['Strategy']}</span></h3>", unsafe_allow_html=True)
+                industry_tag = f"<span class='sector-tag'>{row['industry']}</span>"
+                buffett_tag = "<span class='buffett-tag'>Buffett Pick</span>" if row['Buffett'] else ""
+                
+                st.markdown(f"<div class='stock-card'><h3>{row['名稱']} ({row['代號']}) {industry_tag}{buffett_tag}</h3>", unsafe_allow_html=True)
                 
                 c1, c2 = st.columns([1, 2])
                 
@@ -450,17 +457,17 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 with c2:
                     st.markdown(f"""
-                    - **成長性**: 營收成長 {row.get('rev_growth', 'N/A')}% | PEG {row.get('peg', 'N/A')}
-                    - **價值面**: 本益比 {row.get('pe', 'N/A')} | 殖利率 {row.get('yield', 'N/A')}%
-                    - **風險面**: 波動率 {row.get('volatility', 0)*100:.1f}% | 季線乖離 {row.get('priceToMA60', 0)*100:.1f}%
+                    - **成長指標**: 營收成長 {row.get('rev_growth', 'N/A')}% | PEG {row.get('peg', 'N/A')}
+                    - **價值指標**: 本益比 {row.get('pe', 'N/A')} | 殖利率 {row.get('yield', 'N/A')}%
+                    - **巴菲特指標**: ROE {row.get('roe', 'N/A')}% | 波動率 {row.get('volatility', 0)*100:.1f}%
                     """)
                     
                     b1, b2 = st.columns(2)
                     if b1.button(f"✨ AI 分析", key=f"ai_{idx}"):
-                        p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[VOL]", str(round(row.get('volatility',0)*100,1)))
+                        p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[ROE]", str(row.get('roe')))
                         an = call_ai(p_txt)
                         st.markdown(f"<div class='ai-header'>🤖 AI 觀點</div>{an}", unsafe_allow_html=True)
-                        
+                    
                     pdf = create_pdf(row.to_dict())
                     b2.download_button("📥 下載報告", pdf, f"{row['代號']}.pdf", key=f"dl_{idx}")
                 
