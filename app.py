@@ -18,13 +18,13 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Trend Fix)", 
-    page_icon="📈", 
+    page_title="熵值決策選股平台 (Trend Dashboard)", 
+    page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 強制修復 (深色底 + 白字) ---
+# --- 2. CSS 強制修復 (深色底 + 純白數據文字) ---
 st.markdown("""
 <style>
     /* 全域設定 */
@@ -44,22 +44,26 @@ st.markdown("""
     .stock-card { 
         background-color: #1f2937; 
         padding: 20px; 
-        border-radius: 8px; 
+        border-radius: 10px; 
         border: 1px solid #374151; 
         margin-bottom: 20px; 
         box-shadow: 0 4px 6px rgba(0,0,0,0.4);
     }
     
-    /* 關鍵數據文字 (強制白色) */
-    .data-text {
+    /* 【關鍵】關鍵數據文字 (強制白色 + 加大) */
+    .data-text-container {
+        font-family: 'Courier New', monospace;
         color: #ffffff !important;
-        font-size: 0.95rem;
-        line-height: 1.6;
+        font-size: 1rem;
+        line-height: 1.8;
+        background-color: rgba(255,255,255,0.05);
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 4px solid #00e676;
     }
-    .data-label {
-        color: #9ca3af !important; /* 淺灰標籤 */
-        font-weight: bold;
-    }
+    .data-label { color: #9ca3af !important; font-weight: bold; margin-right: 8px; }
+    .data-val { color: #ffffff !important; font-weight: bold; }
+    .data-highlight { color: #00e676 !important; font-weight: bold; }
     
     /* 按鈕 */
     .stButton button { background-color: #238636; color: white; border: none; font-weight: bold; }
@@ -71,7 +75,7 @@ st.markdown("""
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
-# 【核心修復】獨立儲存 K 線數據的字典
+# K 線獨立儲存
 if 'history_storage' not in st.session_state: st.session_state['history_storage'] = {}
 
 # --- 4. API Key ---
@@ -120,17 +124,14 @@ def get_tw_stock_list():
 stock_map, industry_map = get_tw_stock_list()
 
 def get_stock_data_full(symbol):
-    """
-    抓取單檔股票：同時抓 Info (財報) 和 History (K線)
-    """
     try:
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
         ticker = yf.Ticker(symbol)
         
-        # 1. 財報
+        # 1. 財報 (Info)
         info = ticker.info 
         
-        # 2. K線 (獨立抓取，保證有圖)
+        # 2. K線 (History) - 確保有數據
         hist = ticker.history(period="6mo")
         
         data = {
@@ -143,7 +144,7 @@ def get_stock_data_full(symbol):
             'roe': info.get('returnOnEquity'),
             'beta': info.get('beta'),
             'sector': info.get('sector', 'General'),
-            'history': hist # 傳回 K 線 DataFrame
+            'history': hist
         }
         return data
     except: return None
@@ -174,11 +175,11 @@ def process_tej_upload(uploaded_file):
         return tej_map
     except: return None
 
-# --- 7. 批量掃描 (核心修復：分離 K 線) ---
+# --- 7. 批量掃描 ---
 @st.cache_data(ttl=300, show_spinner=False)
 def batch_scan_stocks(stock_list, tej_data=None):
     results = []
-    history_map = {} # 暫存 K 線
+    history_map = {} # K線儲存庫
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         future_to_stock = {executor.submit(get_stock_data_full, s.split(' ')[0]): s for s in stock_list}
@@ -190,25 +191,23 @@ def batch_scan_stocks(stock_list, tej_data=None):
                 name = stock_str.split(' ')[1] if len(stock_str.split(' ')) > 1 else code
                 y_data = future.result()
                 
-                # 初始化
                 price = np.nan; pe = np.nan; pb = np.nan; dy = np.nan
                 rev_growth = np.nan; peg = np.nan; roe = np.nan; volatility = 0.5
                 chips = 0; ma_bias = 0
 
                 if y_data:
-                    # 1. 處理 K 線 (存入 map，不放進 result list 以免報錯)
+                    # 處理 K 線
                     hist = y_data.get('history')
                     if hist is not None and not hist.empty:
-                        history_map[code] = hist # 【關鍵】存入字典
-                        # 計算技術指標
+                        history_map[code] = hist # 存入字典
                         closes = hist['Close']
-                        if len(closes) > 0:
+                        if len(closes) > 10:
                             price = float(closes.iloc[-1])
                             volatility = closes.pct_change().std() * (252**0.5)
                             ma60 = closes.rolling(60).mean().iloc[-1]
                             if not pd.isna(ma60): ma_bias = (price / ma60) - 1
                     
-                    # 2. 處理財報
+                    # 處理財報
                     if pd.isna(price): price = y_data.get('close_price')
                     pe = y_data.get('pe')
                     pb = y_data.get('pb')
@@ -243,12 +242,11 @@ def batch_scan_stocks(stock_list, tej_data=None):
             except: continue
     
     df = pd.DataFrame(results)
-    # 強制補齊欄位
     cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
     for c in cols:
         if c not in df.columns: df[c] = np.nan
         
-    return df, history_map # 回傳表格與K線字典
+    return df, history_map
 
 # --- 8. 評分邏輯 ---
 def get_sector_config(industry):
@@ -322,11 +320,13 @@ def calculate_score(df, use_buffett=False):
             
         scores.append(round(final, 1))
         
-        rev = row.get('rev_growth', 0)
-        peg = row.get('peg', 100)
-        if final > 75 and rev > 20: plans.append("🚀 爆發成長")
-        elif final > 60: plans.append("🟡 穩健持有")
-        else: plans.append("⛔ 觀望")
+        # 戰略狀態判斷 (文字顯示用)
+        ma_bias = row.get('priceToMA60', 0)
+        if ma_bias > 0.15: plans.append("留意過熱 (Overheated)")
+        elif ma_bias > 0.05: plans.append("動能強勢 (Strong)")
+        elif ma_bias > -0.05: plans.append("穩健持有 (Hold)")
+        elif ma_bias > -0.15: plans.append("價值區域 (Value Zone)")
+        else: plans.append("趨勢轉空 (Avoid)")
             
     df['Score'] = scores
     df['Strategy'] = plans
@@ -356,34 +356,61 @@ def plot_radar_chart_ui(title, radar_data):
         fill='toself', name=title, line_color='#00e676', fillcolor='rgba(0, 230, 118, 0.2)'
     ))
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#4b5563'),
-            bgcolor='rgba(0,0,0,0)'),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(t=20, b=20, l=30, r=30), height=250,
-        font=dict(color='#e6e6e6')
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#4b5563'), bgcolor='rgba(0,0,0,0)'),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(t=20, b=20, l=30, r=30), height=250, font=dict(color='#e6e6e6')
     )
     return fig
 
-def plot_trend_chart_ui(title, history_df):
-    """繪製趨勢圖"""
+# 【核心】趨勢儀表板 (符合您第2張圖的要求)
+def plot_trend_dashboard(title, history_df, ma_bias):
     if history_df is None or history_df.empty: return None
+    
+    # 計算季線
     history_df['MA60'] = history_df['Close'].rolling(window=60).mean()
+    current_price = history_df['Close'].iloc[-1]
     
+    # 決定燈號狀態文字
+    bias_pct = ma_bias * 100
+    if bias_pct > 15: status_text = f"🔴 留意過熱 (Overheated)"
+    elif bias_pct > 5: status_text = f"🔥 動能強勢 (Strong)"
+    elif bias_pct > -5: status_text = f"🟡 盤整持有 (Hold)"
+    elif bias_pct > -15: status_text = f"🟢 超跌/價值 (Value Zone)"
+    else: status_text = f"⛔ 趨勢轉空 (Avoid)"
+    
+    # 繪圖
     fig = go.Figure()
-    # 股價 (亮藍)
-    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['Close'], name='股價', line=dict(color='#29b6f6', width=2)))
-    # 季線 (金黃)
-    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['MA60'], name='MA60', line=dict(color='#ffca28', width=1.5, dash='dash')))
     
+    # 股價線 (亮藍)
+    fig.add_trace(go.Scatter(
+        x=history_df.index, y=history_df['Close'], 
+        name='Price', line=dict(color='#29b6f6', width=2.5)
+    ))
+    # 季線 (金黃)
+    fig.add_trace(go.Scatter(
+        x=history_df.index, y=history_df['MA60'], 
+        name='MA60', line=dict(color='#ffca28', width=1.5, dash='dash')
+    ))
+    
+    # 標示最新價格點
+    fig.add_trace(go.Scatter(
+        x=[history_df.index[-1]], y=[current_price],
+        mode='markers', marker=dict(color='#00e676', size=10), showlegend=False
+    ))
+
     fig.update_layout(
-        title=dict(text=f"{title} 趨勢診斷", font=dict(color='white')),
+        title=dict(
+            text=f"<b>配置時機判定 (Trend vs Value)</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>",
+            font=dict(color='white', size=16),
+            y=0.95
+        ),
         xaxis=dict(showgrid=False, linecolor='#4b5563', tickfont=dict(color='#9ca3af')),
         yaxis=dict(showgrid=True, gridcolor='#374151', tickfont=dict(color='#9ca3af')),
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(t=30, b=20, l=0, r=0), height=250,
-        showlegend=False
+        margin=dict(t=60, b=20, l=0, r=0), height=250,
+        showlegend=False,
+        hovermode="x unified"
     )
     return fig
 
@@ -410,7 +437,11 @@ def create_pdf(stock_data):
 
 AI_PROMPT = """
 請扮演華爾街基金經理人，分析 [STOCK] ([SECTOR])。
-重點：1.成長性(營收,PEG) 2.安全性(ROE,波動) 3.估值(PE,殖利率)。給出操作建議。
+重點檢查：
+1. **成長爆發力**：營收成長=[REV]%, PEG=[PEG] (若PEG<1.5且成長>20%，請強調為爆發股)。
+2. **趨勢形態**：目前股價=[PRICE]，季線乖離=[BIAS]%，是多頭回檔還是空頭反彈？
+3. **估值風險**：PE=[PE], 殖利率=[YIELD]%。
+給出未來6個月操作建議。
 """
 
 # --- 10. 主程式 ---
@@ -425,7 +456,7 @@ with st.sidebar:
             st.success(f"已載入 TEJ 數據")
 
     st.markdown("### 2️⃣ 策略設定")
-    use_buffett = st.checkbox("🎩 啟用巴菲特選股", value=False)
+    use_buffett = st.checkbox("🎩 啟用巴菲特選股邏輯", value=False)
     
     scan_mode = st.radio("模式選擇", ["🔥 熱門策略", "🏭 產業掃描", "⌨️ 自訂輸入"])
     
@@ -450,7 +481,7 @@ with st.sidebar:
 
     if st.button("🚀 啟動全自動掃描", type="primary"):
         st.session_state['scan_finished'] = False
-        with st.spinner("正在挖掘 Yahoo 數據 (分離 K 線與財報)..."):
+        with st.spinner("正在挖掘 Yahoo 數據 (含股價、財報、趨勢)..."):
             # 【關鍵】接收兩個回傳值：表格與 K 線字典
             raw, hist_map = batch_scan_stocks(target_stocks, st.session_state['tej_data'])
             raw = sanitize_data(raw)
@@ -461,13 +492,12 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 28.0")
-    st.caption("Trend Chart Fix + White Data Text + Robust Fetch")
+    st.title("⚡ 熵值決策選股平台 29.0")
+    st.caption("Professional Trend Dashboard + White Data Text")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
-    # 從 Session 讀取 K 線字典
-    hist_storage = st.session_state.get('history_storage', {})
+    hist_storage = st.session_state.get('history_storage', {}) # 讀取 K 線字典
     
     if df.empty:
         st.error("❌ 查無數據，請檢查代號或網路。")
@@ -507,18 +537,20 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], radar_data), use_container_width=True)
                 
                 with c2:
-                    # 【關鍵修正】文字顏色改為白色 (data-text)
+                    # 【關鍵修正】使用 data-text-container 類別，確保白色字體
                     st.markdown(f"""
-                    <div class='data-text'>
-                    <span class='data-label'>成長指標</span>：營收成長 {row.get('rev_growth', 0):.2f}% | PEG {row.get('peg', 0):.2f}<br>
-                    <span class='data-label'>價值指標</span>：本益比 {row.get('pe', 0):.2f} | 殖利率 {row.get('yield', 0):.2f}%<br>
-                    <span class='data-label'>風險指標</span>：波動率 {row.get('volatility', 0)*100:.1f}% | 季線乖離 {row.get('priceToMA60', 0)*100:.1f}%
+                    <div class='data-text-container'>
+                        <div><span class='data-label'>營收成長</span> <span class='data-highlight'>{row.get('rev_growth', 0):.2f}%</span></div>
+                        <div><span class='data-label'>PEG Ratio</span> <span class='data-val'>{row.get('peg', 0):.2f}</span></div>
+                        <div><span class='data-label'>本益比 (PE)</span> <span class='data-val'>{row.get('pe', 0):.2f}</span></div>
+                        <div><span class='data-label'>殖利率</span> <span class='data-highlight'>{row.get('yield', 0):.2f}%</span></div>
+                        <div><span class='data-label'>波動率</span> <span class='data-val'>{row.get('volatility', 0)*100:.1f}%</span></div>
                     </div>
                     """, unsafe_allow_html=True)
                     
                     b1, b2 = st.columns(2)
                     if b1.button(f"✨ AI 分析", key=f"ai_{idx}"):
-                        p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[ROE]", str(row.get('roe'))).replace("[VOL]", str(round(row.get('volatility',0)*100,1)))
+                        p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[PRICE]", str(row['close_price'])).replace("[BIAS]", str(round(row.get('priceToMA60',0)*100,1)))
                         an = call_ai(p_txt)
                         st.info(an)
                     
@@ -526,9 +558,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     b2.download_button("📥 下載報告", pdf, f"{code}.pdf", key=f"dl_{idx}")
 
                 with c3:
-                    # 【關鍵修正】從字典讀取 K 線並畫圖
+                    # 【關鍵修正】繪製動態儀表板趨勢圖
                     if code in hist_storage and not hist_storage[code].empty:
-                        st.plotly_chart(plot_trend_chart_ui(row['名稱'], hist_storage[code]), use_container_width=True)
+                        # 傳入 MA Bias 以便畫出正確的標題與燈號
+                        st.plotly_chart(plot_trend_dashboard(row['名稱'], hist_storage[code], row.get('priceToMA60', 0)), use_container_width=True)
                     else:
                         st.warning("無歷史股價數據")
 
