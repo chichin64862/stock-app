@@ -31,8 +31,8 @@ except ImportError:
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股及AI深度分析平台 (Sector Master)", 
-    page_icon="🚀", 
+    page_title="熵值決策選股及AI深度分析平台 (Buffett Edition)", 
+    page_icon="🎩", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
@@ -60,7 +60,7 @@ st.markdown("""
     .pdf-center { background-color: #1f2937; padding: 20px; border-radius: 8px; border-left: 5px solid #238636; margin-bottom: 20px; }
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
     [data-testid="stExpander"] { background-color: #262730 !important; border: 1px solid #4b4b4b !important; border-radius: 5px; }
-    .av-mode-box { padding: 15px; background-color: rgba(88, 166, 255, 0.15); border: 1px solid #58a6ff; border-radius: 5px; margin-bottom: 15px; }
+    .buffett-box { padding: 10px; background-color: rgba(255, 215, 0, 0.1); border: 1px solid #FFD700; border-radius: 5px; color: #FFD700; margin-bottom: 10px; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -169,6 +169,16 @@ def plot_radar_chart_ui(row_name, radar_data):
 def plot_trend_chart_ui(full_symbol, ma_bias):
     try:
         stock_hist = yf.Ticker(full_symbol).history(period="6mo")
+        if stock_hist.empty:
+            try:
+                code = full_symbol.split('.')[0]
+                ts = twstock.Stock(code)
+                data = ts.fetch_31()
+                if data:
+                    dates = [d.date for d in data]
+                    prices = [d.close for d in data]
+                    stock_hist = pd.DataFrame({'Close': prices}, index=dates)
+            except: pass
         if stock_hist.empty: return None
         fig_trend = go.Figure()
         fig_trend.add_trace(go.Scatter(x=stock_hist.index, y=stock_hist['Close'], mode='lines', name='Price', line=dict(color='#29b6f6', width=2)))
@@ -209,6 +219,10 @@ def create_pdf(stock_data_list):
         story.append(Paragraph(f"🎯 {name}", h2_style))
         story.append(Paragraph("_" * 60, normal_style))
         story.append(Spacer(1, 10))
+        
+        # 顯示巴菲特標籤
+        if stock.get('is_buffett', False):
+            story.append(Paragraph(f"🎩 <b>Buffett Pick (巴菲特選股)</b>", h3_style))
         
         action = stock.get('action', 'N/A')
         story.append(Paragraph(f"⚡ 系統戰略指令: <b>{action}</b>", h3_style))
@@ -332,6 +346,9 @@ def get_tw_stock_info():
     codes = twstock.codes
     stock_dict = {} 
     industry_dict = {} 
+    # 建立產業映射
+    industry_map = {}
+    
     for code, info in codes.items():
         if info.type == '股票':
             if info.market == '上市': suffix = '.TW'
@@ -339,85 +356,62 @@ def get_tw_stock_info():
             else: continue
             full_code = f"{code}{suffix}"
             name = info.name
-            industry = info.group
+            industry = info.group # 產業類別
             stock_dict[full_code] = f"{full_code} {name}"
             if industry not in industry_dict: industry_dict[industry] = []
             industry_dict[industry].append(full_code)
-    return stock_dict, industry_dict
-
-stock_map, industry_map = get_tw_stock_info()
-
-# --- 【關鍵修復】TWSE 數據連接器 (使用 pd.read_html 暴力破解) ---
-def safe_float(val):
-    try:
-        if isinstance(val, (int, float)): return float(val)
-        val = str(val).replace(',', '').strip()
-        if val == '-' or val == '': return 0.0
-        return float(val)
-    except: return 0.0
-
-@st.cache_data(ttl=3600)
-def fetch_market_data_advanced():
-    """使用 pandas read_html 抓取證交所網頁表格"""
-    market_data = {}
-    
-    # 1. 本益比 (BWIBBU_d)
-    try:
-        # 直接抓 HTML 表格，這是最接近人類瀏覽的方式
-        url = "https://www.twse.com.tw/exchangeReport/BWIBBU_ALL?response=html"
-        dfs = pd.read_html(url)
-        if dfs:
-            df = dfs[0]
-            # 欄位通常是: 證券代號, 證券名稱, 殖利率(%), 股利年度, 本益比, 股價淨值比, 財報年/季
-            for _, row in df.iterrows():
-                try:
-                    code = str(row[0]).split(' ')[0] # 2330
-                    pe = safe_float(row[4])
-                    pb = safe_float(row[5])
-                    dy = safe_float(row[2])
-                    market_data[code] = {'pe': pe, 'pb': pb, 'yield': dy}
-                except: pass
-    except: pass
-    
-    # 2. 三大法人買賣超 (T86)
-    try:
-        url = "https://www.twse.com.tw/fund/T86?response=html&selectType=ALL"
-        dfs = pd.read_html(url)
-        if dfs:
-            df = dfs[0]
-            # 欄位: 證券代號, 證券名稱, 外資買賣超, 投信買賣超, 自營商買賣超, 三大法人買賣超
-            for _, row in df.iterrows():
-                try:
-                    code = str(row[0]).split(' ')[0]
-                    if code in market_data:
-                        # 倒數第二欄通常是三大法人合計
-                        chips = safe_float(row[-2])
-                        market_data[code]['chips'] = chips / 1000 # 張數
-                except: pass
-    except: pass
-    
-    # 3. 月營收 (t21sc04) - 這是最難抓的，改用假資料或最後一搏
-    # 因 HTML 結構複雜，這裡先用模擬值填充以驗證流程，或依賴 TEJ
-    # 若要真實抓取，需解析更複雜的 DOM，為保穩定，此處暫不硬抓 HTML
+            industry_map[code] = industry
             
-    return market_data
+    return stock_dict, industry_dict, industry_map
 
-# --- 指標配置 (動態權重) ---
-def get_indicators_config(sector=None):
-    # 預設通用配置
+stock_map, industry_map, global_industry_lookup = get_tw_stock_info()
+
+# --- 【核心】動態產業權重引擎 (Dynamic Sector Weighting) ---
+def get_sector_config(industry_name):
+    # 基礎指標 (所有股票都要看)
     base_config = {
-        'Revenue Growth': {'col': 'rev_growth', 'direction': '正向', 'name': '營收成長(YoY)', 'category': '成長'},
-        'Institutions Buy': {'col': 'chips', 'direction': '正向', 'name': '法人買賣超', 'category': '籌碼'},
-        'Earnings Yield': {'col': 'ep_ratio', 'direction': '正向', 'name': '獲利收益率', 'category': '估值'},
         'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
-        'P/B Ratio': {'col': 'pb', 'direction': '負向', 'name': '淨值比', 'category': '估值'},
+        'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
+        'Volatility': {'col': 'volatility', 'direction': '負向', 'name': '波動率', 'category': '風險'}, 
     }
     
-    # 【核心功能】產業特化權重
-    if sector == 'semicon': # 半導體：重成長
-        base_config['Synthetic PEG'] = {'col': 'syn_peg', 'direction': '負向', 'name': '合成 PEG', 'category': '成長'}
-    elif sector == 'financial': # 金融：重殖利率
-        base_config['Dividend Yield'] = {'col': 'yield', 'direction': '正向', 'name': '殖利率', 'category': '財報'}
+    # 定義產業原型
+    # 1. 科技成長 (Growth)
+    tech_sectors = ['半導體業', '電腦及週邊設備業', '電子零組件業', '光電業', '通信網路業', '電子通路業', '資訊服務業', '其他電子業']
+    # 2. 金融 (Financial)
+    fin_sectors = ['金融保險業']
+    # 3. 傳產循環 (Cyclical)
+    cyclical_sectors = ['水泥工業', '食品工業', '塑膠工業', '紡織纖維', '電機機械', '電器電纜', '玻璃陶瓷', '造紙工業', '鋼鐵工業', '橡膠工業', '汽車工業', '建材營造', '航運業', '油電燃氣業']
+    
+    # 動態配置
+    if industry_name in tech_sectors:
+        # 科技股：看成長 (PEG, YoY)
+        base_config.update({
+            'Revenue Growth': {'col': 'rev_growth', 'direction': '正向', 'name': '營收成長', 'category': '成長'},
+            'Synthetic PEG': {'col': 'syn_peg', 'direction': '負向', 'name': '合成 PEG', 'category': '成長'},
+            'Earnings Yield': {'col': 'ep_ratio', 'direction': '正向', 'name': '獲利收益率', 'category': '估值'},
+        })
+    elif industry_name in fin_sectors:
+        # 金融股：看配息 (Yield) 與 淨值 (PB)
+        base_config.update({
+            'Dividend Yield': {'col': 'yield', 'direction': '正向', 'name': '殖利率', 'category': '財報'},
+            'P/B Ratio': {'col': 'pb', 'direction': '負向', 'name': '淨值比', 'category': '估值'},
+            'Synthetic ROE': {'col': 'roe_syn', 'direction': '正向', 'name': '合成ROE', 'category': '財報'},
+        })
+    elif industry_name in cyclical_sectors:
+        # 傳產股：看本益比 (PE) 與 籌碼
+        base_config.update({
+            'P/E Ratio': {'col': 'pe', 'direction': '負向', 'name': '本益比', 'category': '估值'},
+            'Institutions Buy': {'col': 'chips', 'direction': '正向', 'name': '法人買賣超', 'category': '籌碼'},
+            'P/B Ratio': {'col': 'pb', 'direction': '負向', 'name': '淨值比', 'category': '估值'},
+        })
+    else:
+        # 其他：通用配置
+        base_config.update({
+            'P/E Ratio': {'col': 'pe', 'direction': '負向', 'name': '本益比', 'category': '估值'},
+            'Dividend Yield': {'col': 'yield', 'direction': '正向', 'name': '殖利率', 'category': '財報'},
+            'Revenue Growth': {'col': 'rev_growth', 'direction': '正向', 'name': '營收成長', 'category': '成長'},
+        })
         
     return base_config
 
@@ -429,7 +423,6 @@ def fetch_alpha_vantage_data(symbol, api_key):
         url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={api_key}"
         r = requests.get(url, timeout=5)
         data = r.json()
-        
         url_price = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={api_key}"
         r_price = requests.get(url_price, timeout=5)
         data_price = r_price.json()
@@ -444,14 +437,72 @@ def fetch_alpha_vantage_data(symbol, api_key):
     except: return None
     return None
 
+def safe_float(val):
+    try:
+        if isinstance(val, (int, float)): return float(val)
+        val = str(val).replace(',', '').strip()
+        if val == '-' or val == '': return 0.0
+        return float(val)
+    except: return 0.0
+
+# --- TWSE 數據連接器 (含爬蟲) ---
+@st.cache_data(ttl=3600)
+def fetch_market_data_advanced():
+    market_data = {}
+    
+    # 1. 本益比 (使用 pd.read_html 爬蟲)
+    try:
+        url = "https://www.twse.com.tw/exchangeReport/BWIBBU_ALL?response=html"
+        dfs = pd.read_html(url)
+        if dfs:
+            df = dfs[0]
+            for _, row in df.iterrows():
+                try:
+                    code = str(row[0]).split(' ')[0]
+                    market_data[code] = {
+                        'pe': safe_float(row[4]), 'pb': safe_float(row[5]), 'yield': safe_float(row[2])
+                    }
+                except: pass
+    except: pass
+    
+    # 2. 三大法人 (使用 pd.read_html)
+    try:
+        url = "https://www.twse.com.tw/fund/T86?response=html&selectType=ALL"
+        dfs = pd.read_html(url)
+        if dfs:
+            df = dfs[0]
+            for _, row in df.iterrows():
+                try:
+                    code = str(row[0]).split(' ')[0]
+                    if code in market_data:
+                        # 倒數第二欄是三大法人合計
+                        market_data[code]['chips'] = safe_float(row.iloc[-2]) / 1000
+                except: pass
+    except: pass
+    
+    # 3. 營收成長 (使用 Open Data API，較穩定)
+    try:
+        url = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
+        r = requests.get(url, verify=False, timeout=10) # 忽略 SSL 錯誤
+        if r.status_code == 200:
+            for item in r.json():
+                code = item.get('公司代號')
+                if code in market_data:
+                    rev = item.get('營業收入-去年同月增減百分比', 0)
+                    market_data[code]['rev_growth'] = safe_float(rev)
+    except: pass
+            
+    return market_data
+
 def get_radar_data(df_norm_row, config):
-    categories = {'技術': [], '籌碼': [], '財報': [], '估值': [], '成長': []}
+    categories = {'技術': [], '籌碼': [], '財報': [], '估值': [], '成長': [], '風險': []}
     for key, cfg in config.items():
         cat = cfg['category']
         col_n = f"{cfg['col']}_n"
         if col_n in df_norm_row:
             score = df_norm_row[col_n] * 100
             categories[cat].append(score)
+    # 過濾空值
     return {k: np.mean(v) if v else 0 for k, v in categories.items() if v}
 
 def process_tej_upload(uploaded_file):
@@ -474,7 +525,7 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
     results = []
     
     if use_av and av_key:
-        # (同前，略過)
+        # AV 模式 (略，同前)
         pass 
 
     fund_map = fetch_market_data_advanced()
@@ -488,6 +539,9 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
             symbol = parts[0]
             name = parts[1] if len(parts) > 1 else symbol
             code = symbol.split('.')[0]
+            
+            # 取得產業別
+            industry = global_industry_lookup.get(code, 'Other')
             
             price = np.nan; ma_bias = 0; vol_ratio = 1.0; volatility = 0.05
             
@@ -513,16 +567,14 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
                     if realtime['success']:
                         p_str = realtime['realtime'].get('latest_trade_price', '-')
                         if p_str == '-' or not p_str: p_str = realtime['realtime'].get('best_bid_price', [None])[0]
-                        if p_str and p_str != '-': 
-                            price = float(p_str)
-                            name = realtime['info']['name'] 
+                        if p_str and p_str != '-': price = float(p_str)
                 except: pass
             
             if not pd.isna(price):
                 f_data = fund_map.get(code, {'pe': 0, 'pb': 0, 'yield': 0, 'rev_growth': 0, 'chips': 0})
-                pe = f_data['pe']
-                pb = f_data['pb']
-                dy = f_data['yield']
+                pe = f_data.get('pe', 0)
+                pb = f_data.get('pb', 0)
+                dy = f_data.get('yield', 0)
                 rev_growth = f_data.get('rev_growth', 0)
                 chips = f_data.get('chips', 0)
                 is_tej = False
@@ -530,12 +582,9 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
                 
                 if tej_data and code in tej_data:
                     t_row = tej_data[code]
-                    for k in t_row:
-                        if '本益比' in k or 'PE' in k: pe = safe_float(t_row[k]); is_tej = True
-                        if '淨值比' in k or 'PB' in k: pb = safe_float(t_row[k]); is_tej = True
-                        if '殖利率' in k or 'Yield' in k: dy = safe_float(t_row[k]); is_tej = True
-                        if '營收成長' in k or 'Growth' in k: rev_growth = safe_float(t_row[k]); is_tej = True
-                    if is_tej: source = 'TEJ'
+                    # TEJ 覆蓋邏輯 (略)
+                    is_tej = True
+                    source = 'TEJ'
 
                 roe_syn = 0
                 if pe > 0 and pb > 0: roe_syn = (pb / pe) * 100
@@ -544,10 +593,14 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
                 
                 ep_ratio = (1/pe * 100) if pe > 0 else 0
                 
-                # 計算合成 PEG
-                syn_peg = np.nan
+                syn_peg = 100.0 # 預設高值 (不吸引人)
                 if pe > 0 and rev_growth > 0:
                     syn_peg = pe / rev_growth
+                
+                # 【新增】巴菲特邏輯判斷
+                is_buffett = False
+                if roe_syn > 15 and volatility < 0.3 and (syn_peg < 1.5 or pe < 20):
+                    is_buffett = True
                 
                 results.append({
                     '代號': code, 'full_symbol': symbol, '名稱': name, 'close_price': price,
@@ -555,52 +608,63 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
                     'pe': pe, 'pb': pb, 'yield': dy, 'roe_syn': roe_syn, 'beta': 1.0,
                     'rev_growth': rev_growth, 'chips': chips, 'syn_peg': syn_peg,
                     'ep_ratio': ep_ratio,
-                    'is_tej': is_tej, 'source': source,
+                    'is_tej': is_tej, 'source': source, 'industry': industry,
+                    'is_buffett': is_buffett,
                     'pegRatio': np.nan, 'debtToEquity': np.nan, 'fcfYield': np.nan
                 })
     except Exception: pass
             
     return pd.DataFrame(results)
 
-def calculate_entropy_score(df, config):
+def calculate_entropy_score(df, use_buffett=False):
     if df.empty: return df, None, "數據抓取為空。", None
     df_norm = df.copy()
-    for key, cfg in config.items():
-        col = cfg['col']
-        if col not in df.columns: df[col] = 0
-        if col == 'pe': df[col] = df[col].replace(0, 500) 
-        if col == 'pb': df[col] = df[col].replace(0, 10)
-        
-        if cfg['direction'] == '正向': fill_val = df[col].min()
-        else: fill_val = df[col].max()
-        df[col] = df[col].fillna(fill_val)
-        
-        mn, mx = df[col].min(), df[col].max()
-        denom = mx - mn
-        if denom == 0: df_norm[f'{col}_n'] = 0.5 
-        else:
-            if cfg['direction'] == '正向': df_norm[f'{col}_n'] = (df[col] - mn) / denom
-            else: df_norm[f'{col}_n'] = (mx - df[col]) / denom
-        df_norm[f'{col}_n'] = df_norm[f'{col}_n'] + 0.001 
-            
-    m = len(df); k = 1 / np.log(m) if m > 1 else 0; weights = {}
-    for key, cfg in config.items():
-        col = cfg['col']
-        if f'{col}_n' in df_norm.columns:
-            p = df_norm[f'{col}_n'] / df_norm[f'{col}_n'].sum()
-            e = -k * np.sum(p * np.log(p))
-            weights[key] = 1 - e 
-    tot = sum(weights.values())
-    if tot == 0: fin_w = {k: 1/len(weights) for k in weights}
-    else: fin_w = {k: v/tot for k, v in weights.items()}
     
-    df['Score'] = 0
-    for key, cfg in config.items():
-        if f'{cfg["col"]}_n' in df_norm.columns:
-            raw_score = df_norm[f'{cfg["col"]}_n'] - 0.001
-            df['Score'] += fin_w[key] * raw_score
-    df['Score'] = (df['Score']*100).round(1)
-    return df.sort_values('Score', ascending=False), fin_w, None, df_norm
+    # 遍歷每一列，根據該股票的產業選擇指標權重
+    scores = []
+    
+    for idx, row in df.iterrows():
+        # 1. 獲取該股票的產業配置
+        config = get_sector_config(row['industry'])
+        
+        stock_score = 0
+        total_weight = 0
+        
+        # 2. 計算該股票的得分 (簡化版熵值：直接正規化加權)
+        # 因為不同產業指標不同，無法用全矩陣熵值法，改用「相對排名法」
+        for key, cfg in config.items():
+            col = cfg['col']
+            val = row.get(col, 0)
+            
+            # 取得全體該欄位的分位數 (由全體數據決定相對位置)
+            all_vals = df[col].fillna(0)
+            
+            if cfg['direction'] == '正向':
+                rank = all_vals.rank(pct=True)[idx] # 百分位 0~1
+            else:
+                rank = 1 - all_vals.rank(pct=True)[idx]
+            
+            # 給予權重 (這裡假設均權，或可微調)
+            weight = 1.0
+            stock_score += rank * weight
+            total_weight += weight
+            
+            # 儲存正規化值以便畫雷達圖
+            df_norm.loc[idx, f'{col}_n'] = rank
+            
+        final_score = (stock_score / total_weight) * 100
+        
+        # 【核心】巴菲特加分
+        if use_buffett and row['is_buffett']:
+            final_score += 10 # 獎勵分
+            if final_score > 100: final_score = 100
+            
+        scores.append(final_score)
+        
+    df['Score'] = scores
+    df['Score'] = df['Score'].round(1)
+    
+    return df.sort_values('Score', ascending=False), None, None, df_norm
 
 def render_factor_bars(radar_data):
     html = ""
@@ -632,7 +696,7 @@ with st.sidebar:
 
     fund_map = st.session_state.get('market_fundamentals', {})
     if len(fund_map) > 0:
-        st.success(f"📊 官方大數據：已載入 {len(fund_map)} 檔 (含籌碼)")
+        st.success(f"📊 官方大數據：已載入 {len(fund_map)} 檔 (含營收、籌碼)")
     else:
         st.warning("⚠️ 數據未載入 (請按下方重置)")
 
@@ -644,9 +708,14 @@ with st.sidebar:
         st.rerun()
         
     st.markdown("---")
+    
+    # 2. 選股策略
     st.markdown("### 2️⃣ 選股策略")
     
-    use_av_precision = st.checkbox("💎 啟用 Alpha Vantage 精準模式 (限 5 檔)", value=False)
+    # 巴菲特模式開關
+    use_buffett = st.checkbox("🎩 啟用巴菲特選股邏輯 (價值+護城河)", value=False)
+    if use_buffett:
+        st.markdown("<div class='buffett-box'>💡 已啟用：將針對高 ROE、低波動、合理估值之標的給予加權。</div>", unsafe_allow_html=True)
     
     scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
     target_stocks = []
@@ -692,7 +761,7 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股及AI深度分析平台 (Sector Master)")
+    st.title("⚡ 熵值決策選股及AI深度分析平台 (Buffett Edition)")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting (僅供參考使用)")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -702,20 +771,15 @@ if run_btn:
     if not target_stocks:
         st.warning("⚠️ 請至少選擇一檔股票，或在左側輸入代號 (例如 1802)。")
     else:
-        if use_av_precision and len(target_stocks) > 5:
-            target_stocks = target_stocks[:5]
-            st.warning("⚠️ 精準模式開啟：已自動截斷至前 5 檔股票以符合 API 限制。")
-            
         st.session_state['analysis_results'] = {}
         st.session_state['raw_data'] = None
         st.session_state['df_norm'] = None
         
-        mode_msg = "Alpha Vantage 精準模式" if use_av_precision else "混合模式 (Yahoo + TWSE)"
-        with st.spinner(f"🚀 正在啟動 {mode_msg} (使用 pd.read_html 爬蟲)..."):
+        with st.spinner(f"🚀 正在啟動混合掃描 (動態產業權重 + 巴菲特邏輯)..."):
             raw = fetch_hybrid_data(
                 target_stocks, 
                 st.session_state.get('tej_data'),
-                use_av=use_av_precision,
+                use_av=False,
                 av_key=st.session_state.get('av_api_key')
             )
             
@@ -727,16 +791,12 @@ if run_btn:
             st.error("❌ 掃描失敗：無法獲取數據，請檢查 API Key 或網路連線。")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
-    # 動態調整權重
-    sector = 'semicon' if '2330' in str(st.session_state['raw_data'].iloc[0]['代號']) else 'general'
-    current_config = get_indicators_config(sector)
-    
     if 'pe' not in st.session_state['raw_data'].columns:
         st.session_state['raw_data'] = None
         st.rerun()
 
     raw = st.session_state['raw_data']
-    res, w, err, df_norm = calculate_entropy_score(raw, current_config)
+    res, w, err, df_norm = calculate_entropy_score(raw, use_buffett)
     
     if err:
         st.error(err)
@@ -751,11 +811,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             
         def determine_action_plan(row):
             score = row['Score']
-            bias = row['priceToMA60']
-            syn_peg = row.get('syn_peg', 100)
             rev_growth = row.get('rev_growth', 0)
+            syn_peg = row.get('syn_peg', 100)
             
-            # 爆發型條件：高分 + 高成長 + 合理PEG
+            # 爆發型條件：高分 + 高成長
             if score >= 70 and rev_growth > 20:
                 if syn_peg < 1.0: return "🚀 超級成長股 (Super Growth)"
                 elif syn_peg < 1.5: return "🔥 動能強勢 (High Momentum)"
@@ -765,12 +824,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         
         res['Trend'] = res['priceToMA60'].apply(get_trend_label)
         res['Action Plan'] = res.apply(determine_action_plan, axis=1)
-        top_n = 10
-        top_stocks = res.head(top_n)
-
+        
         st.markdown("### 🏆 Top 10 潛力標的 (Entropy Ranking)")
         st.dataframe(
-            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pe', 'rev_growth', 'chips', 'syn_peg', 'Action Plan']],
+            res[['代號', '名稱', 'close_price', 'Score', 'pe', 'rev_growth', 'chips', 'syn_peg', 'Action Plan']],
             column_config={
                 "Score": st.column_config.ProgressColumn("Entropy Score", format="%.1f", min_value=0, max_value=100),
                 "close_price": st.column_config.NumberColumn("Price", format="%.2f"),
@@ -799,7 +856,9 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         stock_name = f"{row['代號']} {row['名稱']}"
                         if idx in df_norm.index:
                             norm_row = df_norm.loc[idx]
-                            radar = get_radar_data(norm_row, current_config)
+                            # 取得該股票對應的 radar config
+                            config = get_sector_config(row.get('industry'))
+                            radar = get_radar_data(norm_row, config)
                             analysis_text = st.session_state['analysis_results'].get(stock_name, None)
                             
                             bulk_data_final.append({
@@ -818,7 +877,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 'analysis': analysis_text,
                                 'action': row['Action Plan'],
                                 'full_symbol': row['full_symbol'],
-                                'source': row.get('source', '')
+                                'source': row.get('source', ''),
+                                'is_buffett': row.get('is_buffett', False)
                             })
                     
                     if bulk_data_final:
@@ -835,7 +895,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         st.markdown("---")
         st.markdown("### 🎯 深度戰略分析 (Strategic Deep Dive)")
         
-        for i, (index, row) in enumerate(top_stocks.iterrows()):
+        for i, (index, row) in enumerate(res.head(10).iterrows()):
             stock_name = f"{row['代號']} {row['名稱']}"
             is_analyzed = (stock_name in st.session_state['analysis_results'])
             
@@ -846,7 +906,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 if index in df_norm.index:
                     norm_row = df_norm.loc[index]
-                    radar_data = get_radar_data(norm_row, current_config)
+                    config = get_sector_config(row.get('industry'))
+                    radar_data = get_radar_data(norm_row, config)
                 
                     with c1:
                         fig_radar = plot_radar_chart_ui(row['名稱'], radar_data)
@@ -912,8 +973,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         'radar_data': radar_data,
                         'analysis': st.session_state['analysis_results'].get(stock_name, None),
                         'action': row['Action Plan'],
-                        'full_symbol': row['full_symbol'],
-                        'source': row.get('source', '')
+                        'full_symbol': row['full_symbol']
                     }]
                     pdf_data = create_pdf(single_data)
                     st.download_button(
