@@ -31,8 +31,8 @@ except ImportError:
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股及AI深度分析平台 (AV Premium)", 
-    page_icon="💎", 
+    page_title="熵值決策選股及AI深度分析平台 (Expert)", 
+    page_icon="🧠", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
@@ -71,7 +71,6 @@ if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = 
 if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
 if 'market_fundamentals' not in st.session_state: st.session_state['market_fundamentals'] = {}
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
-# 預設載入您的 Key
 if 'av_api_key' not in st.session_state: st.session_state['av_api_key'] = "59P38LL8MKU2XB1M"
 
 # --- 4. API Key ---
@@ -230,14 +229,14 @@ def create_pdf(stock_data_list):
         pe_val = stock.get('pe', 'N/A')
         pb_val = stock.get('pb', 'N/A')
         yield_val = stock.get('yield', 'N/A')
-        source_tag = f"({stock.get('source', 'TWSE')})"
+        peg_val = stock.get('pegRatio', 'N/A')
         
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
-            [f"本益比 (P/E) {source_tag}", f"{pe_val}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
+            [f"本益比 (P/E)", f"{pe_val}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
             [f"股價淨值比 (P/B)", f"{pb_val}", f"殖利率 (Yield)", f"{yield_val}%"],
-            [f"合成 ROE", f"{stock.get('roe_syn', 'N/A')}%", f"波動率 (Vol)", f"{stock.get('volatility', 'N/A')}"],
+            [f"合成 ROE", f"{stock.get('roe_syn', 'N/A')}%", f"PEG (AlphaVantage)", f"{peg_val}"],
         ]
         t = Table(t_data, colWidths=[100, 130, 100, 130])
         t.setStyle(TableStyle([
@@ -313,27 +312,28 @@ def call_gemini_api(prompt):
         else: return f"❌ 分析失敗 (Code {response.status_code})"
     except Exception as e: return f"❌ 連線逾時或錯誤: {str(e)}"
 
+# 【升級】AI 指令：加入 PEG 成長陷阱檢測
 HEDGE_FUND_PROMPT = """
 【指令】
 請針對 **[STOCK]** 撰寫一份客觀的「投資決策分析報告」。
 
-【⚠️ 分析邏輯指令】
-請直接根據量化數據與產業現況進行分析，無需扮演任何角色或提及任何機構名稱。報告內容應包含：
+【⚠️ 財經邏輯分析指令】
+請扮演華爾街資深分析師，針對以下數據進行嚴格的邏輯檢查，特別注意「營收成長但獲利衰退」的風險：
 
-1. **財務健康度評估**：
-   - 結合「本益比 (P/E)」與「股價淨值比 (P/B)」判斷目前估值是否合理。
-   - 透過「殖利率 (Dividend Yield)」評估公司的現金回饋吸引力。
+1. **成長品質檢測 (Growth Quality)**：
+   - 查看 **PEG Ratio**。若 PEG > 1.5 且本益比 (P/E) 偏高，請警告是否存在「溢價過高」風險。
+   - 若有合成 ROE 數據，分析公司運用資本的效率是否下滑。
 
-2. **營收與成長動能**：
-   - 根據「合成 ROE (P/B 除以 P/E)」推算資本運用效率。
-   - 分析目前是否處於「價值低估」或「成長溢價」階段。
+2. **財務健康度評估 (Valuation & Risk)**：
+   - 結合「本益比 (P/E)」與「股價淨值比 (P/B)」判斷目前是否處於歷史高點 (Value Trap)。
+   - 透過「殖利率 (Dividend Yield)」評估下檔保護。
 
 3. **操作建議與風險提示**：
-   - **投資評等**：請給出 [強力買進 / 區間操作 / 減持觀望] 建議。
+   - **投資評等**：[強力買進 / 區間操作 / 減持觀望]。
    - **關鍵點位**：設定合理的「防禦區間 (Support)」與「目標區間 (Target)」。
-   - **觀察指標**：列出未來最需要關注的一個風險變數。
+   - **灰犀牛指標**：請指出一個最可能導致 EPS 下修的風險因子 (如：毛利率壓縮、匯損)。
 
-【最新市場即時數據】
+【最新市場即時數據 (含 Alpha Vantage 精準源)】
 [DATA_CONTEXT]
 """
 
@@ -358,11 +358,12 @@ def get_tw_stock_info():
 
 stock_map, industry_map = get_tw_stock_info()
 
+# --- 【關鍵升級】指標配置更換為「倒數本益比 (E/P)」以優化數學分佈 ---
 indicators_config = {
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
     'Volatility': {'col': 'volatility', 'direction': '負向', 'name': '波動率', 'category': '風險'}, 
-    'P/E Ratio': {'col': 'pe', 'direction': '負向', 'name': '本益比', 'category': '估值'},
+    'Earnings Yield (1/PE)': {'col': 'ep_ratio', 'direction': '正向', 'name': '獲利收益率', 'category': '估值'}, # 數學優化：P/E 改 E/P
     'P/B Ratio': {'col': 'pb', 'direction': '負向', 'name': '淨值比', 'category': '估值'},
     'Dividend Yield': {'col': 'yield', 'direction': '正向', 'name': '殖利率', 'category': '財報'},
     'Synthetic ROE': {'col': 'roe_syn', 'direction': '正向', 'name': '合成ROE', 'category': '財報'},
@@ -370,13 +371,13 @@ indicators_config = {
 
 # --- Alpha Vantage 核心 ---
 def fetch_alpha_vantage_data(symbol, api_key):
-    """使用 AV API 獲取單檔精準數據 (需 Key)"""
+    """使用 AV API 獲取單檔精準數據 (含 PEG)"""
     if not api_key: return None
     try:
         # 去除 .TW 後綴 (AV 格式為 2330.TW)
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
         
-        # 1. 概覽數據
+        # 1. 概覽數據 (含 PEG, PE, Forward PE)
         url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={api_key}"
         r = requests.get(url, timeout=5)
         data = r.json()
@@ -386,15 +387,14 @@ def fetch_alpha_vantage_data(symbol, api_key):
         r_price = requests.get(url_price, timeout=5)
         data_price = r_price.json()
         
-        # 3. 波動率 (需要日 K) - 因額度限制，暫時用 GLOBAL_QUOTE 的變動率近似，或略過
-        
         if "Global Quote" in data_price and "05. price" in data_price["Global Quote"]:
             price = float(data_price["Global Quote"]["05. price"])
             pe = float(data.get("PERatio", 0)) if data.get("PERatio") and data.get("PERatio") != "None" else 0
             pb = float(data.get("PriceToBookRatio", 0)) if data.get("PriceToBookRatio") and data.get("PriceToBookRatio") != "None" else 0
             dy = float(data.get("DividendYield", 0)) * 100 if data.get("DividendYield") and data.get("DividendYield") != "None" else 0
+            peg = float(data.get("PEGRatio", 0)) if data.get("PEGRatio") and data.get("PEGRatio") != "None" else 0
             
-            return {'price': price, 'pe': pe, 'pb': pb, 'yield': dy, 'source': 'AV'}
+            return {'price': price, 'pe': pe, 'pb': pb, 'yield': dy, 'peg': peg, 'source': 'AV'}
     except: return None
     return None
 
@@ -460,7 +460,7 @@ def process_tej_upload(uploaded_file):
 def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
     results = []
     
-    # 1. 若開啟精準模式 (AV Only)
+    # 1. 精準模式 (AV Only)
     if use_av and av_key:
         for ticker_full in tickers_list:
             parts = ticker_full.split(' ')
@@ -468,7 +468,6 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
             name = parts[1] if len(parts) > 1 else symbol
             code = symbol.split('.')[0]
             
-            # 使用 AV API (每分鐘5次限制，需等待)
             av_res = fetch_alpha_vantage_data(symbol, av_key)
             if av_res:
                 pe = av_res['pe']
@@ -477,12 +476,13 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
                 results.append({
                     '代號': code, 'full_symbol': symbol, '名稱': name, 
                     'close_price': av_res['price'],
-                    'priceToMA60': 0, 'volumeRatio': 1.0, 'volatility': 0.05, # AV 概覽無這些數據，設預設
+                    'priceToMA60': 0, 'volumeRatio': 1.0, 'volatility': 0.05, 
                     'pe': pe, 'pb': pb, 'yield': av_res['yield'], 'roe_syn': roe_syn,
                     'beta': 1.0, 'is_tej': False, 'source': 'Alpha Vantage',
-                    'pegRatio': np.nan, 'debtToEquity': np.nan, 'fcfYield': np.nan
+                    'pegRatio': av_res['peg'], # AV 獨有
+                    'ep_ratio': (1/pe*100) if pe > 0 else 0 # 自動計算 E/P
                 })
-            time.sleep(12) # 強制冷卻 12 秒以符合 5 call/min
+            time.sleep(12) 
         return pd.DataFrame(results)
 
     # 2. 正常模式 (Yahoo + TWSE + TEJ)
@@ -552,7 +552,8 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
                     'priceToMA60': ma_bias, 'volumeRatio': vol_ratio, 'volatility': volatility,
                     'pe': pe, 'pb': pb, 'yield': dy, 'roe_syn': roe_syn, 'beta': 1.0,
                     'is_tej': is_tej, 'source': source,
-                    'pegRatio': np.nan, 'debtToEquity': np.nan, 'fcfYield': np.nan
+                    'ep_ratio': (1/pe*100) if pe > 0 else 0, # 自動計算 E/P
+                    'pegRatio': np.nan # TWSE 無 PEG
                 })
     except Exception: pass
             
@@ -642,7 +643,7 @@ with st.sidebar:
     # 2. 選股策略
     st.markdown("### 2️⃣ 選股策略")
     
-    # 【關鍵新增】AV 精準模式開關
+    # AV 精準模式開關
     use_av_precision = st.checkbox("💎 啟用 Alpha Vantage 精準模式 (限 5 檔)", value=False)
     if use_av_precision:
         st.markdown("<div class='av-mode-box'>⚠️ 注意：此模式因 API 限制，速度較慢 (每檔需 12 秒)，且強制限制最多選 5 檔。</div>", unsafe_allow_html=True)
@@ -691,7 +692,7 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股及AI深度分析平台 (AV Premium)")
+    st.title("⚡ 熵值決策選股及AI深度分析平台 (Expert)")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting (僅供參考使用)")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -768,11 +769,12 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
 
         st.markdown("### 🏆 Top 10 潛力標的 (Entropy Ranking)")
         st.dataframe(
-            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pe', 'priceToMA60', 'pb', 'yield', 'Action Plan']],
+            top_stocks[['代號', '名稱', 'close_price', 'Score', 'pe', 'pegRatio', 'priceToMA60', 'pb', 'yield', 'Action Plan']],
             column_config={
                 "Score": st.column_config.ProgressColumn("Entropy Score", format="%.1f", min_value=0, max_value=100),
                 "close_price": st.column_config.NumberColumn("Price", format="%.2f"),
                 "pe": st.column_config.NumberColumn("P/E (本益比)", format="%.2f"),
+                "pegRatio": st.column_config.NumberColumn("PEG (AV Only)", format="%.2f"), # 新增 PEG 顯示
                 "priceToMA60": st.column_config.NumberColumn("MA Bias", format="%.2%"),
                 "pb": st.column_config.NumberColumn("P/B (淨值比)", format="%.2f"),
                 "yield": st.column_config.NumberColumn("Yield (殖利率)", format="%.2f%%"),
@@ -876,12 +878,14 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 pe_val = av_data['pe'] if av_data else row.get('pe', 0)
                                 pb_val = av_data['pb'] if av_data else row.get('pb', 0)
                                 dy_val = av_data['yield'] if av_data else row.get('yield', 0)
+                                peg_val = av_data['peg'] if av_data else row.get('pegRatio', 0)
                                 
                                 real_time_data = f"""
                                 - 收盤價: {row['close_price']}
                                 - 本益比 (P/E): {pe_val:.2f}
                                 - 股價淨值比 (P/B): {pb_val:.2f}
                                 - 殖利率 (Yield): {dy_val:.2f}%
+                                - PEG Ratio: {peg_val:.2f} (若 > 1.5 且 PE 高，留意成長陷阱)
                                 - 合成 ROE: {row.get('roe_syn', 0):.2f}%
                                 - 因子得分: {radar_data} (滿分100)
                                 - 季線乖離: {row['priceToMA60']:.2%}
