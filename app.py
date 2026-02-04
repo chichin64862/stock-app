@@ -31,8 +31,8 @@ except ImportError:
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股及AI深度分析平台 (AV Pro)", 
-    page_icon="⚡", 
+    page_title="熵值決策選股及AI深度分析平台 (AV Premium)", 
+    page_icon="💎", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
@@ -59,9 +59,8 @@ st.markdown("""
     .stock-card { background-color: #161b22; padding: 20px; border-radius: 10px; border: 1px solid #30363d; margin-bottom: 15px; }
     .pdf-center { background-color: #1f2937; padding: 20px; border-radius: 8px; border-left: 5px solid #238636; margin-bottom: 20px; }
     .ai-header { color: #58a6ff !important; font-weight: bold; font-size: 1.3rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
-    /* 強制上傳區塊樣式 */
     [data-testid="stExpander"] { background-color: #262730 !important; border: 1px solid #4b4b4b !important; border-radius: 5px; }
-    .success-box { padding: 10px; background-color: rgba(35, 134, 54, 0.2); border: 1px solid #238636; border-radius: 5px; color: #ffffff; margin-bottom: 10px; }
+    .av-mode-box { padding: 15px; background-color: rgba(88, 166, 255, 0.15); border: 1px solid #58a6ff; border-radius: 5px; margin-bottom: 15px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,7 +71,7 @@ if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = 
 if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
 if 'market_fundamentals' not in st.session_state: st.session_state['market_fundamentals'] = {}
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
-# 預設載入用戶提供的 Key
+# 預設載入您的 Key
 if 'av_api_key' not in st.session_state: st.session_state['av_api_key'] = "59P38LL8MKU2XB1M"
 
 # --- 4. API Key ---
@@ -369,7 +368,7 @@ indicators_config = {
     'Synthetic ROE': {'col': 'roe_syn', 'direction': '正向', 'name': '合成ROE', 'category': '財報'},
 }
 
-# --- Alpha Vantage & Official Data Connectors ---
+# --- Alpha Vantage 核心 ---
 def fetch_alpha_vantage_data(symbol, api_key):
     """使用 AV API 獲取單檔精準數據 (需 Key)"""
     if not api_key: return None
@@ -377,21 +376,23 @@ def fetch_alpha_vantage_data(symbol, api_key):
         # 去除 .TW 後綴 (AV 格式為 2330.TW)
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
         
-        # 1. 概覽數據 (PE, PB, Dividend)
+        # 1. 概覽數據
         url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={api_key}"
         r = requests.get(url, timeout=5)
         data = r.json()
         
-        # 2. 價格數據 (Global Quote)
+        # 2. 價格數據
         url_price = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={api_key}"
         r_price = requests.get(url_price, timeout=5)
         data_price = r_price.json()
         
+        # 3. 波動率 (需要日 K) - 因額度限制，暫時用 GLOBAL_QUOTE 的變動率近似，或略過
+        
         if "Global Quote" in data_price and "05. price" in data_price["Global Quote"]:
             price = float(data_price["Global Quote"]["05. price"])
-            pe = float(data.get("PERatio", 0)) if data.get("PERatio") != "None" else 0
-            pb = float(data.get("PriceToBookRatio", 0)) if data.get("PriceToBookRatio") != "None" else 0
-            dy = float(data.get("DividendYield", 0)) * 100 if data.get("DividendYield") != "None" else 0
+            pe = float(data.get("PERatio", 0)) if data.get("PERatio") and data.get("PERatio") != "None" else 0
+            pb = float(data.get("PriceToBookRatio", 0)) if data.get("PriceToBookRatio") and data.get("PriceToBookRatio") != "None" else 0
+            dy = float(data.get("DividendYield", 0)) * 100 if data.get("DividendYield") and data.get("DividendYield") != "None" else 0
             
             return {'price': price, 'pe': pe, 'pb': pb, 'yield': dy, 'source': 'AV'}
     except: return None
@@ -406,22 +407,21 @@ def safe_float(val):
 
 @st.cache_data(ttl=3600)
 def fetch_market_fundamentals():
-    """官方數據連接器 (全市場)"""
+    """TWSE/TPEX 官方數據連接器"""
     market_data = {}
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         url_twse = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
-        r = requests.get(url_twse, headers=headers, timeout=15, verify=False)
+        r = requests.get(url_twse, headers=headers, timeout=10, verify=False)
         if r.status_code == 200:
             for item in r.json():
                 market_data[item.get('Code')] = {
                     'pe': safe_float(item.get('PEratio')), 'pb': safe_float(item.get('PBratio')), 'yield': safe_float(item.get('DividendYield'))
                 }
     except: pass
-    
     try:
         url_tpex = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
-        r = requests.get(url_tpex, headers=headers, timeout=15, verify=False)
+        r = requests.get(url_tpex, headers=headers, timeout=10, verify=False)
         if r.status_code == 200:
             for item in r.json():
                 market_data[item.get('SecuritiesCompanyCode')] = {
@@ -457,10 +457,36 @@ def process_tej_upload(uploaded_file):
     except: return None
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_hybrid_data(tickers_list, tej_data=None):
+def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
     results = []
-    fund_map = fetch_market_fundamentals()
     
+    # 1. 若開啟精準模式 (AV Only)
+    if use_av and av_key:
+        for ticker_full in tickers_list:
+            parts = ticker_full.split(' ')
+            symbol = parts[0]
+            name = parts[1] if len(parts) > 1 else symbol
+            code = symbol.split('.')[0]
+            
+            # 使用 AV API (每分鐘5次限制，需等待)
+            av_res = fetch_alpha_vantage_data(symbol, av_key)
+            if av_res:
+                pe = av_res['pe']
+                pb = av_res['pb']
+                roe_syn = (pb/pe*100) if pe > 0 and pb > 0 else 0
+                results.append({
+                    '代號': code, 'full_symbol': symbol, '名稱': name, 
+                    'close_price': av_res['price'],
+                    'priceToMA60': 0, 'volumeRatio': 1.0, 'volatility': 0.05, # AV 概覽無這些數據，設預設
+                    'pe': pe, 'pb': pb, 'yield': av_res['yield'], 'roe_syn': roe_syn,
+                    'beta': 1.0, 'is_tej': False, 'source': 'Alpha Vantage',
+                    'pegRatio': np.nan, 'debtToEquity': np.nan, 'fcfYield': np.nan
+                })
+            time.sleep(12) # 強制冷卻 12 秒以符合 5 call/min
+        return pd.DataFrame(results)
+
+    # 2. 正常模式 (Yahoo + TWSE + TEJ)
+    fund_map = fetch_market_fundamentals()
     try:
         symbols = [t.split(' ')[0] for t in tickers_list]
         data = yf.download(symbols, period="6mo", group_by='ticker', progress=False, threads=False)
@@ -519,7 +545,6 @@ def fetch_hybrid_data(tickers_list, tej_data=None):
                 roe_syn = 0
                 if pe > 0 and pb > 0: roe_syn = (pb / pe) * 100
                 elif pe == 0: roe_syn = -5.0
-                
                 if pd.isna(volatility): volatility = 0.5
                 
                 results.append({
@@ -594,7 +619,7 @@ with st.sidebar:
     with st.expander("🔑 Alpha Vantage 設定 (AV Key)", expanded=True):
         av_key = st.text_input("API Key", value=st.session_state.get('av_api_key', ''))
         if av_key: st.session_state['av_api_key'] = av_key
-        st.caption("✅ 已掛載：單檔分析將使用 AV 數據")
+        st.caption("✅ 已掛載：精準模式與分析報告將使用 AV 數據")
 
     # TEJ 上傳
     with st.expander("📂 匯入 TEJ 數據 (選填)", expanded=False):
@@ -604,13 +629,6 @@ with st.sidebar:
             if tej_data: 
                 st.session_state['tej_data'] = tej_data
                 st.markdown(f"<div class='success-box'>✅ TEJ 數據已就緒：{len(tej_data)} 檔</div>", unsafe_allow_html=True)
-
-    # 官方數據狀態
-    fund_map = st.session_state.get('market_fundamentals', {})
-    if len(fund_map) > 0:
-        st.success(f"📊 TWSE 官方數據：已載入 {len(fund_map)} 檔")
-    else:
-        st.warning("⚠️ 官方數據未載入 (請按下方重置)")
 
     if st.button("🔴 清除快取並重置", use_container_width=True):
         st.cache_data.clear()
@@ -623,6 +641,12 @@ with st.sidebar:
     
     # 2. 選股策略
     st.markdown("### 2️⃣ 選股策略")
+    
+    # 【關鍵新增】AV 精準模式開關
+    use_av_precision = st.checkbox("💎 啟用 Alpha Vantage 精準模式 (限 5 檔)", value=False)
+    if use_av_precision:
+        st.markdown("<div class='av-mode-box'>⚠️ 注意：此模式因 API 限制，速度較慢 (每檔需 12 秒)，且強制限制最多選 5 檔。</div>", unsafe_allow_html=True)
+    
     scan_mode = st.radio("選股模式：", ["🔥 熱門策略掃描", "🏭 產業類股掃描", "自行輸入/多選"], label_visibility="collapsed")
     target_stocks = []
     
@@ -667,7 +691,7 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股及AI深度分析平台 (AV Pro)")
+    st.title("⚡ 熵值決策選股及AI深度分析平台 (AV Premium)")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting (僅供參考使用)")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -677,19 +701,30 @@ if run_btn:
     if not target_stocks:
         st.warning("⚠️ 請至少選擇一檔股票，或在左側輸入代號 (例如 1802)。")
     else:
+        # 強制截斷
+        if use_av_precision and len(target_stocks) > 5:
+            target_stocks = target_stocks[:5]
+            st.warning("⚠️ 精準模式開啟：已自動截斷至前 5 檔股票以符合 API 限制。")
+            
         st.session_state['analysis_results'] = {}
         st.session_state['raw_data'] = None
         st.session_state['df_norm'] = None
         
-        with st.spinner("🚀 正在啟動混合掃描 (Yahoo + TWSE + AV)..."):
-            raw = fetch_hybrid_data(target_stocks, st.session_state.get('tej_data'))
+        mode_msg = "Alpha Vantage 精準模式" if use_av_precision else "混合模式 (Yahoo + TWSE)"
+        with st.spinner(f"🚀 正在啟動 {mode_msg}..."):
+            raw = fetch_hybrid_data(
+                target_stocks, 
+                st.session_state.get('tej_data'),
+                use_av=use_av_precision,
+                av_key=st.session_state.get('av_api_key')
+            )
             
         if not raw.empty:
             st.session_state['raw_data'] = raw
             st.session_state['scan_finished'] = True
             st.rerun()
         else:
-            st.error("❌ 掃描失敗：所有來源皆無回應，請稍後再試。")
+            st.error("❌ 掃描失敗：無法獲取數據，請檢查 API Key 或網路連線。")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     if 'pe' not in st.session_state['raw_data'].columns:
@@ -828,7 +863,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 col_btn, col_dl = st.columns([3, 1])
                 
                 with col_btn:
-                     # 智能按鈕：如果有 AV Key 則顯示加強版
+                     # 智能按鈕
                      btn_label = "✨ 生成分析報告 (AV 加強)" if st.session_state.get('av_api_key') else "✨ 生成分析報告"
                      if st.button(btn_label, key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
                          if not is_analyzed:
@@ -837,7 +872,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 if st.session_state.get('av_api_key'):
                                     av_data = fetch_alpha_vantage_data(row['full_symbol'], st.session_state['av_api_key'])
                                 
-                                # 數據融合：優先使用 AV，否則用原數據
+                                # 優先使用 AV 數據，否則用原數據
                                 pe_val = av_data['pe'] if av_data else row.get('pe', 0)
                                 pb_val = av_data['pb'] if av_data else row.get('pb', 0)
                                 dy_val = av_data['yield'] if av_data else row.get('yield', 0)
