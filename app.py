@@ -18,7 +18,7 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (AI Debug)", 
+    page_title="熵值決策選股平台 (AI Auto-Fix)", 
     page_icon="🤖", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -50,7 +50,7 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.4);
     }
     
-    /* 【關鍵】關鍵數據文字 (強制白色 + 加大) */
+    /* 關鍵數據文字 (強制白色 + 加大) */
     .data-text-container {
         font-family: 'Courier New', monospace;
         color: #ffffff !important;
@@ -69,8 +69,8 @@ st.markdown("""
     .stButton button { background-color: #238636; color: white; border: none; font-weight: bold; }
     .stButton button:hover { background-color: #2ea043; }
     
-    /* 錯誤訊息框 */
-    .error-box { color: #ff6b6b; background-color: #3d1212; padding: 10px; border-radius: 5px; border: 1px solid #ff6b6b; }
+    /* AI 訊息框 */
+    .ai-response { background-color: #2d333b; padding: 15px; border-radius: 8px; border-left: 4px solid #58a6ff; margin-top: 10px; color: #e6e6e6; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -79,13 +79,14 @@ if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
 if 'history_storage' not in st.session_state: st.session_state['history_storage'] = {}
+if 'ai_model_name' not in st.session_state: st.session_state['ai_model_name'] = None
 
-# --- 4. API Key 檢測 ---
+# --- 4. API Key ---
 api_key = None
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
-    pass # 稍後在側邊欄處理
+    st.error("⚠️ 系統偵測不到 API Key！")
 
 # --- 5. 字型 ---
 @st.cache_resource
@@ -330,7 +331,7 @@ def calculate_score(df, use_buffett=False):
     df['Buffett'] = buffett_tags
     return df.sort_values('Score', ascending=False), df_norm
 
-# --- 9. 繪圖函數 ---
+# --- 9. 繪圖與 AI (核心修復) ---
 def get_radar_data(df_norm_row):
     cats = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
     counts = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
@@ -353,13 +354,9 @@ def plot_radar_chart_ui(title, radar_data):
         fill='toself', name=title, line_color='#00e676', fillcolor='rgba(0, 230, 118, 0.2)'
     ))
     fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#4b5563'),
-            bgcolor='rgba(0,0,0,0)'
-        ),
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#4b5563'), bgcolor='rgba(0,0,0,0)'),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(t=20, b=20, l=30, r=30), height=250,
-        font=dict(color='#e6e6e6')
+        margin=dict(t=20, b=20, l=30, r=30), height=250, font=dict(color='#e6e6e6')
     )
     return fig
 
@@ -369,11 +366,11 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     current_price = history_df['Close'].iloc[-1]
     
     bias_pct = ma_bias * 100
-    if bias_pct > 15: status_text = f"🔴 留意過熱 (Overheated)"
-    elif bias_pct > 5: status_text = f"🔥 動能強勢 (Strong)"
-    elif bias_pct > -5: status_text = f"🟡 盤整持有 (Hold)"
-    elif bias_pct > -15: status_text = f"🟢 超跌/價值 (Value Zone)"
-    else: status_text = f"⛔ 趨勢轉空 (Avoid)"
+    if bias_pct > 15: status_text = f"🔴 留意過熱"
+    elif bias_pct > 5: status_text = f"🔥 動能強勢"
+    elif bias_pct > -5: status_text = f"🟡 盤整持有"
+    elif bias_pct > -15: status_text = f"🟢 超跌/價值"
+    else: status_text = f"⛔ 趨勢轉空"
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=history_df.index, y=history_df['Close'], name='Price', line=dict(color='#29b6f6', width=2.5)))
@@ -381,7 +378,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     fig.add_trace(go.Scatter(x=[history_df.index[-1]], y=[current_price], mode='markers', marker=dict(color='#00e676', size=10), showlegend=False))
 
     fig.update_layout(
-        title=dict(text=f"<b>配置時機判定</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>", font=dict(color='white', size=16), y=0.95),
+        title=dict(text=f"<b>配置時機 (Trend vs Value)</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>", font=dict(color='white', size=16), y=0.95),
         xaxis=dict(showgrid=False, linecolor='#4b5563', tickfont=dict(color='#9ca3af')),
         yaxis=dict(showgrid=True, gridcolor='#374151', tickfont=dict(color='#9ca3af')),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
@@ -390,23 +387,45 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     )
     return fig
 
-# 【核心修復】AI 分析函式 (顯示真實錯誤)
+# 【核心】AI 模組 (自動偵測可用模型)
+@st.cache_data(ttl=3600)
+def get_valid_model(key):
+    """自動偵測可用的 Gemini 模型"""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+    try:
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            models = r.json().get('models', [])
+            # 優先找 flash -> pro
+            for m in models:
+                if 'flash' in m['name'] and 'generateContent' in m['supportedGenerationMethods']:
+                    return m['name'].split('/')[-1]
+            for m in models:
+                if 'pro' in m['name'] and 'generateContent' in m['supportedGenerationMethods']:
+                    return m['name'].split('/')[-1]
+    except: pass
+    return "gemini-1.5-flash" # 預設
+
 def call_ai(prompt):
-    if not api_key:
-        return "<div class='error-box'>⚠️ 錯誤：未設定 API Key，無法執行 AI 分析。</div>"
-        
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    if not api_key: return "⚠️ 未設定 API Key"
+    
+    # 使用快取或 session state 取得模型名稱
+    if not st.session_state.get('ai_model_name'):
+        st.session_state['ai_model_name'] = get_valid_model(api_key)
+    
+    target_model = st.session_state['ai_model_name']
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
     
     try:
-        r = requests.post(url, headers=headers, json=data, timeout=10) # 10秒逾時
+        r = requests.post(url, headers=headers, json=data, timeout=15)
         if r.status_code == 200:
             return r.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            return f"<div class='error-box'>❌ API 錯誤 ({r.status_code}): {r.text}</div>"
+            return f"❌ API 錯誤: {r.status_code} - {r.text}"
     except Exception as e:
-        return f"<div class='error-box'>❌ 連線例外: {str(e)}</div>"
+        return f"❌ 連線例外: {str(e)}"
 
 def create_pdf(stock_data):
     buffer = io.BytesIO()
@@ -433,9 +452,8 @@ AI_PROMPT = """
 with st.sidebar:
     st.title("🎛️ 決策控制台")
     
-    # Key 狀態
-    if api_key: st.success("🔑 API Key 已載入")
-    else: st.error("🔒 未偵測到 API Key")
+    if st.session_state.get('ai_model_name'):
+        st.caption(f"🤖 AI 模型: {st.session_state['ai_model_name']}")
     
     st.markdown("### 1️⃣ 數據源與匯入")
     with st.expander("📂 匯入 TEJ (選填)"):
@@ -445,7 +463,7 @@ with st.sidebar:
             st.success(f"已載入 TEJ 數據")
 
     st.markdown("### 2️⃣ 策略設定")
-    use_buffett = st.checkbox("🎩 啟用巴菲特選股邏輯", value=False)
+    use_buffett = st.checkbox("🎩 啟用巴菲特選股", value=False)
     
     scan_mode = st.radio("模式選擇", ["🔥 熱門策略", "🏭 產業掃描", "⌨️ 自訂輸入"])
     
@@ -480,8 +498,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 30.0")
-    st.caption("AI Debug Mode + Visual Master + Robust Data")
+    st.title("⚡ 熵值決策選股平台 31.0")
+    st.caption("AI Auto-Detect + Trend Dashboard + Dark UI")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -539,7 +557,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     if b1.button(f"✨ AI 分析", key=f"ai_{idx}"):
                         p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[PRICE]", str(row['close_price'])).replace("[BIAS]", str(round(row.get('priceToMA60',0)*100,1)))
                         an = call_ai(p_txt)
-                        st.markdown(f"<div class='ai-header'>🤖 AI 觀點</div>{an}", unsafe_allow_html=True)
+                        st.markdown(f"<div class='ai-response'>{an}</div>", unsafe_allow_html=True)
                     
                     pdf = create_pdf(row.to_dict())
                     b2.download_button("📥 下載報告", pdf, f"{code}.pdf", key=f"dl_{idx}")
