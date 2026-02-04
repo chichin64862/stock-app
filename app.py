@@ -20,7 +20,7 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Strategies+)", 
+    page_title="熵值決策選股平台 (Bilingual & Full Market)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -139,13 +139,14 @@ def setup_chinese_font():
 
 font_ready = setup_chinese_font()
 
-# --- 6. 數據引擎 ---
+# --- 6. 數據引擎 (全市場覆蓋) ---
 def get_tw_stock_list():
     try:
         import twstock
         codes = twstock.codes
         stock_map = {}
         industry_map = {}
+        # 【核心】遍歷所有代號，區分上市與上櫃
         for code, info in codes.items():
             if info.type == '股票':
                 suffix = '.TW' if info.market == '上市' else '.TWO'
@@ -160,7 +161,11 @@ stock_map, industry_map = get_tw_stock_list()
 
 def get_stock_data(symbol):
     try:
-        if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
+        # 自動補後綴 (雙重保險)
+        if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): 
+            # 預設先試 TW，若清單中有定義則用清單的
+            symbol += '.TW'
+            
         ticker = yf.Ticker(symbol)
         info = ticker.info 
         hist = ticker.history(period="6mo")
@@ -277,7 +282,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     peg = calculate_synthetic_peg(pe, rev_growth/100)
 
                 industry = 'General'
-                # 簡單產業映射
+                # 簡單產業映射 (可擴充)
                 if code in ['2330', '2454', '2303', '3034', '3035', '2379', '2382', '3231']: industry = 'Semicon'
                 elif code.startswith('28') or code in ['5880']: industry = 'Finance'
                 elif code in ['1101', '1301', '2002', '2603', '1802', '1605']: industry = 'Cyclical'
@@ -294,6 +299,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
             except: continue
     
     df = pd.DataFrame(results)
+    # Auto-Heal Columns
     cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'eps_growth', 'gross_margins', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
     for c in cols:
         if c not in df.columns: df[c] = np.nan
@@ -387,8 +393,8 @@ def calculate_score(df, use_buffett=False):
         elif final > 75 and q_tag == "Quality": plans.append("💎 高品質爆發 (Quality Buy)")
         elif final > 75: plans.append("🚀 爆發成長 (Buy)")
         elif final > 60: plans.append("🟡 穩健持有 (Hold)")
-        elif ma < -0.1: plans.append("🟢 超跌反彈")
-        elif ma > 0.2: plans.append("🔴 過熱拉回")
+        elif ma < -0.1: plans.append("🟢 超跌反彈 (Rebound)")
+        elif ma > 0.2: plans.append("🔴 過熱拉回 (Overheated)")
         else: plans.append("⛔ 觀望 (Wait)")
             
     df['Score'] = scores
@@ -397,13 +403,19 @@ def calculate_score(df, use_buffett=False):
     df['Quality'] = quality_tags
     return df.sort_values('Score', ascending=False), df_norm
 
-# --- 9. 繪圖函數 ---
+# --- 9. 繪圖函數 (中英對照) ---
 def get_radar_data(df_norm_row):
-    cats = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
-    counts = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
+    # 中英對照
+    cats = {'價值 (Value)': 0, '成長 (Growth)': 0, '動能 (Momentum)': 0, '風險 (Risk)': 0, '財報 (Financials)': 0}
+    counts = {'價值 (Value)': 0, '成長 (Growth)': 0, '動能 (Momentum)': 0, '風險 (Risk)': 0, '財報 (Financials)': 0}
+    
+    # 簡易映射
+    map_dict = {'價值': '價值 (Value)', '成長': '成長 (Growth)', '動能': '動能 (Momentum)', '風險': '風險 (Risk)', '財報': '財報 (Financials)'}
+    
     for col in df_norm_row.index:
         if str(col).endswith('_n'):
-            cat = str(col).split('_')[0]
+            cat_raw = str(col).split('_')[0]
+            cat = map_dict.get(cat_raw, cat_raw) # 映射到中英
             if cat in cats:
                 cats[cat] += df_norm_row[col]
                 counts[cat] += 1
@@ -431,11 +443,11 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     history_df['MA60'] = history_df['Close'].rolling(window=60).mean()
     current_price = history_df['Close'].iloc[-1]
     bias_pct = ma_bias * 100
-    if bias_pct > 15: status_text = f"🔴 留意過熱"
-    elif bias_pct > 5: status_text = f"🔥 動能強勢"
-    elif bias_pct > -5: status_text = f"🟡 盤整持有"
-    elif bias_pct > -15: status_text = f"🟢 超跌/價值"
-    else: status_text = f"⛔ 趨勢轉空"
+    if bias_pct > 15: status_text = f"🔴 留意過熱 (Overheated)"
+    elif bias_pct > 5: status_text = f"🔥 動能強勢 (Strong)"
+    elif bias_pct > -5: status_text = f"🟡 盤整持有 (Hold)"
+    elif bias_pct > -15: status_text = f"🟢 超跌/價值 (Value Zone)"
+    else: status_text = f"⛔ 趨勢轉空 (Avoid)"
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=history_df.index, y=history_df['Close'], name='Price', line=dict(color='#29b6f6', width=2.5)))
@@ -443,7 +455,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     fig.add_trace(go.Scatter(x=[history_df.index[-1]], y=[current_price], mode='markers', marker=dict(color='#00e676', size=10), showlegend=False))
 
     fig.update_layout(
-        title=dict(text=f"<b>配置時機判定</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>", font=dict(color='white', size=16), y=0.95),
+        title=dict(text=f"<b>配置時機判定 (Trend vs Value)</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>", font=dict(color='white', size=16), y=0.95),
         xaxis=dict(showgrid=False, linecolor='#4b5563', tickfont=dict(color='#9ca3af')),
         yaxis=dict(showgrid=True, gridcolor='#374151', tickfont=dict(color='#9ca3af')),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
@@ -485,6 +497,7 @@ def call_ai(prompt):
     except Exception as e:
         return f"❌ 連線例外: {str(e)}"
 
+# 【核心更新】中英對照 PDF
 def create_pdf(stock_data):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -496,25 +509,27 @@ def create_pdf(stock_data):
     h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue)
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
     
-    story.append(Paragraph(f"熵值決策選股及AI深度分析報告", title_style))
-    story.append(Paragraph(f"生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
+    story.append(Paragraph(f"熵值決策選股及AI深度分析報告 (Analysis Report)", title_style))
+    story.append(Paragraph(f"生成時間 (Time): {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
-    story.append(Paragraph(f"標的: {stock_data['名稱']} ({stock_data['代號']})", h2_style))
-    story.append(Paragraph(f"戰略指令: {stock_data['Strategy']}", normal_style))
+    
+    story.append(Paragraph(f"標的 (Target): {stock_data['名稱']} ({stock_data['代號']})", h2_style))
+    story.append(Paragraph(f"戰略指令 (Strategy): {stock_data['Strategy']}", normal_style))
     
     rev_g = stock_data.get('rev_growth', 0); eps_g = stock_data.get('eps_growth', 0)
     if rev_g > 20 and eps_g < 0:
-        story.append(Paragraph(f"⚠️ 警告：檢測到虛胖成長 (營收大增但獲利衰退)，請留意毛利率與費用控管。", normal_style))
+        story.append(Paragraph(f"⚠️ 警告 (Warning): 檢測到虛胖成長 (Profitless Growth)", normal_style))
     story.append(Spacer(1, 10))
     
+    # 中英對照數據表
     metrics_data = [
-        ['收盤價', f"{stock_data['close_price']}", '熵值分數', f"{stock_data.get('Score', 'N/A')}"],
+        ['收盤價 (Price)', f"{stock_data['close_price']}", '熵值分數 (Score)', f"{stock_data.get('Score', 'N/A')}"],
         ['本益比 (P/E)', f"{stock_data.get('pe', 'N/A')}", 'PEG Ratio', f"{stock_data.get('peg', 'N/A')}"],
-        ['營收成長', f"{stock_data.get('rev_growth', 0):.2f}%", 'EPS 成長', f"{stock_data.get('eps_growth', 0):.2f}%"],
-        ['毛利率', f"{stock_data.get('gross_margins', 0):.2f}%", '殖利率', f"{stock_data.get('yield', 0):.2f}%"],
-        ['波動率', f"{stock_data.get('volatility', 0)*100:.1f}%", '季線乖離', f"{stock_data.get('priceToMA60', 0)*100:.1f}%"]
+        ['營收成長 (Rev Growth)', f"{stock_data.get('rev_growth', 0):.2f}%", 'EPS 成長 (EPS Growth)', f"{stock_data.get('eps_growth', 0):.2f}%"],
+        ['毛利率 (Gross Margin)', f"{stock_data.get('gross_margins', 0):.2f}%", '殖利率 (Yield)', f"{stock_data.get('yield', 0):.2f}%"],
+        ['波動率 (Volatility)', f"{stock_data.get('volatility', 0)*100:.1f}%", '季線乖離 (MA Bias)', f"{stock_data.get('priceToMA60', 0)*100:.1f}%"]
     ]
-    t = Table(metrics_data, colWidths=[100, 130, 100, 130])
+    t = Table(metrics_data, colWidths=[120, 110, 120, 110])
     t.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), font_name),
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f2937')),
@@ -529,7 +544,7 @@ def create_pdf(stock_data):
     story.append(Spacer(1, 20))
     
     if 'ai_analysis' in stock_data and stock_data['ai_analysis']:
-        story.append(Paragraph("AI 深度投資建議", h2_style))
+        story.append(Paragraph("AI 深度投資建議 (AI Investment Insights)", h2_style))
         clean_text = stock_data['ai_analysis'].replace('**', '').replace('##', '')
         for line in clean_text.split('\n'):
             if line.strip():
@@ -565,19 +580,20 @@ with st.sidebar:
     
     scan_mode = st.radio("模式選擇", ["🔥 熱門策略", "🏭 產業掃描", "⌨️ 自訂輸入"])
     
-    # 【新增】策略擴充 (7 大策略)
+    # 策略選單 (中英對照)
     strategies = {
-        "🏆 台灣50 (大型權值)": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2412.TW", "1301.TW"],
-        "🤖 AI 伺服器 (強勢族群)": ["2382.TW", "3231.TW", "6669.TW", "2376.TW", "3017.TW", "2356.TW"],
-        "💰 高股息殖利率 (存股)": ["2454.TW", "2303.TW", "2357.TW", "1101.TW", "2891.TW", "0056.TW"],
-        "🍎 蘋果概念股 (消費電)": ["2330.TW", "2317.TW", "3008.TW", "4938.TW", "2313.TW"],
-        "🚗 電動車與車電 (趨勢)": ["2308.TW", "2317.TW", "6235.TW", "1536.TW", "5425.TW"],
-        "🏦 金融保險 (穩健防禦)": ["2881.TW", "2882.TW", "2886.TW", "2891.TW", "5880.TW", "2884.TW"],
-        "🚢 傳產與航運 (景氣循環)": ["2603.TW", "2609.TW", "2002.TW", "1301.TW", "1303.TW", "1605.TW"]
+        "🏆 台灣50 (TW50)": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2412.TW", "1301.TW"],
+        "🤖 AI 伺服器 (AI Server)": ["2382.TW", "3231.TW", "6669.TW", "2376.TW", "3017.TW", "2356.TW"],
+        "💰 高股息殖利率 (High Yield)": ["2454.TW", "2303.TW", "2357.TW", "1101.TW", "2891.TW", "0056.TW"],
+        "🍎 蘋果概念股 (Apple Concept)": ["2330.TW", "2317.TW", "3008.TW", "4938.TW", "2313.TW"],
+        "🚗 電動車與車電 (EV/Auto)": ["2308.TW", "2317.TW", "6235.TW", "1536.TW", "5425.TW"],
+        "🏦 金融保險 (Financials)": ["2881.TW", "2882.TW", "2886.TW", "2891.TW", "5880.TW", "2884.TW"],
+        "🚢 傳產與航運 (Cyclical/Shipping)": ["2603.TW", "2609.TW", "2002.TW", "1301.TW", "1303.TW", "1605.TW"]
     }
     
     target_stocks = []
     if scan_mode == "⌨️ 自訂輸入":
+        # 預設清單擴充
         default = ["2330.TW 台積電", "2317.TW 鴻海", "2454.TW 聯發科", "2881.TW 富邦金"]
         options = sorted(list(stock_map.values())) if stock_map else default
         selected = st.multiselect("選擇股票", options, default=[s for s in default if s in options])
@@ -590,7 +606,6 @@ with st.sidebar:
         ind = st.selectbox("選擇產業", ind_list)
         if ind: target_stocks = [stock_map[c] for c in industry_map[ind] if c in stock_map]
     else:
-        # 使用新版策略選單
         strat_name = st.selectbox("策略集", list(strategies.keys()))
         target_stocks = strategies[strat_name]
 
@@ -606,8 +621,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 35.1")
-    st.caption("More Strategies + TC AI + Multi-File Upload")
+    st.title("⚡ 熵值決策選股平台 36.0")
+    st.caption("Bilingual UI + Full Market Coverage + Pro Report")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -619,16 +634,17 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         final_df, df_norm = calculate_score(df, use_buffett)
         
         st.subheader("🏆 潛力標的排行")
+        # 中英對照表頭
         st.dataframe(
             final_df[['代號', '名稱', 'industry', 'Score', 'Buffett', 'Quality', 'Strategy', 'rev_growth', 'eps_growth', 'gross_margins']],
             column_config={
-                "industry": st.column_config.TextColumn("產業"),
-                "Score": st.column_config.ProgressColumn("戰力分數", min_value=0, max_value=100, format="%.1f"),
-                "Buffett": st.column_config.TextColumn("巴菲特"),
-                "Quality": st.column_config.TextColumn("品質標籤"),
-                "rev_growth": st.column_config.NumberColumn("營收成長", format="%.2f%%"),
-                "eps_growth": st.column_config.NumberColumn("EPS成長", format="%.2f%%"),
-                "gross_margins": st.column_config.NumberColumn("毛利率", format="%.2f%%"),
+                "industry": st.column_config.TextColumn("產業 (Industry)"),
+                "Score": st.column_config.ProgressColumn("戰力分數 (Score)", min_value=0, max_value=100, format="%.1f"),
+                "Buffett": st.column_config.TextColumn("巴菲特 (Buffett)"),
+                "Quality": st.column_config.TextColumn("品質 (Quality)"),
+                "rev_growth": st.column_config.NumberColumn("營收成長 (Rev Growth)", format="%.2f%%"),
+                "eps_growth": st.column_config.NumberColumn("EPS成長 (EPS Growth)", format="%.2f%%"),
+                "gross_margins": st.column_config.NumberColumn("毛利率 (Gross Margin)", format="%.2f%%"),
             },
             use_container_width=True, hide_index=True
         )
@@ -643,8 +659,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 industry_tag = f"<span class='tag tag-sector'>{row['industry']}</span>"
                 buffett_tag = "<span class='tag tag-buffett'>Buffett Pick</span>" if row['Buffett'] else ""
                 quality_tag = ""
-                if row['Quality'] == 'Profitless': quality_tag = "<span class='tag tag-warn'>⚠️ 虛胖警告</span>"
-                elif row['Quality'] == 'Quality': quality_tag = "<span class='tag tag-quality'>💎 高品質</span>"
+                if row['Quality'] == 'Profitless': quality_tag = "<span class='tag tag-warn'>⚠️ 虛胖警告 (Profitless)</span>"
+                elif row['Quality'] == 'Quality': quality_tag = "<span class='tag tag-quality'>💎 高品質 (Quality)</span>"
                 
                 st.markdown(f"""
                 <div class='stock-card'>
@@ -666,12 +682,12 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 with c2:
                     st.markdown(f"""
                     <div class='metrics-grid'>
-                        <div class='metric-item'><span class='m-label'>營收成長</span><span class='m-val m-high'>{row.get('rev_growth', 0):.2f}%</span></div>
-                        <div class='metric-item'><span class='m-label'>EPS 成長</span><span class='m-val m-high'>{row.get('eps_growth', 0):.2f}%</span></div>
-                        <div class='metric-item'><span class='m-label'>毛利率</span><span class='m-val'>{row.get('gross_margins', 0):.2f}%</span></div>
+                        <div class='metric-item'><span class='m-label'>營收成長 (Rev Growth)</span><span class='m-val m-high'>{row.get('rev_growth', 0):.2f}%</span></div>
+                        <div class='metric-item'><span class='m-label'>EPS 成長 (EPS Growth)</span><span class='m-val m-high'>{row.get('eps_growth', 0):.2f}%</span></div>
+                        <div class='metric-item'><span class='m-label'>毛利率 (Gross Margin)</span><span class='m-val'>{row.get('gross_margins', 0):.2f}%</span></div>
                         <div class='metric-item'><span class='m-label'>PEG Ratio</span><span class='m-val'>{row.get('peg', 0):.2f}</span></div>
                         <div class='metric-item'><span class='m-label'>本益比 (PE)</span><span class='m-val'>{row.get('pe', 0):.2f}</span></div>
-                        <div class='metric-item'><span class='m-label'>季線乖離</span><span class='m-val'>{row.get('priceToMA60', 0)*100:.1f}%</span></div>
+                        <div class='metric-item'><span class='m-label'>季線乖離 (MA Bias)</span><span class='m-val'>{row.get('priceToMA60', 0)*100:.1f}%</span></div>
                     </div>
                     """, unsafe_allow_html=True)
                     
@@ -687,7 +703,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     
                     pdf = create_pdf(pdf_payload)
                     file_name_dl = f"{code} {row['名稱']} ({(row.get('full_symbol', code))})_Report.pdf"
-                    b2.download_button("📥 下載報告", pdf, file_name_dl, key=f"dl_{idx}")
+                    b2.download_button("📥 下載報告 (Download PDF)", pdf, file_name_dl, key=f"dl_{idx}")
 
                 with c3:
                     if code in hist_storage and not hist_storage[code].empty:
