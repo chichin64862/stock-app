@@ -10,17 +10,18 @@ import io
 import os
 from datetime import datetime
 
-# PDF 函式庫
+# PDF 函式庫 (核心升級)
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
+from reportlab.lib.units import cm
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Fix)", 
+    page_title="熵值決策選股平台 (Pro Report)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -44,7 +45,7 @@ st.markdown("""
     li[role="option"]:hover { background-color: #238636 !important; }
     input { background-color: #0d1117 !important; color: white !important; border: 1px solid #30363d !important; }
     
-    /* 【核心】專業戰略卡片 (三欄式佈局容器) */
+    /* 【核心】專業戰略卡片 */
     .stock-card { 
         background-color: #1f2937; 
         padding: 20px; 
@@ -84,8 +85,8 @@ st.markdown("""
     .metric-item { display: flex; justify-content: space-between; align-items: center; }
     .m-label { color: #9ca3af; font-size: 0.9rem; }
     .m-val { color: #ffffff; font-weight: bold; font-size: 1.0rem; font-family: 'Courier New', monospace; }
-    .m-high { color: #4ade80; } /* 亮綠 */
-    .m-warn { color: #f87171; } /* 亮紅 */
+    .m-high { color: #4ade80; } 
+    .m-warn { color: #f87171; }
     
     /* AI 分析區塊 */
     .ai-box {
@@ -100,7 +101,7 @@ st.markdown("""
     }
     
     /* 下載按鈕 */
-    .stDownloadButton button { background-color: #374151 !important; border: 1px solid #4b5563 !important; color: white !important; }
+    .stDownloadButton button { background-color: #374151 !important; border: 1px solid #4b5563 !important; color: white !important; width: 100%; }
     .stDownloadButton button:hover { border-color: #60a5fa !important; color: #60a5fa !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -119,21 +120,17 @@ except Exception:
     st.error("⚠️ 系統偵測不到 API Key！")
     st.stop()
 
-# --- 5. 字型下載與註冊 (PDF 亂碼修復核心) ---
+# --- 5. 字型下載與註冊 ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
     url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
-    
-    # 1. 下載字體
     if not os.path.exists(font_path):
         try:
             r = requests.get(url, allow_redirects=True, timeout=10)
             if r.status_code == 200:
                 with open(font_path, 'wb') as f: f.write(r.content)
         except: return False
-    
-    # 2. 註冊字體 (給 ReportLab 用)
     try:
         pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
         return True
@@ -224,13 +221,11 @@ def batch_scan_stocks(stock_list, tej_data=None):
                 name = stock_str.split(' ')[1] if len(stock_str.split(' ')) > 1 else code
                 y_data = future.result()
                 
-                # 初始化
                 price = np.nan; pe = np.nan; pb = np.nan; dy = np.nan
                 rev_growth = np.nan; peg = np.nan; roe = np.nan; volatility = 0.5
                 chips = 0; ma_bias = 0
 
                 if y_data:
-                    # K線處理
                     hist = y_data.get('history')
                     if hist is not None and not hist.empty:
                         history_map[code] = hist 
@@ -241,7 +236,6 @@ def batch_scan_stocks(stock_list, tej_data=None):
                             ma60 = closes.rolling(60).mean().iloc[-1]
                             if not pd.isna(ma60): ma_bias = (price / ma60) - 1
                     
-                    # 財報處理
                     if pd.isna(price): price = y_data.get('close_price')
                     pe = y_data.get('pe')
                     pb = y_data.get('pb')
@@ -311,10 +305,8 @@ def check_buffett_criteria(row):
     roe = row.get('roe', 0)
     vol = row.get('volatility', 1.0)
     pe = row.get('pe', 100)
-    
     if roe and roe < 1: roe = roe * 100 
     if pd.isna(roe): roe = 0
-    
     score = 0
     if roe > 15: score += 1
     if vol < 0.35: score += 1
@@ -347,27 +339,30 @@ def calculate_score(df, use_buffett=False):
             total_weight += setting['w']
             
         final = total_score / total_weight if total_weight > 0 else 50
+        
         is_buffett = check_buffett_criteria(row)
-        buffett_tags.append(is_buffett)
-        if use_buffett and is_buffett: final = min(100, final + 15)
+        buffett_tags.append("Buffett Pick" if is_buffett else "")
+        if use_buffett and is_buffett:
+            final += 15
+            if final > 100: final = 100
+            
         scores.append(round(final, 1))
         
         rev = row.get('rev_growth', 0)
         peg = row.get('peg', 100)
         ma = row.get('priceToMA60', 0)
         
-        if final > 75 and rev > 20: plans.append("🚀 爆發成長")
-        elif final > 60: plans.append("🟡 穩健持有")
+        if final > 75 and rev > 20: plans.append("🚀 爆發成長 (Buy)")
+        elif final > 60: plans.append("🟡 穩健持有 (Hold)")
         elif ma < -0.1: plans.append("🟢 超跌反彈")
-        elif ma > 0.2: plans.append("🔴 過熱拉回")
-        else: plans.append("⛔ 觀望")
+        else: plans.append("⛔ 觀望 (Wait)")
             
     df['Score'] = scores
     df['Strategy'] = plans
     df['Buffett'] = buffett_tags
     return df.sort_values('Score', ascending=False), df_norm
 
-# --- 9. 繪圖函數 (修正 TypeError) ---
+# --- 9. 繪圖函數 ---
 def get_radar_data(df_norm_row):
     cats = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
     counts = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
@@ -383,7 +378,6 @@ def get_radar_data(df_norm_row):
         else: radar[k] = 50
     return radar
 
-# 【關鍵修正】恢復 title 參數
 def plot_radar_chart_ui(title, radar_data):
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
@@ -391,13 +385,9 @@ def plot_radar_chart_ui(title, radar_data):
         fill='toself', name=title, line_color='#00e676', fillcolor='rgba(0, 230, 118, 0.2)'
     ))
     fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#4b5563'),
-            bgcolor='rgba(0,0,0,0)'
-        ),
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#4b5563'), bgcolor='rgba(0,0,0,0)'),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(t=20, b=20, l=30, r=30), height=250,
-        font=dict(color='#e6e6e6')
+        margin=dict(t=20, b=20, l=30, r=30), height=250, font=dict(color='#e6e6e6')
     )
     return fig
 
@@ -419,7 +409,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     fig.add_trace(go.Scatter(x=[history_df.index[-1]], y=[current_price], mode='markers', marker=dict(color='#00e676', size=10), showlegend=False))
 
     fig.update_layout(
-        title=dict(text=f"<b>配置時機 (Trend)</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>", font=dict(color='white', size=16), y=0.95),
+        title=dict(text=f"<b>配置時機判定</b><br><span style='font-size:14px; color:#e6e6e6'>{bias_pct:.1f}%  {status_text}</span>", font=dict(color='white', size=16), y=0.95),
         xaxis=dict(showgrid=False, linecolor='#4b5563', tickfont=dict(color='#9ca3af')),
         yaxis=dict(showgrid=True, gridcolor='#374151', tickfont=dict(color='#9ca3af')),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
@@ -428,7 +418,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     )
     return fig
 
-# --- 10. AI 與 PDF ---
+# --- 10. AI 與 PDF (重構 PDF 生成邏輯) ---
 def get_valid_model(key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
@@ -461,58 +451,63 @@ def call_ai(prompt):
     except Exception as e:
         return f"❌ 連線例外: {str(e)}"
 
-# 【核心修復】PDF 中文亂碼與內容豐富化
+# 【核心更新】專業報表生成 (Professional PDF)
 def create_pdf(stock_data):
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
     
-    # 字體設定
     font_name = 'ChineseFont' if font_ready else 'Helvetica'
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=18, spaceAfter=20)
-    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=12, leading=16)
     
-    # 標題
-    story.append(Paragraph(f"投資分析報告：{stock_data['名稱']} ({stock_data['代號']})", title_style))
+    # 樣式定義
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, alignment=1, spaceAfter=20)
+    h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue)
+    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
+    
+    # 1. 標題與時間
+    story.append(Paragraph(f"熵值決策選股及AI深度分析報告", title_style))
     story.append(Paragraph(f"生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
-    story.append(Spacer(1, 20))
+    story.append(Spacer(1, 10))
     
-    # 關鍵數據表
-    data = [
-        ["指標", "數值"],
-        ["收盤價", f"{stock_data['close_price']}"],
-        ["戰略指令", f"{stock_data['Strategy']}"],
-        ["本益比 (P/E)", f"{stock_data.get('pe', 'N/A')}"],
-        ["PEG Ratio", f"{stock_data.get('peg', 'N/A')}"],
-        ["營收成長", f"{stock_data.get('rev_growth', 0):.2f}%"],
-        ["殖利率", f"{stock_data.get('yield', 0):.2f}%"],
-        ["波動率", f"{stock_data.get('volatility', 0)*100:.1f}%"]
+    # 2. 核心數據概覽 (四欄式表格)
+    story.append(Paragraph(f"標的: {stock_data['名稱']} ({stock_data['代號']})", h2_style))
+    story.append(Paragraph(f"戰略指令: {stock_data['Strategy']}", normal_style))
+    story.append(Spacer(1, 10))
+    
+    # 表格數據準備
+    metrics_data = [
+        ['收盤價', f"{stock_data['close_price']}", '熵值分數', f"{stock_data.get('Score', 'N/A')}"],
+        ['本益比 (P/E)', f"{stock_data.get('pe', 'N/A')}", 'PEG Ratio', f"{stock_data.get('peg', 'N/A')}"],
+        ['營收成長', f"{stock_data.get('rev_growth', 0):.2f}%", '殖利率', f"{stock_data.get('yield', 0):.2f}%"],
+        ['波動率', f"{stock_data.get('volatility', 0)*100:.1f}%", '季線乖離', f"{stock_data.get('priceToMA60', 0)*100:.1f}%"]
     ]
     
-    t = Table(data, colWidths=[200, 200])
+    t = Table(metrics_data, colWidths=[100, 130, 100, 130])
     t.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), font_name),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f2937')), # 標頭深色
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),
-        ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('BACKGROUND', (0, 0), (-1, -1), colors.whitesmoke), # 內容淺色
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
     ]))
     story.append(t)
     story.append(Spacer(1, 20))
     
-    # AI 分析內容
+    # 3. AI 分析內容
     if 'ai_analysis' in stock_data and stock_data['ai_analysis']:
-        story.append(Paragraph("【AI 深度觀點】", title_style))
-        # 處理換行
-        lines = stock_data['ai_analysis'].split('\n')
-        for line in lines:
+        story.append(Paragraph("AI 深度投資建議", h2_style))
+        # 簡單清理 Markdown 符號
+        clean_text = stock_data['ai_analysis'].replace('**', '').replace('##', '')
+        # 分段輸出
+        for line in clean_text.split('\n'):
             if line.strip():
                 story.append(Paragraph(line, normal_style))
-                story.append(Spacer(1, 6))
-        
+                story.append(Spacer(1, 5))
+                
     try: doc.build(story)
     except Exception as e: print(e)
     
@@ -521,10 +516,9 @@ def create_pdf(stock_data):
 
 AI_PROMPT = """
 請扮演華爾街基金經理人，分析 [STOCK] ([SECTOR])。
-數據：PE=[PE], PEG=[PEG], 營收成長=[REV]%, ROE=[ROE]%, 波動率=[VOL]%.
-重點：
-1. **成長性**：是否具備爆發潛力？(PEG < 1.5 ?)
-2. **安全性**：是否符合巴菲特護城河 (高ROE, 低波動)？
+重點檢查：
+1. **成長爆發力**：營收成長=[REV]%, PEG=[PEG] (若PEG<1.5且成長>20%，請強調為爆發股)。
+2. **趨勢形態**：目前股價=[PRICE]，季線乖離=[BIAS]%，是多頭回檔還是空頭反彈？
 3. **估值風險**：PE=[PE], 殖利率=[YIELD]%。
 給出未來6個月操作建議。
 """
@@ -533,15 +527,13 @@ AI_PROMPT = """
 with st.sidebar:
     st.title("🎛️ 決策控制台")
     
-    st.markdown("### 1️⃣ 數據源與匯入")
     with st.expander("📂 匯入 TEJ (選填)"):
         uploaded = st.file_uploader("上傳 CSV/Excel", type=['csv','xlsx'])
         if uploaded: 
             st.session_state['tej_data'] = process_tej_upload(uploaded)
             st.success(f"已載入 TEJ 數據")
 
-    st.markdown("### 2️⃣ 策略設定")
-    use_buffett = st.checkbox("🎩 啟用巴菲特選股邏輯", value=False)
+    use_buffett = st.checkbox("🎩 啟用巴菲特選股", value=False)
     
     scan_mode = st.radio("模式選擇", ["🔥 熱門策略", "🏭 產業掃描", "⌨️ 自訂輸入"])
     
@@ -555,11 +547,9 @@ with st.sidebar:
         if manual: target_stocks.append(f"{manual}.TW")
         
     elif scan_mode == "🏭 產業掃描":
-        if not industry_map: st.error("⚠️ 無法載入產業列表，請改用自訂輸入。")
-        else:
-            ind_list = sorted(list(industry_map.keys()))
-            ind = st.selectbox("選擇產業", ind_list)
-            if ind: target_stocks = [stock_map[c] for c in industry_map[ind] if c in stock_map]
+        ind_list = sorted(list(industry_map.keys()))
+        ind = st.selectbox("選擇產業", ind_list)
+        if ind: target_stocks = [stock_map[c] for c in industry_map[ind] if c in stock_map]
     else:
         strat = st.selectbox("策略集", ["台灣50", "AI供應鏈", "金融股"])
         if strat == "台灣50": target_stocks = ["2330.TW", "2454.TW", "2317.TW", "2308.TW", "2881.TW"]
@@ -578,8 +568,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 32.1")
-    st.caption("UI Fix + PDF Fix + Robust Data")
+    st.title("⚡ 熵值決策選股平台 33.0")
+    st.caption("Pro Report Engine + Dashboard UI + Robust Data")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -614,32 +604,21 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 industry_tag = f"<span class='sector-tag'>{row['industry']}</span>"
                 buffett_tag = "<span class='buffett-tag'>Buffett Pick</span>" if row['Buffett'] else ""
                 
-                # Header
-                st.markdown(f"""
-                <div class='stock-card'>
-                    <div class='card-header'>
-                        <div>
-                            <span class='header-title'>{row['名稱']} ({code})</span>
-                            <span class='header-price'>${row['close_price']}</span>
-                        </div>
-                        <div>{industry_tag}{buffett_tag}</div>
-                    </div>
-                """, unsafe_allow_html=True)
+                st.markdown(f"<div class='stock-card'><h3>{row['名稱']} ({code}) {industry_tag}{buffett_tag}</h3>", unsafe_allow_html=True)
                 
-                c1, c2, c3 = st.columns([1, 1.2, 1.5])
+                c1, c2, c3 = st.columns([1, 1.5, 1.5])
                 
-                # 左：雷達圖 (修復 title 參數)
-                with c1:
-                    if idx in df_norm.index:
-                        st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[idx])), use_container_width=True)
+                if idx in df_norm.index:
+                    radar_data = get_radar_data(df_norm.loc[idx])
+                    with c1:
+                        st.plotly_chart(plot_radar_chart_ui(row['名稱'], radar_data), use_container_width=True)
                 
-                # 中：數據
                 with c2:
                     st.markdown(f"""
                     <div class='metrics-grid'>
                         <div class='metric-item'><span class='m-label'>營收成長</span><span class='m-val m-high'>{row.get('rev_growth', 0):.2f}%</span></div>
-                        <div class='metric-item'><span class='m-label'>PEG</span><span class='m-val'>{row.get('peg', 0):.2f}</span></div>
-                        <div class='metric-item'><span class='m-label'>本益比</span><span class='m-val'>{row.get('pe', 0):.2f}</span></div>
+                        <div class='metric-item'><span class='m-label'>PEG Ratio</span><span class='m-val'>{row.get('peg', 0):.2f}</span></div>
+                        <div class='metric-item'><span class='m-label'>本益比 (PE)</span><span class='m-val'>{row.get('pe', 0):.2f}</span></div>
                         <div class='metric-item'><span class='m-label'>殖利率</span><span class='m-val m-high'>{row.get('yield', 0):.2f}%</span></div>
                         <div class='metric-item'><span class='m-label'>波動率</span><span class='m-val m-warn'>{row.get('volatility', 0)*100:.1f}%</span></div>
                         <div class='metric-item'><span class='m-label'>季線乖離</span><span class='m-val'>{row.get('priceToMA60', 0)*100:.1f}%</span></div>
@@ -654,20 +633,21 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     
                     # 準備 PDF
                     pdf_payload = row.to_dict()
+                    # 加入 AI 分析結果 (如果有的話)
                     if code in st.session_state['ai_results']:
                         pdf_payload['ai_analysis'] = st.session_state['ai_results'][code]
                     
                     pdf = create_pdf(pdf_payload)
-                    b2.download_button("📥 下載報告", pdf, f"{code}.pdf", key=f"dl_{idx}")
+                    file_name_dl = f"{code} {row['名稱']} ({(row.get('full_symbol', code))})_Report.pdf"
+                    b2.download_button("📥 下載報告", pdf, file_name_dl, key=f"dl_{idx}")
 
-                # 右：趨勢圖
                 with c3:
                     if code in hist_storage and not hist_storage[code].empty:
                         st.plotly_chart(plot_trend_dashboard(row['名稱'], hist_storage[code], row.get('priceToMA60', 0)), use_container_width=True)
                     else:
                         st.warning("無 K 線數據")
 
-                # AI 分析結果顯示
+                # AI 分析顯示區
                 if code in st.session_state['ai_results']:
                     st.markdown(f"<div class='ai-box'>{st.session_state['ai_results'][code]}</div>", unsafe_allow_html=True)
 
