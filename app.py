@@ -20,13 +20,13 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (TC AI + Multi-File)", 
+    page_title="熵值決策選股平台 (Strategies+)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 專業儀表板風格 (保持不變) ---
+# --- 2. CSS 專業儀表板風格 ---
 st.markdown("""
 <style>
     /* 全域深色 */
@@ -193,37 +193,27 @@ def sanitize_data(df):
         df['yield'] = df['yield'].apply(lambda x: x/100 if x > 20 else x)
     return df
 
-# 【核心修改】支援多檔上傳並合併
+# 支援多檔匯入
 def process_tej_upload(uploaded_files):
     if not uploaded_files: return None
     tej_map = {}
     
-    # 確保是列表 (雖然 accept_multiple_files=True 會回傳列表，但做個防呆)
-    if not isinstance(uploaded_files, list):
-        uploaded_files = [uploaded_files]
+    if not isinstance(uploaded_files, list): uploaded_files = [uploaded_files]
         
     for uploaded_file in uploaded_files:
         try:
             if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
             else: df = pd.read_excel(uploaded_file)
             
-            # 清理欄位名稱
             df.columns = [str(c).strip() for c in df.columns]
-            
-            # 尋找代號欄位
             code_col = next((c for c in df.columns if '代號' in c or 'Code' in c), None)
-            if not code_col: continue # 略過沒有代號的檔案
+            if not code_col: continue 
             
             for _, row in df.iterrows():
-                # 處理代號 (去除 .TW 等後綴，只留數字以便對應)
                 raw_code = str(row[code_col]).split('.')[0].strip()
-                
-                # 如果該代號已存在，更新資料 (Merge)；若無，新增
-                if raw_code in tej_map:
-                    tej_map[raw_code].update(row.to_dict())
-                else:
-                    tej_map[raw_code] = row.to_dict()
-        except: continue # 略過壞檔
+                if raw_code in tej_map: tej_map[raw_code].update(row.to_dict())
+                else: tej_map[raw_code] = row.to_dict()
+        except: continue
         
     return tej_map
 
@@ -287,9 +277,10 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     peg = calculate_synthetic_peg(pe, rev_growth/100)
 
                 industry = 'General'
+                # 簡單產業映射
                 if code in ['2330', '2454', '2303', '3034', '3035', '2379', '2382', '3231']: industry = 'Semicon'
-                elif code.startswith('28'): industry = 'Finance'
-                elif code in ['1101', '1301', '2002', '2603', '1802']: industry = 'Cyclical'
+                elif code.startswith('28') or code in ['5880']: industry = 'Finance'
+                elif code in ['1101', '1301', '2002', '2603', '1802', '1605']: industry = 'Cyclical'
 
                 if not pd.isna(price):
                     results.append({
@@ -303,7 +294,6 @@ def batch_scan_stocks(stock_list, tej_data=None):
             except: continue
     
     df = pd.DataFrame(results)
-    # Auto-Heal Columns
     cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'eps_growth', 'gross_margins', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
     for c in cols:
         if c not in df.columns: df[c] = np.nan
@@ -462,7 +452,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     )
     return fig
 
-# --- 10. AI 與 PDF (繁中鎖定) ---
+# --- 10. AI 與 PDF ---
 def get_valid_model(key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
@@ -499,6 +489,7 @@ def create_pdf(stock_data):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
+    
     font_name = 'ChineseFont' if font_ready else 'Helvetica'
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, alignment=1, spaceAfter=20)
@@ -550,7 +541,6 @@ def create_pdf(stock_data):
     buffer.seek(0)
     return buffer
 
-# 【核心修改】AI 提示詞：強制繁體中文
 AI_PROMPT = """
 請扮演華爾街基金經理人，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
 數據：PE=[PE], PEG=[PEG], 營收成長=[REV]%, EPS成長=[EPS_G]%, 毛利率=[GM]%, ROE=[ROE]%.
@@ -565,7 +555,6 @@ AI_PROMPT = """
 with st.sidebar:
     st.title("🎛️ 決策控制台")
     
-    # 【核心修改】支援多檔上傳
     with st.expander("📂 匯入 TEJ (支援多檔)"):
         uploaded_files = st.file_uploader("上傳 CSV/Excel", type=['csv','xlsx'], accept_multiple_files=True)
         if uploaded_files: 
@@ -575,6 +564,17 @@ with st.sidebar:
     use_buffett = st.checkbox("🎩 啟用巴菲特選股", value=False)
     
     scan_mode = st.radio("模式選擇", ["🔥 熱門策略", "🏭 產業掃描", "⌨️ 自訂輸入"])
+    
+    # 【新增】策略擴充 (7 大策略)
+    strategies = {
+        "🏆 台灣50 (大型權值)": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2412.TW", "1301.TW"],
+        "🤖 AI 伺服器 (強勢族群)": ["2382.TW", "3231.TW", "6669.TW", "2376.TW", "3017.TW", "2356.TW"],
+        "💰 高股息殖利率 (存股)": ["2454.TW", "2303.TW", "2357.TW", "1101.TW", "2891.TW", "0056.TW"],
+        "🍎 蘋果概念股 (消費電)": ["2330.TW", "2317.TW", "3008.TW", "4938.TW", "2313.TW"],
+        "🚗 電動車與車電 (趨勢)": ["2308.TW", "2317.TW", "6235.TW", "1536.TW", "5425.TW"],
+        "🏦 金融保險 (穩健防禦)": ["2881.TW", "2882.TW", "2886.TW", "2891.TW", "5880.TW", "2884.TW"],
+        "🚢 傳產與航運 (景氣循環)": ["2603.TW", "2609.TW", "2002.TW", "1301.TW", "1303.TW", "1605.TW"]
+    }
     
     target_stocks = []
     if scan_mode == "⌨️ 自訂輸入":
@@ -590,10 +590,9 @@ with st.sidebar:
         ind = st.selectbox("選擇產業", ind_list)
         if ind: target_stocks = [stock_map[c] for c in industry_map[ind] if c in stock_map]
     else:
-        strat = st.selectbox("策略集", ["台灣50", "AI供應鏈", "金融股"])
-        if strat == "台灣50": target_stocks = ["2330.TW", "2454.TW", "2317.TW", "2308.TW", "2881.TW"]
-        elif strat == "AI供應鏈": target_stocks = ["2330.TW", "2382.TW", "3231.TW", "3017.TW", "3661.TW"]
-        else: target_stocks = ["2881.TW", "2882.TW", "2886.TW", "2891.TW"]
+        # 使用新版策略選單
+        strat_name = st.selectbox("策略集", list(strategies.keys()))
+        target_stocks = strategies[strat_name]
 
     if st.button("🚀 啟動全自動掃描", type="primary"):
         st.session_state['scan_finished'] = False
@@ -607,8 +606,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 35.0")
-    st.caption("Traditional Chinese AI + Multi-File Upload + Quality Growth")
+    st.title("⚡ 熵值決策選股平台 35.1")
+    st.caption("More Strategies + TC AI + Multi-File Upload")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
