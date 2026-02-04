@@ -31,7 +31,7 @@ except ImportError:
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股及AI深度分析平台 (Growth Master)", 
+    page_title="熵值決策選股及AI深度分析平台 (Growth Fix)", 
     page_icon="🚀", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -70,8 +70,6 @@ if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
 if 'df_norm' not in st.session_state: st.session_state['df_norm'] = None
 if 'market_fundamentals' not in st.session_state: st.session_state['market_fundamentals'] = {}
-if 'market_revenue' not in st.session_state: st.session_state['market_revenue'] = {}
-if 'market_chips' not in st.session_state: st.session_state['market_chips'] = {}
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
 if 'av_api_key' not in st.session_state: st.session_state['av_api_key'] = "59P38LL8MKU2XB1M"
 
@@ -231,16 +229,14 @@ def create_pdf(stock_data_list):
         pe_val = stock.get('pe', 'N/A')
         pb_val = stock.get('pb', 'N/A')
         yield_val = stock.get('yield', 'N/A')
-        rev_growth = stock.get('rev_growth', 'N/A')
-        chips = stock.get('chips', 'N/A')
-        source_tag = f"({stock.get('source', 'TWSE')})"
+        peg_val = stock.get('syn_peg', 'N/A') # 改顯示合成 PEG
         
         t_data = [
             ["指標", "數值", "指標", "數值"],
             [f"收盤價", f"{stock['price']}", f"Entropy Score", f"{stock['score']}"],
-            [f"本益比 (P/E) {source_tag}", f"{pe_val}", f"營收成長 (YoY)", f"{rev_growth}%"],
-            [f"股價淨值比 (P/B)", f"{pb_val}", f"法人買賣超 (張)", f"{chips}"],
-            [f"合成 ROE", f"{stock.get('roe_syn', 'N/A')}%", f"殖利率 (Yield)", f"{yield_val}%"],
+            [f"本益比 (P/E)", f"{pe_val}", f"季線乖離", f"{stock.get('ma_bias', 'N/A')}"],
+            [f"股價淨值比 (P/B)", f"{pb_val}", f"殖利率 (Yield)", f"{yield_val}%"],
+            [f"合成 PEG", f"{peg_val}", f"營收成長 (YoY)", f"{stock.get('rev_growth', 'N/A')}%"],
         ]
         t = Table(t_data, colWidths=[100, 130, 100, 130])
         t.setStyle(TableStyle([
@@ -316,6 +312,7 @@ def call_gemini_api(prompt):
         else: return f"❌ 分析失敗 (Code {response.status_code})"
     except Exception as e: return f"❌ 連線逾時或錯誤: {str(e)}"
 
+# 【升級】AI 指令：專注成長與爆發
 HEDGE_FUND_PROMPT = """
 【指令】
 請針對 **[STOCK]** 撰寫一份客觀的「投資決策分析報告」。
@@ -364,8 +361,8 @@ stock_map, industry_map = get_tw_stock_info()
 # --- 【指標升級】加入「營收成長」與「法人籌碼」 ---
 indicators_config = {
     'Revenue Growth': {'col': 'rev_growth', 'direction': '正向', 'name': '營收成長(YoY)', 'category': '成長'},
-    'Earnings Yield': {'col': 'ep_ratio', 'direction': '正向', 'name': '獲利收益率', 'category': '估值'},
     'Institutions Buy': {'col': 'chips', 'direction': '正向', 'name': '法人買賣超', 'category': '籌碼'},
+    'Earnings Yield': {'col': 'ep_ratio', 'direction': '正向', 'name': '獲利收益率', 'category': '估值'},
     'Price vs MA60': {'col': 'priceToMA60', 'direction': '負向', 'name': '季線乖離', 'category': '技術'},
     'Volume Change': {'col': 'volumeRatio', 'direction': '正向', 'name': '量能比', 'category': '籌碼'},
     'P/B Ratio': {'col': 'pb', 'direction': '負向', 'name': '淨值比', 'category': '估值'},
@@ -405,10 +402,10 @@ def safe_float(val):
         return float(val)
     except: return 0.0
 
-# --- 【新增】營收與籌碼官方數據連接器 ---
+# --- 【關鍵修復】TWSE 數據連接器 (含營收修復) ---
 @st.cache_data(ttl=3600)
 def fetch_market_data_advanced():
-    """一次抓取：基本面 + 營收 + 籌碼"""
+    """一次抓取：基本面 + 營收 + 籌碼 (修復 0.00% 問題)"""
     market_data = {}
     headers = {'User-Agent': 'Mozilla/5.0'}
     
@@ -422,16 +419,16 @@ def fetch_market_data_advanced():
                 }
     except: pass
     
-    # 2. 上市月營收 (t187ap05_L)
+    # 2. 上市月營收 (t187ap05_L) - 這裡容易出錯，改用容錯解析
     try:
         r = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap05_L", headers=headers, verify=False)
         if r.status_code == 200:
             for item in r.json():
-                code = item['公司代號']
+                code = item.get('公司代號')
                 if code in market_data:
-                    # 成長率可能為負
-                    rev_growth = safe_float(item.get('營業收入-去年同月增減百分比', 0))
-                    market_data[code]['rev_growth'] = rev_growth
+                    # 嘗試抓取不同名稱的 key
+                    rev = item.get('營業收入-去年同月增減百分比', 0)
+                    market_data[code]['rev_growth'] = safe_float(rev)
     except: pass
     
     # 3. 三大法人買賣超 (T86_ALL)
@@ -439,11 +436,10 @@ def fetch_market_data_advanced():
         r = requests.get("https://openapi.twse.com.tw/v1/fund/T86_ALL", headers=headers, verify=False)
         if r.status_code == 200:
             for item in r.json():
-                code = item['證券代號']
+                code = item.get('證券代號')
                 if code in market_data:
-                    # 三大法人買賣超股數
                     net_buy = safe_float(item.get('三大法人買賣超股數', 0))
-                    market_data[code]['chips'] = net_buy / 1000 # 換算成張數
+                    market_data[code]['chips'] = net_buy / 1000 
     except: pass
             
     return market_data
@@ -480,8 +476,30 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
     
     # 1. 精準模式 (AV Only)
     if use_av and av_key:
-        # (同上一個版本邏輯，略)
-        pass 
+        for ticker_full in tickers_list:
+            parts = ticker_full.split(' ')
+            symbol = parts[0]
+            name = parts[1] if len(parts) > 1 else symbol
+            code = symbol.split('.')[0]
+            
+            av_res = fetch_alpha_vantage_data(symbol, av_key)
+            if av_res:
+                pe = av_res['pe']
+                pb = av_res['pb']
+                roe_syn = (pb/pe*100) if pe > 0 and pb > 0 else 0
+                results.append({
+                    '代號': code, 'full_symbol': symbol, '名稱': name, 
+                    'close_price': av_res['price'],
+                    'priceToMA60': 0, 'volumeRatio': 1.0, 'volatility': 0.05, 
+                    'pe': pe, 'pb': pb, 'yield': av_res['yield'], 'roe_syn': roe_syn,
+                    'beta': 1.0, 'is_tej': False, 'source': 'Alpha Vantage',
+                    'pegRatio': av_res['peg'], # AV 獨有
+                    'ep_ratio': (1/pe*100) if pe > 0 else 0,
+                    'syn_peg': av_res['peg'], # 精準模式用 AV PEG
+                    'rev_growth': 0, 'chips': 0 # AV 概覽無此數據
+                })
+            time.sleep(12) 
+        return pd.DataFrame(results)
 
     # 2. 成長動能模式 (Yahoo + TWSE Advanced + TEJ)
     # 這裡預設載入包含營收與籌碼的數據
@@ -539,19 +557,20 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
                 
                 if tej_data and code in tej_data:
                     t_row = tej_data[code]
-                    # TEJ 覆蓋邏輯 (略)
-                    is_tej = True
-                    source = 'TEJ'
+                    for k in t_row:
+                        if '本益比' in k or 'PE' in k: pe = safe_float(t_row[k]); is_tej = True
+                        if '淨值比' in k or 'PB' in k: pb = safe_float(t_row[k]); is_tej = True
+                        if '殖利率' in k or 'Yield' in k: dy = safe_float(t_row[k]); is_tej = True
+                    if is_tej: source = 'TEJ'
 
                 roe_syn = 0
                 if pe > 0 and pb > 0: roe_syn = (pb / pe) * 100
                 elif pe == 0: roe_syn = -5.0
                 if pd.isna(volatility): volatility = 0.5
                 
-                # 計算 E/P Ratio
                 ep_ratio = (1/pe * 100) if pe > 0 else 0
                 
-                # 計算合成 PEG (若 PE>0 且 成長>0)
+                # 計算合成 PEG
                 syn_peg = np.nan
                 if pe > 0 and rev_growth > 0:
                     syn_peg = pe / rev_growth
@@ -560,7 +579,7 @@ def fetch_hybrid_data(tickers_list, tej_data=None, use_av=False, av_key=None):
                     '代號': code, 'full_symbol': symbol, '名稱': name, 'close_price': price,
                     'priceToMA60': ma_bias, 'volumeRatio': vol_ratio, 'volatility': volatility,
                     'pe': pe, 'pb': pb, 'yield': dy, 'roe_syn': roe_syn, 'beta': 1.0,
-                    'rev_growth': rev_growth, 'chips': chips, 'syn_peg': syn_peg, # 新增指標
+                    'rev_growth': rev_growth, 'chips': chips, 'syn_peg': syn_peg,
                     'ep_ratio': ep_ratio,
                     'is_tej': is_tej, 'source': source,
                     'pegRatio': np.nan, 'debtToEquity': np.nan, 'fcfYield': np.nan
@@ -624,11 +643,13 @@ with st.sidebar:
     st.title("🎛️ 控制台")
     st.markdown("### 1️⃣ 數據源設定")
     
+    # AV Key 設定
     with st.expander("🔑 Alpha Vantage 設定 (AV Key)", expanded=True):
         av_key = st.text_input("API Key", value=st.session_state.get('av_api_key', ''))
         if av_key: st.session_state['av_api_key'] = av_key
-        st.caption("✅ 已掛載：提供單檔深度報告所需的精準 PEG")
+        st.caption("✅ 已掛載：精準模式與分析報告將使用 AV 數據")
 
+    # TEJ 上傳
     with st.expander("📂 匯入 TEJ 數據 (選填)", expanded=False):
         uploaded_file = st.file_uploader("上傳 Excel/CSV", type=['csv', 'xlsx'])
         if uploaded_file:
@@ -651,6 +672,8 @@ with st.sidebar:
         st.rerun()
         
     st.markdown("---")
+    
+    # 2. 選股策略
     st.markdown("### 2️⃣ 選股策略")
     
     # AV 精準模式開關
@@ -700,7 +723,7 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股及AI深度分析平台 (Growth Master)")
+    st.title("⚡ 熵值決策選股及AI深度分析平台 (Growth Fix)")
     st.caption("Entropy Scoring • Factor Radar • PDF Reporting (僅供參考使用)")
 with col2:
     if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
@@ -755,12 +778,13 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             
         def determine_action_plan(row):
             score = row['Score']
+            bias = row['priceToMA60']
             rev_growth = row.get('rev_growth', 0)
-            syn_peg = row.get('syn_peg', 100) # 預設100
+            syn_peg = row.get('syn_peg', np.nan)
             
             # 爆發型條件：高分 + 高成長 + 合理PEG
             if score >= 70 and rev_growth > 15:
-                if syn_peg < 1.2: return "🔥 爆發成長股 (Strong Growth)"
+                if not pd.isna(syn_peg) and syn_peg < 1.2: return "🔥 爆發成長股 (Strong Growth)"
                 else: return "🚀 動能強勢 (High Momentum)"
             elif score >= 60:
                 return "🟡 穩健持有 (Hold/Accumulate)"
@@ -871,6 +895,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 col_btn, col_dl = st.columns([3, 1])
                 
                 with col_btn:
+                     # 智能按鈕
                      btn_label = "✨ 生成分析報告 (AV 加強)" if st.session_state.get('av_api_key') else "✨ 生成分析報告"
                      if st.button(btn_label, key=f"btn_{i}", use_container_width=True, disabled=is_analyzed):
                          if not is_analyzed:
@@ -879,6 +904,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 if st.session_state.get('av_api_key'):
                                     av_data = fetch_alpha_vantage_data(row['full_symbol'], st.session_state['av_api_key'])
                                 
+                                # 優先使用 AV 數據，否則用原數據
                                 pe_val = av_data['pe'] if av_data else row.get('pe', 0)
                                 pb_val = av_data['pb'] if av_data else row.get('pb', 0)
                                 dy_val = av_data['yield'] if av_data else row.get('yield', 0)
@@ -913,7 +939,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         'roe_syn': f"{row.get('roe_syn', 0):.2f}%",
                         'ma_bias': f"{row['priceToMA60']:.2%}",
                         'volatility': f"{row.get('volatility', 0):.2%}",
-                        'radar_data': radar_data,
+                        'radar_data': radar,
                         'analysis': st.session_state['analysis_results'].get(stock_name, None),
                         'action': row['Action Plan'],
                         'full_symbol': row['full_symbol']
