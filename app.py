@@ -18,55 +18,29 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Chart & UI Fix)", 
+    page_title="熵值決策選股平台 (Trend Fix)", 
     page_icon="📈", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 強制修復 (選單可見性 + 專業配色) ---
+# --- 2. CSS 強制修復 (深色底 + 白字) ---
 st.markdown("""
 <style>
-    /* 1. 全域背景：深邃黑 */
+    /* 全域設定 */
     .stApp { background-color: #0e1117 !important; }
+    body, h1, h2, h3, h4, h5, h6, p, label { color: #e6e6e6 !important; font-family: 'Roboto', sans-serif; }
     
-    /* 2. 主文字顏色 */
-    body, h1, h2, h3, h4, h5, h6, p, label { 
-        color: #e6e6e6 !important; 
-        font-family: 'Roboto', sans-serif; 
-    }
+    /* 側邊欄 */
+    [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
     
-    /* 3. 側邊欄 */
-    [data-testid="stSidebar"] { 
-        background-color: #161b22 !important; 
-        border-right: 1px solid #30363d;
-    }
+    /* 下拉選單與輸入框 (黑底白字) */
+    div[role="listbox"] ul { background-color: #262730 !important; }
+    li[role="option"] { color: white !important; background-color: #262730 !important; }
+    li[role="option"]:hover { background-color: #238636 !important; }
+    input { background-color: #0d1117 !important; color: white !important; border: 1px solid #30363d !important; }
     
-    /* 4. 【關鍵修復】下拉選單 (Multiselect) 強制黑底白字 */
-    div[role="listbox"] ul {
-        background-color: #262730 !important;
-    }
-    li[role="option"] {
-        color: white !important;
-        background-color: #262730 !important;
-    }
-    li[role="option"]:hover {
-        background-color: #238636 !important; /* 綠色高亮 */
-    }
-    /* 選中項目的標籤 */
-    span[data-baseweb="tag"] {
-        background-color: #1f2937 !important;
-        color: #e6e6e6 !important;
-    }
-    
-    /* 5. 輸入框 */
-    input { 
-        background-color: #0d1117 !important; 
-        color: white !important; 
-        border: 1px solid #30363d !important; 
-    }
-    
-    /* 6. 專業個股卡片 */
+    /* 個股卡片 */
     .stock-card { 
         background-color: #1f2937; 
         padding: 20px; 
@@ -75,26 +49,20 @@ st.markdown("""
         margin-bottom: 20px; 
         box-shadow: 0 4px 6px rgba(0,0,0,0.4);
     }
-    .card-header-text {
-        font-size: 1.4rem; font-weight: 700; color: #ffffff !important;
+    
+    /* 關鍵數據文字 (強制白色) */
+    .data-text {
+        color: #ffffff !important;
+        font-size: 0.95rem;
+        line-height: 1.6;
+    }
+    .data-label {
+        color: #9ca3af !important; /* 淺灰標籤 */
+        font-weight: bold;
     }
     
-    /* 7. 標籤 */
-    .buffett-tag { 
-        background-color: #FFD700; color: #000 !important; 
-        padding: 4px 8px; border-radius: 4px; 
-        font-weight: 800; font-size: 0.75rem; 
-    }
-    .sector-tag {
-        background-color: #238636; color: #fff !important;
-        padding: 4px 8px; border-radius: 4px;
-        font-size: 0.75rem;
-    }
-    
-    /* 8. 按鈕 */
-    .stButton button { 
-        background-color: #238636; color: white; border: none; font-weight: bold;
-    }
+    /* 按鈕 */
+    .stButton button { background-color: #238636; color: white; border: none; font-weight: bold; }
     .stButton button:hover { background-color: #2ea043; }
 </style>
 """, unsafe_allow_html=True)
@@ -103,7 +71,7 @@ st.markdown("""
 if 'raw_data' not in st.session_state: st.session_state['raw_data'] = None
 if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = False
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
-# 【關鍵】獨立儲存 K 線數據，避免在 DataFrame 傳遞中遺失
+# 【核心修復】獨立儲存 K 線數據的字典
 if 'history_storage' not in st.session_state: st.session_state['history_storage'] = {}
 
 # --- 4. API Key ---
@@ -152,10 +120,18 @@ def get_tw_stock_list():
 stock_map, industry_map = get_tw_stock_list()
 
 def get_stock_data_full(symbol):
+    """
+    抓取單檔股票：同時抓 Info (財報) 和 History (K線)
+    """
     try:
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
         ticker = yf.Ticker(symbol)
+        
+        # 1. 財報
         info = ticker.info 
+        
+        # 2. K線 (獨立抓取，保證有圖)
+        hist = ticker.history(period="6mo")
         
         data = {
             'close_price': info.get('currentPrice') or info.get('previousClose'),
@@ -166,7 +142,8 @@ def get_stock_data_full(symbol):
             'yield': info.get('dividendYield'),
             'roe': info.get('returnOnEquity'),
             'beta': info.get('beta'),
-            'sector': info.get('sector', 'General')
+            'sector': info.get('sector', 'General'),
+            'history': hist # 傳回 K 線 DataFrame
         }
         return data
     except: return None
@@ -197,21 +174,12 @@ def process_tej_upload(uploaded_file):
         return tej_map
     except: return None
 
-# --- 7. 批量掃描 (分離儲存 K 線) ---
+# --- 7. 批量掃描 (核心修復：分離 K 線) ---
 @st.cache_data(ttl=300, show_spinner=False)
-def batch_scan_stocks_v4(stock_list, tej_data=None):
+def batch_scan_stocks(stock_list, tej_data=None):
     results = []
-    # 這裡只回傳「乾淨」的 DataFrame，不含 K 線物件
-    # K 線物件會另外回傳一個 dict
-    history_storage = {} 
+    history_map = {} # 暫存 K 線
     
-    # 1. 批量抓 K 線
-    try:
-        symbols = [s.split(' ')[0] + ('.TW' if not s.endswith('.TW') else '') for s in stock_list]
-        hist_data = yf.download(symbols, period="6mo", group_by='ticker', progress=False, threads=True)
-    except: hist_data = pd.DataFrame()
-
-    # 2. 抓基本面
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         future_to_stock = {executor.submit(get_stock_data_full, s.split(' ')[0]): s for s in stock_list}
         
@@ -225,31 +193,22 @@ def batch_scan_stocks_v4(stock_list, tej_data=None):
                 # 初始化
                 price = np.nan; pe = np.nan; pb = np.nan; dy = np.nan
                 rev_growth = np.nan; peg = np.nan; roe = np.nan; volatility = 0.5
-                chips = 0
-                ma_bias = 0
+                chips = 0; ma_bias = 0
 
-                # 處理 K 線與畫圖數據
-                try:
-                    s_sym = f"{code}.TW"
-                    if isinstance(hist_data.columns, pd.MultiIndex):
-                        if s_sym in hist_data: df_hist = hist_data[s_sym]
-                        else: df_hist = pd.DataFrame()
-                    else:
-                        df_hist = hist_data if len(symbols) == 1 else pd.DataFrame()
-
-                    if not df_hist.empty and 'Close' in df_hist.columns:
-                        closes = df_hist['Close'].dropna()
-                        if len(closes) > 10:
+                if y_data:
+                    # 1. 處理 K 線 (存入 map，不放進 result list 以免報錯)
+                    hist = y_data.get('history')
+                    if hist is not None and not hist.empty:
+                        history_map[code] = hist # 【關鍵】存入字典
+                        # 計算技術指標
+                        closes = hist['Close']
+                        if len(closes) > 0:
                             price = float(closes.iloc[-1])
                             volatility = closes.pct_change().std() * (252**0.5)
                             ma60 = closes.rolling(60).mean().iloc[-1]
                             if not pd.isna(ma60): ma_bias = (price / ma60) - 1
-                            
-                            # 【關鍵】將 K 線存入字典，而非 DataFrame
-                            history_storage[code] = df_hist 
-                except: pass
-
-                if y_data:
+                    
+                    # 2. 處理財報
                     if pd.isna(price): price = y_data.get('close_price')
                     pe = y_data.get('pe')
                     pb = y_data.get('pb')
@@ -284,12 +243,12 @@ def batch_scan_stocks_v4(stock_list, tej_data=None):
             except: continue
     
     df = pd.DataFrame(results)
-    # 強制 Schema
+    # 強制補齊欄位
     cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
     for c in cols:
         if c not in df.columns: df[c] = np.nan
         
-    return df, history_storage
+    return df, history_map # 回傳表格與K線字典
 
 # --- 8. 評分邏輯 ---
 def get_sector_config(industry):
@@ -356,7 +315,7 @@ def calculate_score(df, use_buffett=False):
         final = total_score / total_weight if total_weight > 0 else 50
         
         is_buffett = check_buffett_criteria(row)
-        buffett_tags.append(is_buffett)
+        buffett_tags.append("🏅" if is_buffett else "")
         if use_buffett and is_buffett:
             final += 15
             if final > 100: final = 100
@@ -374,7 +333,7 @@ def calculate_score(df, use_buffett=False):
     df['Buffett'] = buffett_tags
     return df.sort_values('Score', ascending=False), df_norm
 
-# --- 9. 繪圖函數 (高對比 + 黑色文字) ---
+# --- 9. 繪圖函數 ---
 def get_radar_data(df_norm_row):
     cats = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
     counts = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
@@ -394,15 +353,11 @@ def plot_radar_chart_ui(title, radar_data):
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
         r=list(radar_data.values()), theta=list(radar_data.keys()),
-        fill='toself', name=title, 
-        line_color='#00e676', # 螢光綠
-        fillcolor='rgba(0, 230, 118, 0.2)'
+        fill='toself', name=title, line_color='#00e676', fillcolor='rgba(0, 230, 118, 0.2)'
     ))
     fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#4b5563'),
-            bgcolor='rgba(0,0,0,0)'
-        ),
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#4b5563'),
+            bgcolor='rgba(0,0,0,0)'),
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
         margin=dict(t=20, b=20, l=30, r=30), height=250,
@@ -411,17 +366,18 @@ def plot_radar_chart_ui(title, radar_data):
     return fig
 
 def plot_trend_chart_ui(title, history_df):
+    """繪製趨勢圖"""
     if history_df is None or history_df.empty: return None
     history_df['MA60'] = history_df['Close'].rolling(window=60).mean()
     
     fig = go.Figure()
-    # 亮藍色股價
-    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['Close'], name='Price', line=dict(color='#29b6f6', width=2)))
-    # 金黃色季線
+    # 股價 (亮藍)
+    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['Close'], name='股價', line=dict(color='#29b6f6', width=2)))
+    # 季線 (金黃)
     fig.add_trace(go.Scatter(x=history_df.index, y=history_df['MA60'], name='MA60', line=dict(color='#ffca28', width=1.5, dash='dash')))
     
     fig.update_layout(
-        title=dict(text=f"{title} 趨勢", font=dict(color='white')),
+        title=dict(text=f"{title} 趨勢診斷", font=dict(color='white')),
         xaxis=dict(showgrid=False, linecolor='#4b5563', tickfont=dict(color='#9ca3af')),
         yaxis=dict(showgrid=True, gridcolor='#374151', tickfont=dict(color='#9ca3af')),
         paper_bgcolor='rgba(0,0,0,0)',
@@ -454,10 +410,7 @@ def create_pdf(stock_data):
 
 AI_PROMPT = """
 請扮演華爾街基金經理人，分析 [STOCK] ([SECTOR])。
-重點：
-1. **成長性**：營收成長=[REV]%, PEG=[PEG]。
-2. **安全性**：是否符合巴菲特護城河 (高ROE, 低波動)？
-3. **結論**：操作建議。
+重點：1.成長性(營收,PEG) 2.安全性(ROE,波動) 3.估值(PE,殖利率)。給出操作建議。
 """
 
 # --- 10. 主程式 ---
@@ -486,11 +439,9 @@ with st.sidebar:
         if manual: target_stocks.append(f"{manual}.TW")
         
     elif scan_mode == "🏭 產業掃描":
-        if not industry_map: st.error("⚠️ 無法載入產業列表，請改用自訂輸入。")
-        else:
-            ind_list = sorted(list(industry_map.keys()))
-            ind = st.selectbox("選擇產業", ind_list)
-            if ind: target_stocks = [stock_map[c] for c in industry_map[ind] if c in stock_map]
+        ind_list = sorted(list(industry_map.keys()))
+        ind = st.selectbox("選擇產業", ind_list)
+        if ind: target_stocks = [stock_map[c] for c in industry_map[ind] if c in stock_map]
     else:
         strat = st.selectbox("策略集", ["台灣50", "AI供應鏈", "金融股"])
         if strat == "台灣50": target_stocks = ["2330.TW", "2454.TW", "2317.TW", "2308.TW", "2881.TW"]
@@ -499,23 +450,24 @@ with st.sidebar:
 
     if st.button("🚀 啟動全自動掃描", type="primary"):
         st.session_state['scan_finished'] = False
-        with st.spinner("正在挖掘 Yahoo 數據 (含股價、財報、趨勢)..."):
-            # V4 掃描：分離 DataFrame 與 K 線字典
-            raw, hist_store = batch_scan_stocks_v4(target_stocks, st.session_state['tej_data'])
+        with st.spinner("正在挖掘 Yahoo 數據 (分離 K 線與財報)..."):
+            # 【關鍵】接收兩個回傳值：表格與 K 線字典
+            raw, hist_map = batch_scan_stocks(target_stocks, st.session_state['tej_data'])
             raw = sanitize_data(raw)
             st.session_state['raw_data'] = raw
-            st.session_state['history_storage'] = hist_store
+            st.session_state['history_storage'] = hist_map # 存入 Session
             st.session_state['scan_finished'] = True
             st.rerun()
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 27.0")
-    st.caption("Visual Fix + Data Independent Storage")
+    st.title("⚡ 熵值決策選股平台 28.0")
+    st.caption("Trend Chart Fix + White Data Text + Robust Fetch")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
-    hist_storage = st.session_state.get('history_storage', {}) # 讀取 K 線字典
+    # 從 Session 讀取 K 線字典
+    hist_storage = st.session_state.get('history_storage', {})
     
     if df.empty:
         st.error("❌ 查無數據，請檢查代號或網路。")
@@ -530,7 +482,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 "Score": st.column_config.ProgressColumn("戰力分數", min_value=0, max_value=100, format="%.1f"),
                 "Buffett": st.column_config.TextColumn("巴菲特"),
                 "rev_growth": st.column_config.NumberColumn("營收成長", format="%.2f%%"),
-                "peg": st.column_config.NumberColumn("PEG", format="%.2f"),
+                "peg": st.column_config.NumberColumn("PEG"),
                 "yield": st.column_config.NumberColumn("殖利率", format="%.2f%%"),
             },
             use_container_width=True, hide_index=True
@@ -555,16 +507,18 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], radar_data), use_container_width=True)
                 
                 with c2:
+                    # 【關鍵修正】文字顏色改為白色 (data-text)
                     st.markdown(f"""
-                    #### 關鍵數據
-                    - **成長**: 營收成長 <span style='color:#4ade80'>{row.get('rev_growth', 0):.2f}%</span> | PEG {row.get('peg', 0):.2f}
-                    - **價值**: 本益比 {row.get('pe', 0):.2f} | 殖利率 <span style='color:#4ade80'>{row.get('yield', 0):.2f}%</span>
-                    - **風險**: 波動率 {row.get('volatility', 0)*100:.1f}%
+                    <div class='data-text'>
+                    <span class='data-label'>成長指標</span>：營收成長 {row.get('rev_growth', 0):.2f}% | PEG {row.get('peg', 0):.2f}<br>
+                    <span class='data-label'>價值指標</span>：本益比 {row.get('pe', 0):.2f} | 殖利率 {row.get('yield', 0):.2f}%<br>
+                    <span class='data-label'>風險指標</span>：波動率 {row.get('volatility', 0)*100:.1f}% | 季線乖離 {row.get('priceToMA60', 0)*100:.1f}%
+                    </div>
                     """, unsafe_allow_html=True)
                     
                     b1, b2 = st.columns(2)
                     if b1.button(f"✨ AI 分析", key=f"ai_{idx}"):
-                        p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[ROE]", str(row.get('roe')))
+                        p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[ROE]", str(row.get('roe'))).replace("[VOL]", str(round(row.get('volatility',0)*100,1)))
                         an = call_ai(p_txt)
                         st.info(an)
                     
@@ -572,7 +526,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     b2.download_button("📥 下載報告", pdf, f"{code}.pdf", key=f"dl_{idx}")
 
                 with c3:
-                    # 【關鍵】從字典中讀取 K 線畫圖
+                    # 【關鍵修正】從字典讀取 K 線並畫圖
                     if code in hist_storage and not hist_storage[code].empty:
                         st.plotly_chart(plot_trend_chart_ui(row['名稱'], hist_storage[code]), use_container_width=True)
                     else:
