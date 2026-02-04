@@ -18,8 +18,8 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (AI Auto-Fix)", 
-    page_icon="🤖", 
+    page_title="熵值決策選股平台 (Timeout Fix)", 
+    page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
@@ -319,11 +319,8 @@ def calculate_score(df, use_buffett=False):
         
         rev = row.get('rev_growth', 0)
         peg = row.get('peg', 100)
-        ma = row.get('priceToMA60', 0)
-        
         if final > 75 and rev > 20: plans.append("🚀 爆發成長")
         elif final > 60: plans.append("🟡 穩健持有")
-        elif ma < -0.1: plans.append("🟢 超跌反彈")
         else: plans.append("⛔ 觀望")
             
     df['Score'] = scores
@@ -331,7 +328,7 @@ def calculate_score(df, use_buffett=False):
     df['Buffett'] = buffett_tags
     return df.sort_values('Score', ascending=False), df_norm
 
-# --- 9. 繪圖與 AI (核心修復) ---
+# --- 9. 繪圖函數 ---
 def get_radar_data(df_norm_row):
     cats = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
     counts = {'價值': 0, '成長': 0, '動能': 0, '風險': 0, '財報': 0}
@@ -387,13 +384,12 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     )
     return fig
 
-# 【核心】AI 模組 (自動偵測可用模型)
+# 【核心】AI 模組 (Auto-Fix + Retry)
 @st.cache_data(ttl=3600)
 def get_valid_model(key):
-    """自動偵測可用的 Gemini 模型"""
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
-        r = requests.get(url, timeout=5)
+        r = requests.get(url, timeout=10)
         if r.status_code == 200:
             models = r.json().get('models', [])
             # 優先找 flash -> pro
@@ -404,12 +400,11 @@ def get_valid_model(key):
                 if 'pro' in m['name'] and 'generateContent' in m['supportedGenerationMethods']:
                     return m['name'].split('/')[-1]
     except: pass
-    return "gemini-1.5-flash" # 預設
+    return "gemini-1.5-flash"
 
 def call_ai(prompt):
     if not api_key: return "⚠️ 未設定 API Key"
     
-    # 使用快取或 session state 取得模型名稱
     if not st.session_state.get('ai_model_name'):
         st.session_state['ai_model_name'] = get_valid_model(api_key)
     
@@ -418,14 +413,23 @@ def call_ai(prompt):
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
     
-    try:
-        r = requests.post(url, headers=headers, json=data, timeout=15)
-        if r.status_code == 200:
-            return r.json()['candidates'][0]['content']['parts'][0]['text']
-        else:
-            return f"❌ API 錯誤: {r.status_code} - {r.text}"
-    except Exception as e:
-        return f"❌ 連線例外: {str(e)}"
+    # 【關鍵修正】Timeout 延長至 60s + 2次重試
+    for attempt in range(2):
+        try:
+            r = requests.post(url, headers=headers, json=data, timeout=60)
+            if r.status_code == 200:
+                return r.json()['candidates'][0]['content']['parts'][0]['text']
+            elif r.status_code == 404:
+                # 若 404，可能是模型名稱過期，嘗試清空快取重抓
+                st.session_state['ai_model_name'] = None
+                continue
+            else:
+                return f"❌ API 錯誤: {r.status_code} - {r.text}"
+        except requests.exceptions.Timeout:
+            if attempt == 1: return "❌ AI 思考逾時 (60s)，請稍後再試。"
+        except Exception as e:
+            return f"❌ 連線例外: {str(e)}"
+    return "❌ 未知錯誤"
 
 def create_pdf(stock_data):
     buffer = io.BytesIO()
@@ -498,8 +502,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 31.0")
-    st.caption("AI Auto-Detect + Trend Dashboard + Dark UI")
+    st.title("⚡ 熵值決策選股平台 31.1")
+    st.caption("AI Timeout Fix + Auto-Retry + Visual Master")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
