@@ -19,8 +19,8 @@ import os
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Data Fix)", 
-    page_icon="⚖️", 
+    page_title="熵值決策選股平台 (Stable)", 
+    page_icon="🛡️", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
@@ -65,23 +65,24 @@ font_ready = register_chinese_font()
 # --- 5. 核心數據引擎 (Yahoo Finance Deep Fetch) ---
 def get_stock_fundamentals(symbol):
     """
-    從 Yahoo Finance 抓取完整的財務數據 (取代爬蟲)
+    從 Yahoo Finance 抓取完整的財務數據
     """
     try:
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): 
             symbol += '.TW'
         
         ticker = yf.Ticker(symbol)
-        info = ticker.info # 這一步最花時間，但資料最全
+        # 使用 fast_info 獲取價格 (較快)，info 獲取財報 (較慢但詳細)
+        info = ticker.info 
         
-        # 提取關鍵數據 (若無則回傳 None)
+        # 提取關鍵數據，若無則回傳 None
         data = {
             'close_price': info.get('currentPrice') or info.get('previousClose'),
             'pe': info.get('trailingPE'),
             'forward_pe': info.get('forwardPE'),
             'peg': info.get('pegRatio'),
             'pb': info.get('priceToBook'),
-            'roe': info.get('returnOnEquity'), # Yahoo 給的是小數 (0.25 = 25%)
+            'roe': info.get('returnOnEquity'),
             'rev_growth': info.get('revenueGrowth'), # 營收成長 YoY
             'yield': info.get('dividendYield'), # 殖利率
             'sector': info.get('sector', 'Unknown'),
@@ -92,7 +93,7 @@ def get_stock_fundamentals(symbol):
         return None
 
 def calculate_synthetic_peg(pe, growth_rate):
-    """計算合成 PEG: PE / (Growth * 100)"""
+    """計算合成 PEG"""
     if pe and growth_rate and growth_rate > 0:
         return pe / (growth_rate * 100)
     return None
@@ -104,7 +105,6 @@ def process_tej_upload(uploaded_file):
         if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
         else: df = pd.read_excel(uploaded_file)
         df.columns = [str(c).strip() for c in df.columns]
-        # 簡單模糊搜尋代號欄位
         code_col = next((c for c in df.columns if '代號' in c or 'Code' in c), None)
         if not code_col: return None
         
@@ -120,30 +120,32 @@ def process_tej_upload(uploaded_file):
 def batch_scan_stocks(stock_list, tej_data=None):
     results = []
     
-    # 使用 ThreadPool 加速 Yahoo 查詢 (因為 .info 是網路 IO 密集型)
+    # 定義標準欄位，防止空表導致 KeyError
+    columns = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 
+               'rev_growth', 'roe', 'peg', 'chips', 'industry']
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        # 提交任務
         future_to_stock = {executor.submit(get_stock_fundamentals, s.split(' ')[0]): s for s in stock_list}
         
         for future in concurrent.futures.as_completed(future_to_stock):
             stock_str = future_to_stock[future]
-            code = stock_str.split(' ')[0].split('.')[0]
-            name = stock_str.split(' ')[1] if len(stock_str.split(' ')) > 1 else code
-            
             try:
+                code = stock_str.split(' ')[0].split('.')[0]
+                name = stock_str.split(' ')[1] if len(stock_str.split(' ')) > 1 else code
+                
                 y_data = future.result()
                 
                 # 初始化變數
                 price = np.nan; pe = np.nan; pb = np.nan; dy = np.nan
                 rev_growth = np.nan; roe = np.nan; peg = np.nan
-                chips = 0 # Yahoo 不提供籌碼，預設 0
+                chips = 0
                 
                 # 1. 填入 Yahoo 數據
                 if y_data:
                     price = y_data.get('close_price')
                     pe = y_data.get('pe')
                     pb = y_data.get('pb')
-                    if y_data.get('yield'): dy = y_data.get('yield') * 100 # 轉 %
+                    if y_data.get('yield'): dy = y_data.get('yield') * 100
                     if y_data.get('rev_growth'): rev_growth = y_data.get('rev_growth') * 100
                     if y_data.get('roe'): roe = y_data.get('roe') * 100
                     peg = y_data.get('peg')
@@ -152,53 +154,51 @@ def batch_scan_stocks(stock_list, tej_data=None):
                 if tej_data and code in tej_data:
                     t_row = tej_data[code]
                     for k, v in t_row.items():
-                        # 簡單關鍵字對應
                         if '本益比' in k or 'PE' in k: pe = float(v) if v != '-' else pe
                         if '淨值比' in k or 'PB' in k: pb = float(v) if v != '-' else pb
                         if '殖利率' in k or 'Yield' in k: dy = float(v) if v != '-' else dy
                         if '營收成長' in k or 'Growth' in k: rev_growth = float(v) if v != '-' else rev_growth
                         if '法人' in k or 'Chips' in k: chips = float(v) if v != '-' else chips
 
-                # 3. 計算合成 PEG (若 Yahoo PEG 為空)
-                if pd.isna(peg) and not pd.isna(pe) and not pd.isna(rev_growth):
+                # 3. 計算合成 PEG
+                if (pd.isna(peg) or peg == 0) and not pd.isna(pe) and not pd.isna(rev_growth):
                     peg = calculate_synthetic_peg(pe, rev_growth/100)
 
-                # 4. 技術面補強 (MA Bias) - 這裡做簡單計算
-                ma_bias = 0 # 需抓歷史資料才有，為求速度先略過或需二次請求
-                
-                results.append({
-                    '代號': code, '名稱': name, 
-                    'close_price': price,
-                    'pe': pe, 'pb': pb, 'yield': dy,
-                    'rev_growth': rev_growth, 'roe': roe, 'peg': peg,
-                    'chips': chips, # 標記：需 TEJ
-                    'industry': 'Semicon' if code in ['2330', '2454', '2303'] else ('Finance' if code.startswith('28') else 'General')
-                })
+                # 只有當至少有股價時才加入列表
+                if not pd.isna(price):
+                    results.append({
+                        '代號': code, '名稱': name, 
+                        'close_price': price,
+                        'pe': pe, 'pb': pb, 'yield': dy,
+                        'rev_growth': rev_growth, 'roe': roe, 'peg': peg,
+                        'chips': chips,
+                        'industry': 'Semicon' if code in ['2330', '2454', '2303'] else ('Finance' if code.startswith('28') else 'General')
+                    })
                 
             except Exception as e:
-                pass
+                continue # 單檔失敗不影響整體
+    
+    # 【關鍵修復】即使 results 為空，也要回傳有欄位的 DataFrame
+    if not results:
+        return pd.DataFrame(columns=columns)
                 
     return pd.DataFrame(results)
 
 # --- 7. 熵值模型與評分 ---
 def get_entropy_config(industry):
-    # 基礎配置
     config = {
         'P/E': {'col': 'pe', 'dir': 'min', 'w': 1},
         'P/B': {'col': 'pb', 'dir': 'min', 'w': 1},
         'Yield': {'col': 'yield', 'dir': 'max', 'w': 1},
     }
-    
-    # 產業權重微調 (User Requirement 3)
-    if industry == 'Semicon': # 半導體/電子：重成長
-        config['Rev Growth'] = {'col': 'rev_growth', 'dir': 'max', 'w': 2} # 加重
+    if industry == 'Semicon':
+        config['Rev Growth'] = {'col': 'rev_growth', 'dir': 'max', 'w': 2}
         config['PEG'] = {'col': 'peg', 'dir': 'min', 'w': 1.5}
-    elif industry == 'Finance': # 金融：重殖利率與淨值
+    elif industry == 'Finance':
         config['Yield']['w'] = 2 
         config['P/B']['w'] = 1.5
-    else: # 一般/傳產：重價值
+    else:
         config['P/E']['w'] = 1.5
-        
     return config
 
 def calculate_score(df):
@@ -207,21 +207,21 @@ def calculate_score(df):
     scores = []
     action_plans = []
     
+    # 確保所需欄位存在 (防止 KeyError)
+    for col in ['rev_growth', 'peg', 'pe', 'pb', 'yield']:
+        if col not in df.columns:
+            df[col] = np.nan
+
     for idx, row in df.iterrows():
-        config = get_entropy_config(row['industry'])
+        config = get_entropy_config(row.get('industry', 'General'))
         total_score = 0
         total_weight = 0
         
-        # 針對每個指標評分
         for name, setting in config.items():
             val = row.get(setting['col'])
-            
-            # 數據清洗
             if pd.isna(val) or val == 0:
-                score = 50 # 無數據給中立分
+                score = 50
             else:
-                # 簡單排名分位數 (0~100)
-                # 在全體數據中的排名
                 all_vals = df[setting['col']].dropna()
                 if all_vals.empty:
                     score = 50
@@ -238,7 +238,6 @@ def calculate_score(df):
         final_score = total_score / total_weight if total_weight > 0 else 50
         scores.append(round(final_score, 1))
         
-        # 戰略指令 (半年內爆發?)
         rev_g = row.get('rev_growth', 0)
         peg = row.get('peg', 100)
         if pd.isna(peg): peg = 100
@@ -260,7 +259,6 @@ with st.sidebar:
     st.title("🎛️ 決策控制台")
     st.markdown("---")
     
-    # TEJ 上傳
     with st.expander("📂 匯入 TEJ 籌碼/財報 (選填)"):
         st.caption("Yahoo 無法提供台股每日籌碼，建議匯入 TEJ 檔案以獲得完整分析。")
         uploaded_file = st.file_uploader("上傳 Excel/CSV", type=['csv', 'xlsx'])
@@ -268,10 +266,8 @@ with st.sidebar:
             tej_data = process_tej_upload(uploaded_file)
             if tej_data: st.session_state['tej_data'] = tej_data
     
-    # 策略選擇
     strategy = st.selectbox("選股策略:", ["台灣50 (大型股)", "AI 供應鏈 (成長)", "高股息 (價值)"])
     
-    # 股票清單定義
     if strategy == "台灣50 (大型股)":
         target_stocks = ["2330.TW 台積電", "2454.TW 聯發科", "2317.TW 鴻海", "2308.TW 台達電", "2881.TW 富邦金"]
     elif strategy == "AI 供應鏈 (成長)":
@@ -290,37 +286,39 @@ with st.sidebar:
 # 主畫面
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 19.0")
+    st.title("⚡ 熵值決策選股平台 19.1")
     st.caption("Yahoo Finance API + Dynamic Industry Weighting")
 
-if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
+if st.session_state['scan_finished']:
     df = st.session_state['raw_data']
     
-    # 計算分數
-    final_df = calculate_score(df)
-    
-    # 顯示置頂大表
-    st.subheader("🏆 潛力標的排行 (Entropy Ranking)")
-    
-    # 格式化顯示 (NaN 轉無數據)
-    display_df = final_df.copy()
-    
-    st.dataframe(
-        display_df[['代號', '名稱', 'close_price', 'Entropy Score', 'Strategy', 'pe', 'rev_growth', 'peg', 'yield', 'chips']],
-        column_config={
-            "Entropy Score": st.column_config.ProgressColumn("綜合戰力", min_value=0, max_value=100, format="%.1f"),
-            "close_price": st.column_config.NumberColumn("股價", format="$%.1f"),
-            "pe": st.column_config.NumberColumn("本益比", format="%.1f"),
-            "rev_growth": st.column_config.NumberColumn("營收成長(%)", format="%.2f%%"),
-            "peg": st.column_config.NumberColumn("PEG", format="%.2f"),
-            "yield": st.column_config.NumberColumn("殖利率(%)", format="%.2f%%"),
-            "chips": st.column_config.NumberColumn("法人買賣超", help="需匯入 TEJ 才有數據"),
-        },
-        use_container_width=True,
-        hide_index=True
-    )
-    
-    st.info("💡 提示：若「營收成長」或「PEG」顯示為空，代表 Yahoo 資料庫暫無該股資料。建議上傳 TEJ 檔案以獲得最精準的「法人買賣超」與「財報」數據。")
+    if df is None or df.empty:
+        st.error("❌ 掃描失敗：無法獲取任何股票數據。可能是 Yahoo API 暫時阻擋或網路問題。")
+    else:
+        # 計算分數
+        final_df = calculate_score(df)
+        
+        st.subheader("🏆 潛力標的排行 (Entropy Ranking)")
+        
+        display_df = final_df.copy()
+        
+        # 顯示表格 (確保所有欄位都存在)
+        st.dataframe(
+            display_df[['代號', '名稱', 'close_price', 'Entropy Score', 'Strategy', 'pe', 'rev_growth', 'peg', 'yield', 'chips']],
+            column_config={
+                "Entropy Score": st.column_config.ProgressColumn("綜合戰力", min_value=0, max_value=100, format="%.1f"),
+                "close_price": st.column_config.NumberColumn("股價", format="$%.1f"),
+                "pe": st.column_config.NumberColumn("本益比", format="%.1f"),
+                "rev_growth": st.column_config.NumberColumn("營收成長(%)", format="%.2f%%"),
+                "peg": st.column_config.NumberColumn("PEG", format="%.2f"),
+                "yield": st.column_config.NumberColumn("殖利率(%)", format="%.2f%%"),
+                "chips": st.column_config.NumberColumn("法人買賣超", help="需匯入 TEJ 才有數據"),
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        st.info("💡 提示：若數據為空，代表 Yahoo 資料庫暫無該股資料 (通常發生在剛上市或冷門股)。")
 
 elif not st.session_state['scan_finished']:
     st.info("👈 請點擊左側「啟動掃描」開始分析。")
