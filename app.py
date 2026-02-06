@@ -6,8 +6,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 import concurrent.futures
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import io
 import os
+import time
 from datetime import datetime
 
 # PDF 函式庫
@@ -20,7 +23,7 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Format Fix)", 
+    page_title="熵值決策選股平台 (Name Fix)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -29,39 +32,25 @@ st.set_page_config(
 # --- 2. CSS 專業儀表板風格 ---
 st.markdown("""
 <style>
-    /* 全域深色 */
+    /* 全域設定 */
     .stApp { background-color: #0e1117 !important; }
-    
-    /* 側邊欄 */
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
-    
-    /* 文字顏色 */
     h1, h2, h3, p, span, div, label { color: #e6e6e6 !important; font-family: 'Roboto', sans-serif; }
     
-    /* 下拉選單修正 */
+    /* 元件優化 */
     div[role="listbox"] ul { background-color: #262730 !important; }
     li[role="option"] { color: white !important; background-color: #262730 !important; }
     li[role="option"]:hover { background-color: #238636 !important; }
     input { background-color: #0d1117 !important; color: white !important; border: 1px solid #30363d !important; }
     
-    /* 【核心】專業戰略卡片 */
+    /* 股票卡片 */
     .stock-card { 
-        background-color: #1f2937; 
-        padding: 20px; 
-        border-radius: 12px; 
-        border: 1px solid #374151; 
-        margin-bottom: 25px; 
-        box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        background-color: #1f2937; padding: 20px; border-radius: 12px; 
+        border: 1px solid #374151; margin-bottom: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.5);
     }
-    
-    /* 卡片標題列 */
     .card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid #374151;
-        padding-bottom: 12px;
-        margin-bottom: 15px;
+        display: flex; justify-content: space-between; align-items: center;
+        border-bottom: 1px solid #374151; padding-bottom: 12px; margin-bottom: 15px;
     }
     .header-title { font-size: 1.6rem; font-weight: 700; color: #ffffff; }
     .header-price { font-size: 1.2rem; color: #9ca3af; margin-left: 10px; }
@@ -74,34 +63,24 @@ st.markdown("""
     .tag-warn { background-color: #b91c1c; color: white; border: 1px solid #ef4444; }
     .tag-quality { background-color: #7c3aed; color: white; border: 1px solid #8b5cf6; }
     
-    /* 中間數據網格 */
+    /* 數據網格 */
     .metrics-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 12px;
-        background-color: rgba(0,0,0,0.2);
-        padding: 15px;
-        border-radius: 8px;
+        display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+        background-color: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px;
     }
     .metric-item { display: flex; justify-content: space-between; align-items: center; }
     .m-label { color: #9ca3af; font-size: 0.9rem; }
     .m-val { color: #ffffff; font-weight: bold; font-size: 1.0rem; font-family: 'Courier New', monospace; }
-    .m-high { color: #4ade80; } 
-    .m-warn { color: #f87171; }
+    .m-high { color: #4ade80; } .m-warn { color: #f87171; }
     
-    /* AI 分析區塊 */
+    /* AI 區塊 */
     .ai-box {
-        background-color: #2d333b;
-        border-left: 4px solid #58a6ff;
-        padding: 15px;
-        margin-top: 15px;
-        border-radius: 4px;
-        font-size: 0.95rem;
-        line-height: 1.6;
-        color: #e6e6e6;
+        background-color: #2d333b; border-left: 4px solid #58a6ff;
+        padding: 15px; margin-top: 15px; border-radius: 4px;
+        font-size: 0.95rem; line-height: 1.6; color: #e6e6e6;
     }
     
-    /* 下載按鈕 */
+    /* 按鈕 */
     .stDownloadButton button { background-color: #374151 !important; border: 1px solid #4b5563 !important; color: white !important; width: 100%; }
     .stDownloadButton button:hover { border-color: #60a5fa !important; color: #60a5fa !important; }
 </style>
@@ -139,7 +118,16 @@ def setup_chinese_font():
 
 font_ready = setup_chinese_font()
 
-# --- 6. 數據引擎 (全市場覆蓋) ---
+# --- 6. 核心數據引擎 (強韌架構 + 自動名稱) ---
+
+def create_resilient_session():
+    session = requests.Session()
+    retry = Retry(total=3, read=3, connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
+
 def get_tw_stock_list():
     try:
         import twstock
@@ -162,11 +150,16 @@ def get_stock_data(symbol):
     try:
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
         ticker = yf.Ticker(symbol)
-        info = ticker.info 
-        hist = ticker.history(period="6mo")
         
-        # Helper to safely get value or None (convert None to Nan later)
-        def g(key): return info.get(key)
+        try: info = ticker.info 
+        except: info = {}
+            
+        try:
+            hist = ticker.history(period="6mo")
+            if not hist.empty and hist['Volume'].iloc[-1] == 0: pass 
+        except: hist = pd.DataFrame()
+
+        def g(k): return info.get(k)
 
         data = {
             'close_price': g('currentPrice') or g('previousClose'),
@@ -183,7 +176,9 @@ def get_stock_data(symbol):
             'history': hist
         }
         return data
-    except: return None
+    except Exception as e:
+        print(f"Fetch Error {symbol}: {e}")
+        return None
 
 def calculate_synthetic_peg(pe, growth_rate):
     if pe and growth_rate and growth_rate > 0:
@@ -196,12 +191,10 @@ def sanitize_data(df):
         df['yield'] = df['yield'].apply(lambda x: x/100 if x > 20 else x)
     return df
 
-# 支援多檔匯入
 def process_tej_upload(uploaded_files):
     if not uploaded_files: return None
     tej_map = {}
     if not isinstance(uploaded_files, list): uploaded_files = [uploaded_files]
-        
     for uploaded_file in uploaded_files:
         try:
             if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
@@ -216,30 +209,43 @@ def process_tej_upload(uploaded_files):
         except: continue
     return tej_map
 
-# --- 7. 批量掃描 ---
-@st.cache_data(ttl=300, show_spinner=False)
+# --- 7. 批量掃描 (含名稱修復) ---
+@st.cache_data(ttl=3600, show_spinner=False)
 def batch_scan_stocks(stock_list, tej_data=None):
     results = []
     history_map = {} 
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_to_stock = {executor.submit(get_stock_data, s.split(' ')[0]): s for s in stock_list}
         
         for future in concurrent.futures.as_completed(future_to_stock):
             stock_str = future_to_stock[future]
             try:
                 code = stock_str.split(' ')[0].split('.')[0]
-                name = stock_str.split(' ')[1] if len(stock_str.split(' ')) > 1 else code
-                y_data = future.result()
                 
-                # Init with NaN (Safe)
+                # 【核心修復】自動名稱補全 (Auto-Name Resolution)
+                name = code # 預設為代號
+                
+                # 1. 嘗試從輸入字串獲取 (如 "2330.TW 台積電")
+                if len(stock_str.split(' ')) > 1:
+                    name = stock_str.split(' ')[1]
+                else:
+                    # 2. 嘗試從 twstock 資料庫獲取 (如 "2412.TW")
+                    try:
+                        import twstock
+                        if code in twstock.codes:
+                            name = twstock.codes[code].name
+                    except: pass
+
+                y_data = future.result()
+                if y_data is None: continue
+
                 price = np.nan; pe = np.nan; pb = np.nan; dy = np.nan
                 rev_growth = np.nan; eps_growth = np.nan; margins = np.nan
                 peg = np.nan; roe = np.nan; volatility = 0.5
                 chips = 0; ma_bias = 0
 
                 if y_data:
-                    # K線
                     hist = y_data.get('history')
                     if hist is not None and not hist.empty:
                         history_map[code] = hist 
@@ -252,14 +258,12 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     
                     if pd.isna(price): price = y_data.get('close_price')
                     
-                    # Safe extract (Handle None)
                     def get_val(key):
                         v = y_data.get(key)
                         return float(v) if v is not None else np.nan
 
-                    pe = get_val('pe')
-                    pb = get_val('pb')
-                    roe = get_val('roe')
+                    pe = get_val('pe'); pb = get_val('pb'); roe = get_val('roe')
+                    
                     raw_dy = get_val('yield')
                     if not pd.isna(raw_dy): dy = raw_dy * 100 
                     
@@ -403,7 +407,7 @@ def calculate_score(df, use_buffett=False):
     df['Quality'] = quality_tags
     return df.sort_values('Score', ascending=False), df_norm
 
-# --- 9. 繪圖函數 (中英對照) ---
+# --- 9. 繪圖函數 ---
 def get_radar_data(df_norm_row):
     cats = {'價值 (Value)': 0, '成長 (Growth)': 0, '動能 (Momentum)': 0, '風險 (Risk)': 0, '財報 (Financials)': 0}
     counts = {'價值 (Value)': 0, '成長 (Growth)': 0, '動能 (Momentum)': 0, '風險 (Risk)': 0, '財報 (Financials)': 0}
@@ -485,7 +489,8 @@ def call_ai(prompt):
     data = {"contents": [{"parts": [{"text": prompt}]}]}
     
     try:
-        r = requests.post(url, headers=headers, json=data, timeout=60)
+        session = create_resilient_session()
+        r = session.post(url, headers=headers, json=data, timeout=60)
         if r.status_code == 200:
             return r.json()['candidates'][0]['content']['parts'][0]['text']
         else:
@@ -493,7 +498,6 @@ def call_ai(prompt):
     except Exception as e:
         return f"❌ 連線例外: {str(e)}"
 
-# 【核心更新】中英對照 PDF
 def create_pdf(stock_data):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -517,10 +521,8 @@ def create_pdf(stock_data):
         story.append(Paragraph(f"⚠️ 警告 (Warning): 檢測到虛胖成長 (Profitless Growth)", normal_style))
     story.append(Spacer(1, 10))
     
-    # 【核心修復】安全數據處理，防止 PDF 生成時因 None 崩潰
     def safe_str(val, fmt="{:.2f}"):
-        try:
-            return "N/A" if (pd.isna(val) or val is None) else fmt.format(float(val))
+        try: return "N/A" if (pd.isna(val) or val is None) else fmt.format(float(val))
         except: return "N/A"
 
     metrics_data = [
@@ -621,8 +623,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 36.1")
-    st.caption("Format Guard + Bilingual UI + Full Market Coverage")
+    st.title("⚡ 熵值決策選股平台 37.1")
+    st.caption("Name Resolution Fix + Robust Architecture")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -634,7 +636,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         final_df, df_norm = calculate_score(df, use_buffett)
         
         st.subheader("🏆 潛力標的排行")
-        # 中英對照表頭
         st.dataframe(
             final_df[['代號', '名稱', 'industry', 'Score', 'Buffett', 'Quality', 'Strategy', 'rev_growth', 'eps_growth', 'gross_margins']],
             column_config={
@@ -652,7 +653,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         st.markdown("---")
         st.subheader("🎯 深度戰略分析")
         
-        # 安全數字格式化 (Safe Formatting Function)
         def safe_num(val):
             return 0 if (pd.isna(val) or val is None) else val
 
