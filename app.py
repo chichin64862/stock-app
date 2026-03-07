@@ -23,7 +23,7 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Hotfix)", 
+    page_title="熵值決策選股平台 (3D Matrix)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -32,7 +32,6 @@ st.set_page_config(
 # --- 2. CSS 專業儀表板風格 ---
 st.markdown("""
 <style>
-    /* 全域設定 */
     .stApp { background-color: #0e1117 !important; }
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
     h1, h2, h3, p, span, div, label { color: #e6e6e6 !important; font-family: 'Roboto', sans-serif; }
@@ -42,7 +41,6 @@ st.markdown("""
     li[role="option"]:hover { background-color: #238636 !important; }
     input { background-color: #0d1117 !important; color: white !important; border: 1px solid #30363d !important; }
     
-    /* 股票卡片 */
     .stock-card { 
         background-color: #1f2937; padding: 20px; border-radius: 12px; 
         border: 1px solid #374151; margin-bottom: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.5);
@@ -54,7 +52,6 @@ st.markdown("""
     .header-title { font-size: 1.6rem; font-weight: 700; color: #ffffff; }
     .header-price { font-size: 1.2rem; color: #9ca3af; margin-left: 10px; }
     
-    /* 標籤 */
     .tag { padding: 4px 10px; border-radius: 15px; font-size: 0.85rem; font-weight: bold; margin-left: 8px; }
     .tag-strategy { background-color: #238636; color: white; border: 1px solid #2ea043; }
     .tag-buffett { background-color: #FFD700; color: black; border: 1px solid #b39700; }
@@ -62,24 +59,21 @@ st.markdown("""
     .tag-warn { background-color: #b91c1c; color: white; border: 1px solid #ef4444; }
     .tag-quality { background-color: #7c3aed; color: white; border: 1px solid #8b5cf6; }
     
-    /* 數據網格 */
+    /* 【升級】3x3 數據網格 */
     .metrics-grid {
-        display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
         background-color: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px;
     }
-    .metric-item { display: flex; justify-content: space-between; align-items: center; }
-    .m-label { color: #9ca3af; font-size: 0.9rem; }
-    .m-val { color: #ffffff; font-weight: bold; font-size: 1.0rem; font-family: 'Courier New', monospace; }
+    .metric-item { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
+    .m-label { color: #9ca3af; font-size: 0.85rem; margin-bottom: 4px; }
+    .m-val { color: #ffffff; font-weight: bold; font-size: 1.1rem; font-family: 'Courier New', monospace; }
     .m-high { color: #4ade80; } .m-warn { color: #f87171; }
     
-    /* Reverse DCF 區塊 */
     .dcf-box {
-        background-color: rgba(255, 215, 0, 0.05);
-        border-left: 4px solid #FFD700;
+        background-color: rgba(255, 215, 0, 0.05); border-left: 4px solid #FFD700;
         padding: 12px 15px; margin-top: 15px; border-radius: 4px;
     }
     
-    /* AI 區塊 */
     .ai-box {
         background-color: #2d333b; border-left: 4px solid #58a6ff;
         padding: 15px; margin-top: 15px; border-radius: 4px;
@@ -162,6 +156,7 @@ def get_stock_data(symbol):
 
         def g(k): return info.get(k)
 
+        # 【升級】抓取 FCF, 負債比, Beta
         data = {
             'close_price': g('currentPrice') or g('previousClose'),
             'pe': g('trailingPE'),
@@ -174,6 +169,9 @@ def get_stock_data(symbol):
             'yield': g('dividendYield'),
             'roe': g('returnOnEquity'),
             'beta': g('beta'),
+            'market_cap': g('marketCap'),
+            'fcf': g('freeCashflow'),
+            'debt_to_equity': g('debtToEquity'),
             'sector': g('sector') or 'General',
             'history': hist
         }
@@ -181,41 +179,28 @@ def get_stock_data(symbol):
     except Exception as e: return None
 
 def calculate_synthetic_peg(pe, growth_rate):
-    if pe and growth_rate and growth_rate > 0:
-        return pe / (growth_rate * 100)
+    if pe and growth_rate and growth_rate > 0: return pe / (growth_rate * 100)
     return None
 
-# 【修復】補回遺失的數據清洗函式
 def sanitize_data(df):
     if df.empty: return df
     if 'yield' in df.columns:
-        # 將異常大的殖利率 (例如 400% 其實是 4%) 進行修正
         df['yield'] = df['yield'].apply(lambda x: x/100 if x > 20 else x)
     return df
 
-# Reverse DCF 二分逼近求解器
 def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
-    if pd.isna(price) or pd.isna(eps) or eps <= 0 or price <= 0:
-        return np.nan
-    
+    if pd.isna(price) or pd.isna(eps) or eps <= 0 or price <= 0: return np.nan
     low, high = -0.99, 3.0 
     tolerance = 0.01 
-    
     for _ in range(100): 
         mid = (low + high) / 2
         pv = sum([eps * ((1 + mid) ** t) / ((1 + r) ** t) for t in range(1, years + 1)])
         tv = (eps * ((1 + mid) ** years) * (1 + terminal_g)) / (r - terminal_g)
         calc_price = pv + tv / ((1 + r) ** years)
-        
         diff = calc_price - price
-        if abs(diff) < tolerance:
-            return mid
-            
-        if diff > 0:
-            high = mid
-        else:
-            low = mid
-            
+        if abs(diff) < tolerance: return mid
+        if diff > 0: high = mid
+        else: low = mid
     return (low + high) / 2
 
 def process_tej_upload(uploaded_files):
@@ -263,6 +248,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
 
                 price = np.nan; pe = np.nan; pb = np.nan; dy = np.nan
                 rev_growth = np.nan; eps_growth = np.nan; margins = np.nan
+                fcf_yield = np.nan; de_ratio = np.nan; beta_val = np.nan
                 peg = np.nan; roe = np.nan; volatility = 0.5; implied_g = np.nan
                 chips = 0; ma_bias = 0
 
@@ -297,12 +283,18 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     if not pd.isna(raw_margin): margins = raw_margin * 100
                     
                     peg = get_val('peg')
+                    beta_val = get_val('beta')
+                    de_ratio = get_val('debt_to_equity')
                     
-                    # 計算 Reverse DCF 隱含成長率
+                    # 計算 FCF Yield
+                    m_cap = get_val('market_cap')
+                    fcf = get_val('fcf')
+                    if not pd.isna(m_cap) and not pd.isna(fcf) and m_cap > 0:
+                        fcf_yield = (fcf / m_cap) * 100
+                    
                     t_eps = get_val('trailing_eps')
                     if pd.isna(t_eps) and not pd.isna(pe) and pe > 0 and not pd.isna(price):
                         t_eps = price / pe
-                        
                     if not pd.isna(price) and not pd.isna(t_eps):
                         implied_g = calculate_implied_growth(price, t_eps)
                 
@@ -324,6 +316,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
                         '代號': code, '名稱': name, 'close_price': price,
                         'pe': pe, 'pb': pb, 'yield': dy, 'roe': roe,
                         'rev_growth': rev_growth, 'eps_growth': eps_growth, 'gross_margins': margins,
+                        'fcf_yield': fcf_yield, 'de_ratio': de_ratio, 'beta': beta_val,
                         'implied_growth': implied_g,
                         'peg': peg, 'chips': chips,
                         'volatility': volatility, 'priceToMA60': ma_bias,
@@ -333,7 +326,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
             except: continue
     
     df = pd.DataFrame(results)
-    cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'eps_growth', 'gross_margins', 'implied_growth', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
+    cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'eps_growth', 'gross_margins', 'fcf_yield', 'de_ratio', 'beta', 'implied_growth', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
     for c in cols:
         if c not in df.columns: df[c] = np.nan
     return df, history_map
@@ -369,18 +362,21 @@ def check_buffett_criteria(row):
     roe = row.get('roe', 0)
     vol = row.get('volatility', 1.0)
     pe = row.get('pe', 100)
+    fcf = row.get('fcf_yield', 0)
+    
     if roe and roe < 1: roe = roe * 100 
     if pd.isna(roe): roe = 0
     score = 0
     if roe > 15: score += 1
     if vol < 0.35: score += 1
     if pe < 20 and pe > 0: score += 1
+    if fcf > 0: score += 1 # 現金流正向加分
     return score >= 2
 
 def calculate_score(df, use_buffett=False):
     if df.empty: return df, None
     
-    required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'implied_growth', 'peg', 'volatility', 'roe', 'priceToMA60']
+    required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'fcf_yield', 'de_ratio', 'beta', 'implied_growth', 'peg', 'volatility', 'roe', 'priceToMA60']
     for col in required_cols:
         if col not in df.columns: df[col] = np.nan
     
@@ -416,9 +412,11 @@ def calculate_score(df, use_buffett=False):
         scores.append(round(final, 1))
         
         rev = row.get('rev_growth', 0); eps = row.get('eps_growth', 0); ma = row.get('priceToMA60', 0)
+        fcf = row.get('fcf_yield', 0)
+        
         q_tag = ""
-        if rev > 20 and eps < 0: q_tag = "Profitless"
-        elif rev > 15 and eps > 15: q_tag = "Quality"
+        if (rev > 20 and eps < 0) or fcf < -5: q_tag = "Profitless"
+        elif rev > 15 and eps > 15 and fcf > 0: q_tag = "Quality"
         quality_tags.append(q_tag)
         
         if q_tag == "Profitless": plans.append("⚠️ 虛胖警告 (Profitless)")
@@ -537,7 +535,7 @@ def create_pdf(stock_data):
     h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue)
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
     
-    story.append(Paragraph(f"熵值決策選股及AI深度分析報告 (Analysis Report)", title_style))
+    story.append(Paragraph(f"熵值決策選股及AI深度分析報告 (3D Matrix Report)", title_style))
     story.append(Paragraph(f"生成時間 (Time): {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
     
@@ -545,8 +543,9 @@ def create_pdf(stock_data):
     story.append(Paragraph(f"戰略指令 (Strategy): {stock_data['Strategy']}", normal_style))
     
     rev_g = stock_data.get('rev_growth', 0); eps_g = stock_data.get('eps_growth', 0)
-    if rev_g > 20 and eps_g < 0:
-        story.append(Paragraph(f"⚠️ 警告 (Warning): 檢測到虛胖成長 (Profitless Growth)", normal_style))
+    fcf_y = stock_data.get('fcf_yield', 0)
+    if (rev_g > 20 and eps_g < 0) or fcf_y < -5:
+        story.append(Paragraph(f"⚠️ 警告 (Warning): 檢測到虛胖成長或自由現金流嚴重流失，請留意財務風險。", normal_style))
     story.append(Spacer(1, 10))
     
     def safe_str(val, fmt="{:.2f}"):
@@ -556,9 +555,9 @@ def create_pdf(stock_data):
     metrics_data = [
         ['收盤價 (Price)', f"{stock_data['close_price']}", '熵值分數 (Score)', f"{stock_data.get('Score', 'N/A')}"],
         ['本益比 (P/E)', safe_str(stock_data.get('pe')), 'PEG Ratio', safe_str(stock_data.get('peg'))],
-        ['營收成長 (Rev Growth)', safe_str(stock_data.get('rev_growth'), "{:.2f}%"), 'EPS 成長 (EPS Growth)', safe_str(stock_data.get('eps_growth'), "{:.2f}%")],
-        ['毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.2f}%"), '隱含成長率 (Implied G)', safe_str(stock_data.get('implied_growth')*100 if not pd.isna(stock_data.get('implied_growth')) else np.nan, "{:.2f}%")],
-        ['波動率 (Volatility)', safe_str(stock_data.get('volatility'), "{:.1f}"), '季線乖離 (MA Bias)', safe_str(stock_data.get('priceToMA60'), "{:.1f}")]
+        ['營收成長 (Rev YoY)', safe_str(stock_data.get('rev_growth'), "{:.2f}%"), 'EPS 成長 (EPS YoY)', safe_str(stock_data.get('eps_growth'), "{:.2f}%")],
+        ['負債權益比 (D/E)', safe_str(stock_data.get('de_ratio'), "{:.2f}%"), 'FCF 收益率', safe_str(stock_data.get('fcf_yield'), "{:.2f}%")],
+        ['隱含成長率 (Implied G)', safe_str(stock_data.get('implied_growth')*100 if not pd.isna(stock_data.get('implied_growth')) else np.nan, "{:.2f}%"), '季線乖離 (MA Bias)', safe_str(stock_data.get('priceToMA60')*100 if not pd.isna(stock_data.get('priceToMA60')) else np.nan, "{:.1f}%")]
     ]
     t = Table(metrics_data, colWidths=[120, 110, 120, 110])
     t.setStyle(TableStyle([
@@ -587,14 +586,20 @@ def create_pdf(stock_data):
     buffer.seek(0)
     return buffer
 
+# 【核心升級】3D Matrix AI Prompt
 AI_PROMPT = """
 請扮演華爾街基金經理人，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
-數據：PE=[PE], PEG=[PEG], 營收成長=[REV]%, EPS成長=[EPS_G]%, 毛利率=[GM]%, 市場隱含成長率=[IMPLIED_G]%.
-重點：
-1. **成長品質**：營收與EPS是否同步成長？
-2. **Reverse DCF 安全邊際**：將「市場隱含成長率」與「實際EPS成長率」進行對比。如果市場隱含的期望低於實際表現，代表具備安全邊際；反之則有高估風險。
-3. **結論**：給出操作建議。
-請務必使用**繁體中文**回答。
+【數據矩陣】
+1. 基本面：營收成長=[REV]%, EPS成長=[EPS_G]%, 毛利率=[GM]%, FCF收益率=[FCF_Y]%, 負債權益比=[DE]%.
+2. 估值面：PE=[PE], PEG=[PEG], Reverse DCF 隱含成長率=[IMPLIED_G]% (請對比實際EPS成長).
+3. 技術/風險面：Beta=[BETA], 季線乖離=[MA_BIAS]%.
+
+【分析要求】
+請依據上述數據，輸出具備以下「三大模塊」的機構級分析報告：
+1. **體質與護城河 (Fundamentals & Solvency)**：評估成長品質(是否虛胖)與財務健康度(特別關注現金流與債務水位)。
+2. **估值安全邊際 (Valuation & Reverse DCF)**：分析市場定價隱含的期待是否過高，目前是否具備安全邊際。
+3. **風險與操作時機 (Timing & Action)**：結合 Beta 的波動風險與季線乖離率，評估目前是否為好的「進場時機」，並給出最終法人級操作結論。
+請務必使用**繁體中文**回答，排版清晰條理。
 """
 
 # --- 11. 主程式 ---
@@ -640,7 +645,7 @@ with st.sidebar:
 
     if st.button("🚀 啟動全自動掃描", type="primary"):
         st.session_state['scan_finished'] = False
-        with st.spinner("正在挖掘 Yahoo 數據並進行 Reverse DCF 運算..."):
+        with st.spinner("正在挖掘 Yahoo 數據並進行 3D Matrix 運算..."):
             raw, hist_map = batch_scan_stocks(target_stocks, st.session_state['tej_data'])
             raw = sanitize_data(raw)
             st.session_state['raw_data'] = raw
@@ -650,8 +655,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 38.1")
-    st.caption("Reverse DCF Engine + Hotfix")
+    st.title("⚡ 熵值決策選股平台 39.0")
+    st.caption("3D Decision Matrix (Solvency + Valuation + Timing)")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -690,8 +695,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 industry_tag = f"<span class='tag tag-sector'>{row['industry']}</span>"
                 buffett_tag = "<span class='tag tag-buffett'>Buffett Pick</span>" if row['Buffett'] else ""
                 quality_tag = ""
-                if row['Quality'] == 'Profitless': quality_tag = "<span class='tag tag-warn'>⚠️ 虛胖警告 (Profitless)</span>"
-                elif row['Quality'] == 'Quality': quality_tag = "<span class='tag tag-quality'>💎 高品質 (Quality)</span>"
+                if row['Quality'] == 'Profitless': quality_tag = "<span class='tag tag-warn'>⚠️ 虛胖/缺血警告</span>"
+                elif row['Quality'] == 'Quality': quality_tag = "<span class='tag tag-quality'>💎 護城河優良</span>"
                 
                 st.markdown(f"""
                 <div class='stock-card'>
@@ -704,20 +709,26 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     </div>
                 """, unsafe_allow_html=True)
                 
-                c1, c2, c3 = st.columns([1, 1.5, 1.5])
+                c1, c2, c3 = st.columns([1, 1.8, 1.5])
                 
                 with c1:
                     if idx in df_norm.index:
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[idx])), use_container_width=True)
                 
                 with c2:
+                    # 【升級】3x3 數據矩陣
                     st.markdown(f"""
                     <div class='metrics-grid'>
-                        <div class='metric-item'><span class='m-label'>營收成長 (Rev Growth)</span><span class='m-val m-high'>{safe_num(row.get('rev_growth')):.2f}%</span></div>
-                        <div class='metric-item'><span class='m-label'>EPS 成長 (EPS Growth)</span><span class='m-val m-high'>{safe_num(row.get('eps_growth')):.2f}%</span></div>
-                        <div class='metric-item'><span class='m-label'>毛利率 (Gross Margin)</span><span class='m-val'>{safe_num(row.get('gross_margins')):.2f}%</span></div>
+                        <div class='metric-item'><span class='m-label'>本益比 (P/E)</span><span class='m-val'>{safe_num(row.get('pe')):.2f}</span></div>
                         <div class='metric-item'><span class='m-label'>PEG Ratio</span><span class='m-val'>{safe_num(row.get('peg')):.2f}</span></div>
-                        <div class='metric-item'><span class='m-label'>本益比 (PE)</span><span class='m-val'>{safe_num(row.get('pe')):.2f}</span></div>
+                        <div class='metric-item'><span class='m-label'>殖利率 (Yield)</span><span class='m-val m-high'>{safe_num(row.get('yield')):.2f}%</span></div>
+                        
+                        <div class='metric-item'><span class='m-label'>營收成長 (Rev YoY)</span><span class='m-val m-high'>{safe_num(row.get('rev_growth')):.2f}%</span></div>
+                        <div class='metric-item'><span class='m-label'>EPS成長 (EPS YoY)</span><span class='m-val m-high'>{safe_num(row.get('eps_growth')):.2f}%</span></div>
+                        <div class='metric-item'><span class='m-label'>毛利率 (Gross Margin)</span><span class='m-val'>{safe_num(row.get('gross_margins')):.2f}%</span></div>
+                        
+                        <div class='metric-item'><span class='m-label'>負債權益比 (D/E)</span><span class='m-val'>{safe_num(row.get('de_ratio')):.1f}%</span></div>
+                        <div class='metric-item'><span class='m-label'>FCF 收益率</span><span class='m-val'>{safe_num(row.get('fcf_yield')):.2f}%</span></div>
                         <div class='metric-item'><span class='m-label'>季線乖離 (MA Bias)</span><span class='m-val'>{safe_num(row.get('priceToMA60'))*100:.1f}%</span></div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -744,8 +755,21 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         """, unsafe_allow_html=True)
                     
                     b1, b2 = st.columns(2)
-                    if b1.button(f"✨ AI 分析", key=f"ai_{idx}"):
-                        p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[EPS_G]", str(row.get('eps_growth'))).replace("[GM]", str(row.get('gross_margins'))).replace("[IMPLIED_G]", str(safe_num(implied_g)*100)).replace("[ROE]", str(row.get('roe')))
+                    if b1.button(f"✨ 3D Matrix AI 分析", key=f"ai_{idx}"):
+                        # 【核心升級】將現金流、債務、Beta餵給 AI
+                        p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']) \
+                            .replace("[SECTOR]", str(row['industry'])) \
+                            .replace("[PE]", str(safe_num(row.get('pe')))) \
+                            .replace("[PEG]", str(safe_num(row.get('peg')))) \
+                            .replace("[REV]", str(safe_num(row.get('rev_growth')))) \
+                            .replace("[EPS_G]", str(safe_num(row.get('eps_growth')))) \
+                            .replace("[GM]", str(safe_num(row.get('gross_margins')))) \
+                            .replace("[FCF_Y]", str(safe_num(row.get('fcf_yield')))) \
+                            .replace("[DE]", str(safe_num(row.get('de_ratio')))) \
+                            .replace("[IMPLIED_G]", str(safe_num(implied_g)*100)) \
+                            .replace("[BETA]", str(safe_num(row.get('beta')))) \
+                            .replace("[MA_BIAS]", str(safe_num(row.get('priceToMA60'))*100))
+                        
                         an = call_ai(p_txt)
                         st.session_state['ai_results'][code] = an
                     
