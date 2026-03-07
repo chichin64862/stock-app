@@ -23,7 +23,7 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (3D Matrix)", 
+    page_title="熵值決策選股平台 (UI Fix)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -59,7 +59,6 @@ st.markdown("""
     .tag-warn { background-color: #b91c1c; color: white; border: 1px solid #ef4444; }
     .tag-quality { background-color: #7c3aed; color: white; border: 1px solid #8b5cf6; }
     
-    /* 【升級】3x3 數據網格 */
     .metrics-grid {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
         background-color: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px;
@@ -156,7 +155,6 @@ def get_stock_data(symbol):
 
         def g(k): return info.get(k)
 
-        # 【升級】抓取 FCF, 負債比, Beta
         data = {
             'close_price': g('currentPrice') or g('previousClose'),
             'pe': g('trailingPE'),
@@ -286,7 +284,6 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     beta_val = get_val('beta')
                     de_ratio = get_val('debt_to_equity')
                     
-                    # 計算 FCF Yield
                     m_cap = get_val('market_cap')
                     fcf = get_val('fcf')
                     if not pd.isna(m_cap) and not pd.isna(fcf) and m_cap > 0:
@@ -370,7 +367,7 @@ def check_buffett_criteria(row):
     if roe > 15: score += 1
     if vol < 0.35: score += 1
     if pe < 20 and pe > 0: score += 1
-    if fcf > 0: score += 1 # 現金流正向加分
+    if fcf > 0: score += 1 
     return score >= 2
 
 def calculate_score(df, use_buffett=False):
@@ -586,7 +583,6 @@ def create_pdf(stock_data):
     buffer.seek(0)
     return buffer
 
-# 【核心升級】3D Matrix AI Prompt
 AI_PROMPT = """
 請扮演華爾街基金經理人，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
 【數據矩陣】
@@ -655,8 +651,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 39.0")
-    st.caption("3D Decision Matrix (Solvency + Valuation + Timing)")
+    st.title("⚡ 熵值決策選股平台 39.1")
+    st.caption("UI Whitespace Fix + 3D Decision Matrix")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -698,16 +694,12 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 if row['Quality'] == 'Profitless': quality_tag = "<span class='tag tag-warn'>⚠️ 虛胖/缺血警告</span>"
                 elif row['Quality'] == 'Quality': quality_tag = "<span class='tag tag-quality'>💎 護城河優良</span>"
                 
-                st.markdown(f"""
-                <div class='stock-card'>
-                    <div class='card-header'>
-                        <div>
-                            <span class='header-title'>{row['名稱']} ({code})</span>
-                            <span class='header-price'>${row['close_price']}</span>
-                        </div>
-                        <div>{industry_tag}{buffett_tag}{quality_tag}</div>
-                    </div>
-                """, unsafe_allow_html=True)
+                # 【修復】移除卡片 Header 的縮排
+                st.markdown(f"""<div class='stock-card'>
+<div class='card-header'>
+<div><span class='header-title'>{row['名稱']} ({code})</span><span class='header-price'>${row['close_price']}</span></div>
+<div>{industry_tag}{buffett_tag}{quality_tag}</div>
+</div>""", unsafe_allow_html=True)
                 
                 c1, c2, c3 = st.columns([1, 1.8, 1.5])
                 
@@ -716,22 +708,18 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[idx])), use_container_width=True)
                 
                 with c2:
-                    # 【升級】3x3 數據矩陣
-                    st.markdown(f"""
-                    <div class='metrics-grid'>
-                        <div class='metric-item'><span class='m-label'>本益比 (P/E)</span><span class='m-val'>{safe_num(row.get('pe')):.2f}</span></div>
-                        <div class='metric-item'><span class='m-label'>PEG Ratio</span><span class='m-val'>{safe_num(row.get('peg')):.2f}</span></div>
-                        <div class='metric-item'><span class='m-label'>殖利率 (Yield)</span><span class='m-val m-high'>{safe_num(row.get('yield')):.2f}%</span></div>
-                        
-                        <div class='metric-item'><span class='m-label'>營收成長 (Rev YoY)</span><span class='m-val m-high'>{safe_num(row.get('rev_growth')):.2f}%</span></div>
-                        <div class='metric-item'><span class='m-label'>EPS成長 (EPS YoY)</span><span class='m-val m-high'>{safe_num(row.get('eps_growth')):.2f}%</span></div>
-                        <div class='metric-item'><span class='m-label'>毛利率 (Gross Margin)</span><span class='m-val'>{safe_num(row.get('gross_margins')):.2f}%</span></div>
-                        
-                        <div class='metric-item'><span class='m-label'>負債權益比 (D/E)</span><span class='m-val'>{safe_num(row.get('de_ratio')):.1f}%</span></div>
-                        <div class='metric-item'><span class='m-label'>FCF 收益率</span><span class='m-val'>{safe_num(row.get('fcf_yield')):.2f}%</span></div>
-                        <div class='metric-item'><span class='m-label'>季線乖離 (MA Bias)</span><span class='m-val'>{safe_num(row.get('priceToMA60'))*100:.1f}%</span></div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    # 【修復】移除 Markdown 字串內的縮排，防止被解析成 Code Block 導致白底破圖
+                    st.markdown(f"""<div class='metrics-grid'>
+<div class='metric-item'><span class='m-label'>本益比 (P/E)</span><span class='m-val'>{safe_num(row.get('pe')):.2f}</span></div>
+<div class='metric-item'><span class='m-label'>PEG Ratio</span><span class='m-val'>{safe_num(row.get('peg')):.2f}</span></div>
+<div class='metric-item'><span class='m-label'>殖利率 (Yield)</span><span class='m-val m-high'>{safe_num(row.get('yield')):.2f}%</span></div>
+<div class='metric-item'><span class='m-label'>營收成長 (Rev YoY)</span><span class='m-val m-high'>{safe_num(row.get('rev_growth')):.2f}%</span></div>
+<div class='metric-item'><span class='m-label'>EPS成長 (EPS YoY)</span><span class='m-val m-high'>{safe_num(row.get('eps_growth')):.2f}%</span></div>
+<div class='metric-item'><span class='m-label'>毛利率 (Gross Margin)</span><span class='m-val'>{safe_num(row.get('gross_margins')):.2f}%</span></div>
+<div class='metric-item'><span class='m-label'>負債權益比 (D/E)</span><span class='m-val'>{safe_num(row.get('de_ratio')):.1f}%</span></div>
+<div class='metric-item'><span class='m-label'>FCF 收益率</span><span class='m-val'>{safe_num(row.get('fcf_yield')):.2f}%</span></div>
+<div class='metric-item'><span class='m-label'>季線乖離 (MA Bias)</span><span class='m-val'>{safe_num(row.get('priceToMA60'))*100:.1f}%</span></div>
+</div>""", unsafe_allow_html=True)
                     
                     implied_g = row.get('implied_growth', np.nan)
                     actual_g = row.get('eps_growth', 0) / 100 
@@ -744,19 +732,17 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         else:
                             dcf_status = "🟡 估值合理 (Fairly Priced)"
                             
-                        st.markdown(f"""
-                        <div class='dcf-box'>
-                            <div style='font-size: 0.85rem; color: #9ca3af; font-weight: bold;'>Reverse DCF 估值檢驗 (r=10%, TV=2%)</div>
-                            <div style='display: flex; justify-content: space-between; margin-top: 8px;'>
-                                <span>市場隱含成長率: <b style='color: white; font-size: 1.1rem;'>{implied_g*100:.1f}%</b></span>
-                                <span style='font-weight: bold;'>{dcf_status}</span>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        # 【修復】移除 DCF 區塊的縮排
+                        st.markdown(f"""<div class='dcf-box'>
+<div style='font-size: 0.85rem; color: #9ca3af; font-weight: bold;'>Reverse DCF 估值檢驗 (r=10%, TV=2%)</div>
+<div style='display: flex; justify-content: space-between; margin-top: 8px;'>
+<span>市場隱含成長率: <b style='color: white; font-size: 1.1rem;'>{implied_g*100:.1f}%</b></span>
+<span style='font-weight: bold;'>{dcf_status}</span>
+</div>
+</div>""", unsafe_allow_html=True)
                     
                     b1, b2 = st.columns(2)
                     if b1.button(f"✨ 3D Matrix AI 分析", key=f"ai_{idx}"):
-                        # 【核心升級】將現金流、債務、Beta餵給 AI
                         p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']) \
                             .replace("[SECTOR]", str(row['industry'])) \
                             .replace("[PE]", str(safe_num(row.get('pe')))) \
