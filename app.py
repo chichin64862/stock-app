@@ -17,13 +17,14 @@ from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont # 【新增】內建亞洲字體庫，絕對防亂碼
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (UI Fix)", 
+    page_title="熵值決策選股平台 (Perfect Output)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -97,37 +98,38 @@ try:
 except Exception:
     st.error("⚠️ 系統偵測不到 API Key！")
 
-# --- 5. 字型下載與註冊 (唯一修改區塊：增強防護與備援) ---
+# --- 5. 字型下載與註冊 (【核心修復1】雙重字體防護，根絕黑方塊) ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
-    # 提供直連網址與 CDN 備援路線，避免 302 重新導向被擋
     urls = [
         "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
         "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanstc/NotoSansTC-Regular.ttf"
     ]
     
-    # 檢查檔案是否存在，或檔案太小 (可能抓到 404 HTML 錯誤頁面)
-    if not os.path.exists(font_path) or os.path.getsize(font_path) < 100000:
-        for url in urls:
-            try:
-                # 延長 timeout，確保 8MB 的字體能完整下載
-                r = requests.get(url, allow_redirects=True, timeout=30)
-                if r.status_code == 200:
-                    with open(font_path, 'wb') as f: 
-                        f.write(r.content)
-                    break # 下載成功就跳出迴圈
-            except:
-                continue
-                
+    # 策略 A: 嘗試下載高畫質 TTF 字體
     try:
+        if not os.path.exists(font_path) or os.path.getsize(font_path) < 100000:
+            for url in urls:
+                try:
+                    r = requests.get(url, allow_redirects=True, timeout=15)
+                    if r.status_code == 200:
+                        with open(font_path, 'wb') as f: 
+                            f.write(r.content)
+                        break 
+                except:
+                    continue
         pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
-        return True
+        return 'ChineseFont'
     except Exception as e:
-        print(f"字體註冊失敗: {e}")
-        return False
+        # 策略 B: 如果雲端空間無法下載，啟用 PDF 內建標準 CID 中文字體 (100% 成功)
+        try:
+            pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
+            return 'MSung-Light'
+        except:
+            return 'Helvetica' # 極端異常的最後退路
 
-font_ready = setup_chinese_font()
+font_name_global = setup_chinese_font()
 
 # --- 6. 核心數據引擎 ---
 def create_resilient_session():
@@ -540,13 +542,14 @@ def create_pdf(stock_data):
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
     
-    font_name = 'ChineseFont' if font_ready else 'Helvetica'
+    # 【核心修復2】確保套用正確的全域字體
+    font_name = font_name_global 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, alignment=1, spaceAfter=20)
     h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue)
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
     
-    story.append(Paragraph(f"熵值決策選股及AI深度分析報告 (Analysis Report)", title_style))
+    story.append(Paragraph(f"熵值決策選股及AI深度分析報告 (3D Matrix Report)", title_style))
     story.append(Paragraph(f"生成時間 (Time): {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
     
@@ -597,8 +600,11 @@ def create_pdf(stock_data):
     buffer.seek(0)
     return buffer
 
+# 【核心修復2】AI 提示詞：加入強制今日日期錨點，根絕年份幻覺
 AI_PROMPT = """
 請扮演華爾街基金經理人，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
+【時間基準】今天是 [CURRENT_DATE]，請以最新視角撰寫，**絕對不要在報告中捏造或顯示過去的歷史日期**。
+
 【數據矩陣】
 1. 基本面：營收成長=[REV]%, EPS成長=[EPS_G]%, 毛利率=[GM]%, FCF收益率=[FCF_Y]%, 負債權益比=[DE]%.
 2. 估值面：PE=[PE], PEG=[PEG], Reverse DCF 隱含成長率=[IMPLIED_G]% (請對比實際EPS成長).
@@ -665,8 +671,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 39.2")
-    st.caption("PDF Font Fix + 3D Decision Matrix")
+    st.title("⚡ 熵值決策選股平台 39.3")
+    st.caption("PDF Font Guarantee + AI Time Anchor Fix")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -754,8 +760,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     
                     b1, b2 = st.columns(2)
                     if b1.button(f"✨ 3D Matrix AI 分析", key=f"ai_{idx}"):
+                        current_today = datetime.now().strftime('%Y年%m月%d日')
                         p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']) \
                             .replace("[SECTOR]", str(row['industry'])) \
+                            .replace("[CURRENT_DATE]", current_today) \
                             .replace("[PE]", str(safe_num(row.get('pe')))) \
                             .replace("[PEG]", str(safe_num(row.get('peg')))) \
                             .replace("[REV]", str(safe_num(row.get('rev_growth')))) \
