@@ -23,7 +23,7 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Name Fix)", 
+    page_title="熵值決策選股平台 (Reverse DCF)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -37,7 +37,6 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
     h1, h2, h3, p, span, div, label { color: #e6e6e6 !important; font-family: 'Roboto', sans-serif; }
     
-    /* 元件優化 */
     div[role="listbox"] ul { background-color: #262730 !important; }
     li[role="option"] { color: white !important; background-color: #262730 !important; }
     li[role="option"]:hover { background-color: #238636 !important; }
@@ -73,6 +72,13 @@ st.markdown("""
     .m-val { color: #ffffff; font-weight: bold; font-size: 1.0rem; font-family: 'Courier New', monospace; }
     .m-high { color: #4ade80; } .m-warn { color: #f87171; }
     
+    /* 【新增】Reverse DCF 區塊 */
+    .dcf-box {
+        background-color: rgba(255, 215, 0, 0.05);
+        border-left: 4px solid #FFD700;
+        padding: 12px 15px; margin-top: 15px; border-radius: 4px;
+    }
+    
     /* AI 區塊 */
     .ai-box {
         background-color: #2d333b; border-left: 4px solid #58a6ff;
@@ -80,7 +86,6 @@ st.markdown("""
         font-size: 0.95rem; line-height: 1.6; color: #e6e6e6;
     }
     
-    /* 按鈕 */
     .stDownloadButton button { background-color: #374151 !important; border: 1px solid #4b5563 !important; color: white !important; width: 100%; }
     .stDownloadButton button:hover { border-color: #60a5fa !important; color: #60a5fa !important; }
 </style>
@@ -98,7 +103,6 @@ try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
     st.error("⚠️ 系統偵測不到 API Key！")
-    st.stop()
 
 # --- 5. 字型下載與註冊 ---
 @st.cache_resource
@@ -118,7 +122,7 @@ def setup_chinese_font():
 
 font_ready = setup_chinese_font()
 
-# --- 6. 核心數據引擎 (強韌架構 + 自動名稱) ---
+# --- 6. 核心數據引擎 ---
 
 def create_resilient_session():
     session = requests.Session()
@@ -150,10 +154,8 @@ def get_stock_data(symbol):
     try:
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
         ticker = yf.Ticker(symbol)
-        
         try: info = ticker.info 
         except: info = {}
-            
         try:
             hist = ticker.history(period="6mo")
             if not hist.empty and hist['Volume'].iloc[-1] == 0: pass 
@@ -168,6 +170,7 @@ def get_stock_data(symbol):
             'pb': g('priceToBook'),
             'rev_growth': g('revenueGrowth'),
             'eps_growth': g('earningsGrowth'),
+            'trailing_eps': g('trailingEps'), # 【新增】取得絕對 EPS 用於 DCF 計算
             'gross_margins': g('grossMargins'),
             'yield': g('dividendYield'),
             'roe': g('returnOnEquity'),
@@ -176,40 +179,52 @@ def get_stock_data(symbol):
             'history': hist
         }
         return data
-    except Exception as e:
-        print(f"Fetch Error {symbol}: {e}")
-        return None
+    except Exception as e: return None
 
 def calculate_synthetic_peg(pe, growth_rate):
     if pe and growth_rate and growth_rate > 0:
         return pe / (growth_rate * 100)
     return None
 
-def sanitize_data(df):
-    if df.empty: return df
-    if 'yield' in df.columns:
-        df['yield'] = df['yield'].apply(lambda x: x/100 if x > 20 else x)
-    return df
+# 【核心功能】Reverse DCF 二分逼近求解器
+def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
+    """
+    透過給定當前股價與 EPS，反向解出市場隱含的 EPS 成長率
+    r: 折現率 (Discount Rate, 預設 10%)
+    terminal_g: 永續成長率 (Terminal Growth, 預設 2%)
+    years: 預測期 (預設 10年)
+    """
+    if pd.isna(price) or pd.isna(eps) or eps <= 0 or price <= 0:
+        return np.nan
+    
+    # 設定搜索邊界：從衰退 99% 到爆發性成長 300%
+    low, high = -0.99, 3.0 
+    tolerance = 0.01 # 容差 1%
+    
+    for _ in range(100): # 最多疊代 100 次
+        mid = (low + high) / 2
+        
+        # 計算現值 PV (Present Value)
+        pv = sum([eps * ((1 + mid) ** t) / ((1 + r) ** t) for t in range(1, years + 1)])
+        # 計算終值 TV (Terminal Value) 並折現
+        tv = (eps * ((1 + mid) ** years) * (1 + terminal_g)) / (r - terminal_g)
+        calc_price = pv + tv / ((1 + r) ** years)
+        
+        diff = calc_price - price
+        
+        # 逼近完成
+        if abs(diff) < tolerance:
+            return mid
+            
+        # 若算出來的價格太高，代表猜的成長率太高了，調降上限
+        if diff > 0:
+            high = mid
+        else:
+            low = mid
+            
+    return (low + high) / 2
 
-def process_tej_upload(uploaded_files):
-    if not uploaded_files: return None
-    tej_map = {}
-    if not isinstance(uploaded_files, list): uploaded_files = [uploaded_files]
-    for uploaded_file in uploaded_files:
-        try:
-            if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
-            else: df = pd.read_excel(uploaded_file)
-            df.columns = [str(c).strip() for c in df.columns]
-            code_col = next((c for c in df.columns if '代號' in c or 'Code' in c), None)
-            if not code_col: continue 
-            for _, row in df.iterrows():
-                raw_code = str(row[code_col]).split('.')[0].strip()
-                if raw_code in tej_map: tej_map[raw_code].update(row.to_dict())
-                else: tej_map[raw_code] = row.to_dict()
-        except: continue
-    return tej_map
-
-# --- 7. 批量掃描 (含名稱修復) ---
+# --- 7. 批量掃描 ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def batch_scan_stocks(stock_list, tej_data=None):
     results = []
@@ -222,19 +237,13 @@ def batch_scan_stocks(stock_list, tej_data=None):
             stock_str = future_to_stock[future]
             try:
                 code = stock_str.split(' ')[0].split('.')[0]
+                name = code 
                 
-                # 【核心修復】自動名稱補全 (Auto-Name Resolution)
-                name = code # 預設為代號
-                
-                # 1. 嘗試從輸入字串獲取 (如 "2330.TW 台積電")
-                if len(stock_str.split(' ')) > 1:
-                    name = stock_str.split(' ')[1]
+                if len(stock_str.split(' ')) > 1: name = stock_str.split(' ')[1]
                 else:
-                    # 2. 嘗試從 twstock 資料庫獲取 (如 "2412.TW")
                     try:
                         import twstock
-                        if code in twstock.codes:
-                            name = twstock.codes[code].name
+                        if code in twstock.codes: name = twstock.codes[code].name
                     except: pass
 
                 y_data = future.result()
@@ -242,7 +251,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
 
                 price = np.nan; pe = np.nan; pb = np.nan; dy = np.nan
                 rev_growth = np.nan; eps_growth = np.nan; margins = np.nan
-                peg = np.nan; roe = np.nan; volatility = 0.5
+                peg = np.nan; roe = np.nan; volatility = 0.5; implied_g = np.nan
                 chips = 0; ma_bias = 0
 
                 if y_data:
@@ -263,7 +272,6 @@ def batch_scan_stocks(stock_list, tej_data=None):
                         return float(v) if v is not None else np.nan
 
                     pe = get_val('pe'); pb = get_val('pb'); roe = get_val('roe')
-                    
                     raw_dy = get_val('yield')
                     if not pd.isna(raw_dy): dy = raw_dy * 100 
                     
@@ -277,6 +285,15 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     if not pd.isna(raw_margin): margins = raw_margin * 100
                     
                     peg = get_val('peg')
+                    
+                    # 【新增】計算 Reverse DCF 隱含成長率
+                    t_eps = get_val('trailing_eps')
+                    # 若 API 沒有直接給 EPS，用 股價/PE 反推
+                    if pd.isna(t_eps) and not pd.isna(pe) and pe > 0 and not pd.isna(price):
+                        t_eps = price / pe
+                        
+                    if not pd.isna(price) and not pd.isna(t_eps):
+                        implied_g = calculate_implied_growth(price, t_eps)
                 
                 if tej_data and code in tej_data:
                     t_row = tej_data[code]
@@ -296,6 +313,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
                         '代號': code, '名稱': name, 'close_price': price,
                         'pe': pe, 'pb': pb, 'yield': dy, 'roe': roe,
                         'rev_growth': rev_growth, 'eps_growth': eps_growth, 'gross_margins': margins,
+                        'implied_growth': implied_g, # 【新增儲存】
                         'peg': peg, 'chips': chips,
                         'volatility': volatility, 'priceToMA60': ma_bias,
                         'industry': industry,
@@ -304,10 +322,9 @@ def batch_scan_stocks(stock_list, tej_data=None):
             except: continue
     
     df = pd.DataFrame(results)
-    cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'eps_growth', 'gross_margins', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
+    cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'eps_growth', 'gross_margins', 'implied_growth', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
     for c in cols:
         if c not in df.columns: df[c] = np.nan
-        
     return df, history_map
 
 # --- 8. 評分邏輯 ---
@@ -352,7 +369,7 @@ def check_buffett_criteria(row):
 def calculate_score(df, use_buffett=False):
     if df.empty: return df, None
     
-    required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'peg', 'volatility', 'roe', 'priceToMA60']
+    required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'implied_growth', 'peg', 'volatility', 'roe', 'priceToMA60']
     for col in required_cols:
         if col not in df.columns: df[col] = np.nan
     
@@ -529,7 +546,7 @@ def create_pdf(stock_data):
         ['收盤價 (Price)', f"{stock_data['close_price']}", '熵值分數 (Score)', f"{stock_data.get('Score', 'N/A')}"],
         ['本益比 (P/E)', safe_str(stock_data.get('pe')), 'PEG Ratio', safe_str(stock_data.get('peg'))],
         ['營收成長 (Rev Growth)', safe_str(stock_data.get('rev_growth'), "{:.2f}%"), 'EPS 成長 (EPS Growth)', safe_str(stock_data.get('eps_growth'), "{:.2f}%")],
-        ['毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.2f}%"), '殖利率 (Yield)', safe_str(stock_data.get('yield'), "{:.2f}%")],
+        ['毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.2f}%"), '市場隱含成長 (Implied Growth)', safe_str(stock_data.get('implied_growth')*100 if not pd.isna(stock_data.get('implied_growth')) else np.nan, "{:.2f}%")],
         ['波動率 (Volatility)', safe_str(stock_data.get('volatility'), "{:.1f}"), '季線乖離 (MA Bias)', safe_str(stock_data.get('priceToMA60'), "{:.1f}")]
     ]
     t = Table(metrics_data, colWidths=[120, 110, 120, 110])
@@ -561,10 +578,10 @@ def create_pdf(stock_data):
 
 AI_PROMPT = """
 請扮演華爾街基金經理人，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
-數據：PE=[PE], PEG=[PEG], 營收成長=[REV]%, EPS成長=[EPS_G]%, 毛利率=[GM]%, ROE=[ROE]%.
+數據：PE=[PE], PEG=[PEG], 營收成長=[REV]%, EPS成長=[EPS_G]%, 毛利率=[GM]%, 市場隱含成長率=[IMPLIED_G]%.
 重點：
-1. **成長品質**：營收與EPS是否同步成長？是否存在「虛胖」(營收增但EPS減)？
-2. **估值風險**：PEG是否合理？
+1. **成長品質**：營收與EPS是否同步成長？
+2. **Reverse DCF 安全邊際**：將「市場隱含成長率」與「實際EPS成長率」進行對比。如果市場隱含的期望低於實際表現，代表具備安全邊際；反之則有高估風險。
 3. **結論**：給出操作建議。
 請務必使用**繁體中文**回答。
 """
@@ -583,7 +600,6 @@ with st.sidebar:
     
     scan_mode = st.radio("模式選擇", ["🔥 熱門策略", "🏭 產業掃描", "⌨️ 自訂輸入"])
     
-    # 策略選單 (中英對照)
     strategies = {
         "🏆 台灣50 (TW50)": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2412.TW", "1301.TW"],
         "🤖 AI 伺服器 (AI Server)": ["2382.TW", "3231.TW", "6669.TW", "2376.TW", "3017.TW", "2356.TW"],
@@ -613,7 +629,7 @@ with st.sidebar:
 
     if st.button("🚀 啟動全自動掃描", type="primary"):
         st.session_state['scan_finished'] = False
-        with st.spinner("正在挖掘 Yahoo 數據 (含 EPS/毛利率 深度財報)..."):
+        with st.spinner("正在挖掘 Yahoo 數據並進行 Reverse DCF 運算..."):
             raw, hist_map = batch_scan_stocks(target_stocks, st.session_state['tej_data'])
             raw = sanitize_data(raw)
             st.session_state['raw_data'] = raw
@@ -623,8 +639,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 37.1")
-    st.caption("Name Resolution Fix + Robust Architecture")
+    st.title("⚡ 熵值決策選股平台 38.0")
+    st.caption("Reverse DCF Engine + Name Resolution Fix + Robust Architecture")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -637,7 +653,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         
         st.subheader("🏆 潛力標的排行")
         st.dataframe(
-            final_df[['代號', '名稱', 'industry', 'Score', 'Buffett', 'Quality', 'Strategy', 'rev_growth', 'eps_growth', 'gross_margins']],
+            final_df[['代號', '名稱', 'industry', 'Score', 'Buffett', 'Quality', 'Strategy', 'rev_growth', 'eps_growth', 'implied_growth']],
             column_config={
                 "industry": st.column_config.TextColumn("產業 (Industry)"),
                 "Score": st.column_config.ProgressColumn("戰力分數 (Score)", min_value=0, max_value=100, format="%.1f"),
@@ -645,7 +661,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 "Quality": st.column_config.TextColumn("品質 (Quality)"),
                 "rev_growth": st.column_config.NumberColumn("營收成長 (Rev Growth)", format="%.2f%%"),
                 "eps_growth": st.column_config.NumberColumn("EPS成長 (EPS Growth)", format="%.2f%%"),
-                "gross_margins": st.column_config.NumberColumn("毛利率 (Gross Margin)", format="%.2f%%"),
+                "implied_growth": st.column_config.NumberColumn("隱含成長(Reverse DCF)", format="%.2f"),
             },
             use_container_width=True, hide_index=True
         )
@@ -695,9 +711,31 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     </div>
                     """, unsafe_allow_html=True)
                     
+                    # 【核心視覺】Reverse DCF 面板
+                    implied_g = row.get('implied_growth', np.nan)
+                    actual_g = row.get('eps_growth', 0) / 100 # 統一為小數
+                    
+                    if not pd.isna(implied_g):
+                        if implied_g > actual_g + 0.1:
+                            dcf_status = "🔴 預期過高 (Overpriced)"
+                        elif implied_g < actual_g - 0.05:
+                            dcf_status = "🟢 安全邊際 (Margin of Safety)"
+                        else:
+                            dcf_status = "🟡 估值合理 (Fairly Priced)"
+                            
+                        st.markdown(f"""
+                        <div class='dcf-box'>
+                            <div style='font-size: 0.85rem; color: #9ca3af; font-weight: bold;'>Reverse DCF 估值檢驗 (r=10%, TV=2%)</div>
+                            <div style='display: flex; justify-content: space-between; margin-top: 8px;'>
+                                <span>市場隱含成長率: <b style='color: white; font-size: 1.1rem;'>{implied_g*100:.1f}%</b></span>
+                                <span style='font-weight: bold;'>{dcf_status}</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
                     b1, b2 = st.columns(2)
                     if b1.button(f"✨ AI 分析", key=f"ai_{idx}"):
-                        p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[EPS_G]", str(row.get('eps_growth'))).replace("[GM]", str(row.get('gross_margins'))).replace("[ROE]", str(row.get('roe')))
+                        p_txt = AI_PROMPT.replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])).replace("[PE]", str(row.get('pe'))).replace("[PEG]", str(row.get('peg'))).replace("[REV]", str(row.get('rev_growth'))).replace("[EPS_G]", str(row.get('eps_growth'))).replace("[GM]", str(row.get('gross_margins'))).replace("[IMPLIED_G]", str(safe_num(implied_g)*100)).replace("[ROE]", str(row.get('roe')))
                         an = call_ai(p_txt)
                         st.session_state['ai_results'][code] = an
                     
