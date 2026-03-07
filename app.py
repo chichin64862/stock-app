@@ -97,21 +97,35 @@ try:
 except Exception:
     st.error("⚠️ 系統偵測不到 API Key！")
 
-# --- 5. 字型下載與註冊 ---
+# --- 5. 字型下載與註冊 (唯一修改區塊：增強防護與備援) ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
-    url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
-    if not os.path.exists(font_path):
-        try:
-            r = requests.get(url, allow_redirects=True, timeout=10)
-            if r.status_code == 200:
-                with open(font_path, 'wb') as f: f.write(r.content)
-        except: return False
+    # 提供直連網址與 CDN 備援路線，避免 302 重新導向被擋
+    urls = [
+        "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
+        "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+    ]
+    
+    # 檢查檔案是否存在，或檔案太小 (可能抓到 404 HTML 錯誤頁面)
+    if not os.path.exists(font_path) or os.path.getsize(font_path) < 100000:
+        for url in urls:
+            try:
+                # 延長 timeout，確保 8MB 的字體能完整下載
+                r = requests.get(url, allow_redirects=True, timeout=30)
+                if r.status_code == 200:
+                    with open(font_path, 'wb') as f: 
+                        f.write(r.content)
+                    break # 下載成功就跳出迴圈
+            except:
+                continue
+                
     try:
         pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
         return True
-    except: return False
+    except Exception as e:
+        print(f"字體註冊失敗: {e}")
+        return False
 
 font_ready = setup_chinese_font()
 
@@ -532,7 +546,7 @@ def create_pdf(stock_data):
     h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue)
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
     
-    story.append(Paragraph(f"熵值決策選股及AI深度分析報告 (3D Matrix Report)", title_style))
+    story.append(Paragraph(f"熵值決策選股及AI深度分析報告 (Analysis Report)", title_style))
     story.append(Paragraph(f"生成時間 (Time): {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
     
@@ -651,8 +665,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 39.1")
-    st.caption("UI Whitespace Fix + 3D Decision Matrix")
+    st.title("⚡ 熵值決策選股平台 39.2")
+    st.caption("PDF Font Fix + 3D Decision Matrix")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -694,7 +708,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 if row['Quality'] == 'Profitless': quality_tag = "<span class='tag tag-warn'>⚠️ 虛胖/缺血警告</span>"
                 elif row['Quality'] == 'Quality': quality_tag = "<span class='tag tag-quality'>💎 護城河優良</span>"
                 
-                # 【修復】移除卡片 Header 的縮排
                 st.markdown(f"""<div class='stock-card'>
 <div class='card-header'>
 <div><span class='header-title'>{row['名稱']} ({code})</span><span class='header-price'>${row['close_price']}</span></div>
@@ -708,7 +721,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[idx])), use_container_width=True)
                 
                 with c2:
-                    # 【修復】移除 Markdown 字串內的縮排，防止被解析成 Code Block 導致白底破圖
                     st.markdown(f"""<div class='metrics-grid'>
 <div class='metric-item'><span class='m-label'>本益比 (P/E)</span><span class='m-val'>{safe_num(row.get('pe')):.2f}</span></div>
 <div class='metric-item'><span class='m-label'>PEG Ratio</span><span class='m-val'>{safe_num(row.get('peg')):.2f}</span></div>
@@ -732,7 +744,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         else:
                             dcf_status = "🟡 估值合理 (Fairly Priced)"
                             
-                        # 【修復】移除 DCF 區塊的縮排
                         st.markdown(f"""<div class='dcf-box'>
 <div style='font-size: 0.85rem; color: #9ca3af; font-weight: bold;'>Reverse DCF 估值檢驗 (r=10%, TV=2%)</div>
 <div style='display: flex; justify-content: space-between; margin-top: 8px;'>
