@@ -17,7 +17,7 @@ from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont # 【新增】內建亞洲字體庫，絕對防亂碼
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
@@ -98,22 +98,23 @@ try:
 except Exception:
     st.error("⚠️ 系統偵測不到 API Key！")
 
-# --- 5. 字型下載與註冊 (【核心修復1】雙重字體防護，根絕黑方塊) ---
+# --- 5. 字型下載與註冊 ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
     urls = [
         "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
-        "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+        "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanstc/NotoSansTC-Regular.ttf",
+        "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
     ]
     
-    # 策略 A: 嘗試下載高畫質 TTF 字體
     try:
+        # 強制確認下載的檔案不為空，確保字體包完整性
         if not os.path.exists(font_path) or os.path.getsize(font_path) < 100000:
             for url in urls:
                 try:
-                    r = requests.get(url, allow_redirects=True, timeout=15)
-                    if r.status_code == 200:
+                    r = requests.get(url, allow_redirects=True, timeout=30)
+                    if r.status_code == 200 and len(r.content) > 100000:
                         with open(font_path, 'wb') as f: 
                             f.write(r.content)
                         break 
@@ -122,12 +123,11 @@ def setup_chinese_font():
         pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
         return 'ChineseFont'
     except Exception as e:
-        # 策略 B: 如果雲端空間無法下載，啟用 PDF 內建標準 CID 中文字體 (100% 成功)
         try:
             pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
             return 'MSung-Light'
         except:
-            return 'Helvetica' # 極端異常的最後退路
+            return 'Helvetica'
 
 font_name_global = setup_chinese_font()
 
@@ -542,19 +542,23 @@ def create_pdf(stock_data):
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
     
-    # 【核心修復2】確保套用正確的全域字體
     font_name = font_name_global 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, alignment=1, spaceAfter=20)
     h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue)
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
     
-    story.append(Paragraph(f"熵值決策選股及AI深度分析報告 (3D Matrix Report)", title_style))
+    story.append(Paragraph(f"熵值決策選股及AI深度分析報告 (Analysis Report)", title_style))
     story.append(Paragraph(f"生成時間 (Time): {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
     
-    story.append(Paragraph(f"標的 (Target): {stock_data['名稱']} ({stock_data['代號']})", h2_style))
-    story.append(Paragraph(f"戰略指令 (Strategy): {stock_data['Strategy']}", normal_style))
+    # 【核心修復】解決 HTML 字元導致解析出錯與空 PDF 的問題
+    safe_name = str(stock_data.get('名稱', '')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    safe_code = str(stock_data.get('代號', '')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    safe_strat = str(stock_data.get('Strategy', '')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    story.append(Paragraph(f"標的 (Target): {safe_name} ({safe_code})", h2_style))
+    story.append(Paragraph(f"戰略指令 (Strategy): {safe_strat}", normal_style))
     
     rev_g = stock_data.get('rev_growth', 0); eps_g = stock_data.get('eps_growth', 0)
     fcf_y = stock_data.get('fcf_yield', 0)
@@ -569,7 +573,7 @@ def create_pdf(stock_data):
     metrics_data = [
         ['收盤價 (Price)', f"{stock_data['close_price']}", '熵值分數 (Score)', f"{stock_data.get('Score', 'N/A')}"],
         ['本益比 (P/E)', safe_str(stock_data.get('pe')), 'PEG Ratio', safe_str(stock_data.get('peg'))],
-        ['營收成長 (Rev YoY)', safe_str(stock_data.get('rev_growth'), "{:.2f}%"), 'EPS 成長 (EPS YoY)', safe_str(stock_data.get('eps_growth'), "{:.2f}%")],
+        ['營收成長 (Rev YoY)', safe_str(stock_data.get('rev_growth'), "{:.2f}%"), 'EPS 成長 (EPS Growth)', safe_str(stock_data.get('eps_growth'), "{:.2f}%")],
         ['負債權益比 (D/E)', safe_str(stock_data.get('de_ratio'), "{:.2f}%"), 'FCF 收益率', safe_str(stock_data.get('fcf_yield'), "{:.2f}%")],
         ['隱含成長率 (Implied G)', safe_str(stock_data.get('implied_growth')*100 if not pd.isna(stock_data.get('implied_growth')) else np.nan, "{:.2f}%"), '季線乖離 (MA Bias)', safe_str(stock_data.get('priceToMA60')*100 if not pd.isna(stock_data.get('priceToMA60')) else np.nan, "{:.1f}%")]
     ]
@@ -589,7 +593,8 @@ def create_pdf(stock_data):
     
     if 'ai_analysis' in stock_data and stock_data['ai_analysis']:
         story.append(Paragraph("AI 深度投資建議 (AI Investment Insights)", h2_style))
-        clean_text = stock_data['ai_analysis'].replace('**', '').replace('##', '')
+        # 【核心修復】轉義 AI 輸出的數學符號，防止 PDF 崩潰產生空檔
+        clean_text = stock_data['ai_analysis'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('**', '').replace('##', '')
         for line in clean_text.split('\n'):
             if line.strip():
                 story.append(Paragraph(line, normal_style))
@@ -600,7 +605,6 @@ def create_pdf(stock_data):
     buffer.seek(0)
     return buffer
 
-# 【核心修復2】AI 提示詞：加入強制今日日期錨點，根絕年份幻覺
 AI_PROMPT = """
 請扮演華爾街基金經理人，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
 【時間基準】今天是 [CURRENT_DATE]，請以最新視角撰寫，**絕對不要在報告中捏造或顯示過去的歷史日期**。
@@ -671,8 +675,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 39.3")
-    st.caption("PDF Font Guarantee + AI Time Anchor Fix")
+    st.title("⚡ 熵值決策選股平台 39.4")
+    st.caption("PDF Invisible Text Fix + Time Anchor")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
