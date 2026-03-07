@@ -23,7 +23,7 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Reverse DCF)", 
+    page_title="熵值決策選股平台 (Hotfix)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -72,7 +72,7 @@ st.markdown("""
     .m-val { color: #ffffff; font-weight: bold; font-size: 1.0rem; font-family: 'Courier New', monospace; }
     .m-high { color: #4ade80; } .m-warn { color: #f87171; }
     
-    /* 【新增】Reverse DCF 區塊 */
+    /* Reverse DCF 區塊 */
     .dcf-box {
         background-color: rgba(255, 215, 0, 0.05);
         border-left: 4px solid #FFD700;
@@ -123,7 +123,6 @@ def setup_chinese_font():
 font_ready = setup_chinese_font()
 
 # --- 6. 核心數據引擎 ---
-
 def create_resilient_session():
     session = requests.Session()
     retry = Retry(total=3, read=3, connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
@@ -170,7 +169,7 @@ def get_stock_data(symbol):
             'pb': g('priceToBook'),
             'rev_growth': g('revenueGrowth'),
             'eps_growth': g('earningsGrowth'),
-            'trailing_eps': g('trailingEps'), # 【新增】取得絕對 EPS 用於 DCF 計算
+            'trailing_eps': g('trailingEps'), 
             'gross_margins': g('grossMargins'),
             'yield': g('dividendYield'),
             'roe': g('returnOnEquity'),
@@ -186,43 +185,56 @@ def calculate_synthetic_peg(pe, growth_rate):
         return pe / (growth_rate * 100)
     return None
 
-# 【核心功能】Reverse DCF 二分逼近求解器
+# 【修復】補回遺失的數據清洗函式
+def sanitize_data(df):
+    if df.empty: return df
+    if 'yield' in df.columns:
+        # 將異常大的殖利率 (例如 400% 其實是 4%) 進行修正
+        df['yield'] = df['yield'].apply(lambda x: x/100 if x > 20 else x)
+    return df
+
+# Reverse DCF 二分逼近求解器
 def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
-    """
-    透過給定當前股價與 EPS，反向解出市場隱含的 EPS 成長率
-    r: 折現率 (Discount Rate, 預設 10%)
-    terminal_g: 永續成長率 (Terminal Growth, 預設 2%)
-    years: 預測期 (預設 10年)
-    """
     if pd.isna(price) or pd.isna(eps) or eps <= 0 or price <= 0:
         return np.nan
     
-    # 設定搜索邊界：從衰退 99% 到爆發性成長 300%
     low, high = -0.99, 3.0 
-    tolerance = 0.01 # 容差 1%
+    tolerance = 0.01 
     
-    for _ in range(100): # 最多疊代 100 次
+    for _ in range(100): 
         mid = (low + high) / 2
-        
-        # 計算現值 PV (Present Value)
         pv = sum([eps * ((1 + mid) ** t) / ((1 + r) ** t) for t in range(1, years + 1)])
-        # 計算終值 TV (Terminal Value) 並折現
         tv = (eps * ((1 + mid) ** years) * (1 + terminal_g)) / (r - terminal_g)
         calc_price = pv + tv / ((1 + r) ** years)
         
         diff = calc_price - price
-        
-        # 逼近完成
         if abs(diff) < tolerance:
             return mid
             
-        # 若算出來的價格太高，代表猜的成長率太高了，調降上限
         if diff > 0:
             high = mid
         else:
             low = mid
             
     return (low + high) / 2
+
+def process_tej_upload(uploaded_files):
+    if not uploaded_files: return None
+    tej_map = {}
+    if not isinstance(uploaded_files, list): uploaded_files = [uploaded_files]
+    for uploaded_file in uploaded_files:
+        try:
+            if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
+            else: df = pd.read_excel(uploaded_file)
+            df.columns = [str(c).strip() for c in df.columns]
+            code_col = next((c for c in df.columns if '代號' in c or 'Code' in c), None)
+            if not code_col: continue 
+            for _, row in df.iterrows():
+                raw_code = str(row[code_col]).split('.')[0].strip()
+                if raw_code in tej_map: tej_map[raw_code].update(row.to_dict())
+                else: tej_map[raw_code] = row.to_dict()
+        except: continue
+    return tej_map
 
 # --- 7. 批量掃描 ---
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -286,9 +298,8 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     
                     peg = get_val('peg')
                     
-                    # 【新增】計算 Reverse DCF 隱含成長率
+                    # 計算 Reverse DCF 隱含成長率
                     t_eps = get_val('trailing_eps')
-                    # 若 API 沒有直接給 EPS，用 股價/PE 反推
                     if pd.isna(t_eps) and not pd.isna(pe) and pe > 0 and not pd.isna(price):
                         t_eps = price / pe
                         
@@ -313,7 +324,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
                         '代號': code, '名稱': name, 'close_price': price,
                         'pe': pe, 'pb': pb, 'yield': dy, 'roe': roe,
                         'rev_growth': rev_growth, 'eps_growth': eps_growth, 'gross_margins': margins,
-                        'implied_growth': implied_g, # 【新增儲存】
+                        'implied_growth': implied_g,
                         'peg': peg, 'chips': chips,
                         'volatility': volatility, 'priceToMA60': ma_bias,
                         'industry': industry,
@@ -546,7 +557,7 @@ def create_pdf(stock_data):
         ['收盤價 (Price)', f"{stock_data['close_price']}", '熵值分數 (Score)', f"{stock_data.get('Score', 'N/A')}"],
         ['本益比 (P/E)', safe_str(stock_data.get('pe')), 'PEG Ratio', safe_str(stock_data.get('peg'))],
         ['營收成長 (Rev Growth)', safe_str(stock_data.get('rev_growth'), "{:.2f}%"), 'EPS 成長 (EPS Growth)', safe_str(stock_data.get('eps_growth'), "{:.2f}%")],
-        ['毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.2f}%"), '市場隱含成長 (Implied Growth)', safe_str(stock_data.get('implied_growth')*100 if not pd.isna(stock_data.get('implied_growth')) else np.nan, "{:.2f}%")],
+        ['毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.2f}%"), '隱含成長率 (Implied G)', safe_str(stock_data.get('implied_growth')*100 if not pd.isna(stock_data.get('implied_growth')) else np.nan, "{:.2f}%")],
         ['波動率 (Volatility)', safe_str(stock_data.get('volatility'), "{:.1f}"), '季線乖離 (MA Bias)', safe_str(stock_data.get('priceToMA60'), "{:.1f}")]
     ]
     t = Table(metrics_data, colWidths=[120, 110, 120, 110])
@@ -639,8 +650,8 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 38.0")
-    st.caption("Reverse DCF Engine + Name Resolution Fix + Robust Architecture")
+    st.title("⚡ 熵值決策選股平台 38.1")
+    st.caption("Reverse DCF Engine + Hotfix")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -711,9 +722,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # 【核心視覺】Reverse DCF 面板
                     implied_g = row.get('implied_growth', np.nan)
-                    actual_g = row.get('eps_growth', 0) / 100 # 統一為小數
+                    actual_g = row.get('eps_growth', 0) / 100 
                     
                     if not pd.isna(implied_g):
                         if implied_g > actual_g + 0.1:
