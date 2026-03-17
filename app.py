@@ -544,7 +544,6 @@ def create_pdf(stock_data):
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
     
     logic_name = "量化風控模型" if st.session_state['current_logic'] == "Quant" else "價值護城河模型"
-    # 【名稱更新】PDF 標題對齊新名稱
     story.append(Paragraph(f"台股量化與價值分析終端 - 綜合洞察報告 [{logic_name}]", title_style))
     story.append(Paragraph(f"產出時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
@@ -628,7 +627,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 匯入 TEJ (支援多檔)
     uploaded_files = st.file_uploader("📂 擴充資料源 (CSV/Excel)", type=['csv','xlsx'], accept_multiple_files=True)
     if uploaded_files: 
         st.session_state['tej_data'] = process_tej_upload(uploaded_files)
@@ -637,12 +635,10 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("資料池篩選")
     
-    # 【核心修改 2】多選與 ALL 功能
     scan_mode = st.radio("篩選維度", ["市場焦點策略", "產業族群板塊", "台灣 ETF 專區", "自訂代碼輸入"])
     
     target_stocks = []
     
-    # 定義選擇策略與邏輯連動
     if st.session_state['current_logic'] == "Buffett":
         strategies = {
             "台灣50 (護城河權值)": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2412.TW", "1301.TW"],
@@ -665,7 +661,6 @@ with st.sidebar:
         "海外與美股連結": ["00757.TW", "00646.TW", "00830.TW", "00662.TW"]
     }
     
-    # 處理各維度的多重選擇與 ALL 邏輯
     if scan_mode == "自訂代碼輸入":
         default = ["2330.TW 台積電", "2454.TW 聯發科", "0050.TW 元大台灣50"]
         options = sorted(list(stock_map.values())) if stock_map else default
@@ -677,7 +672,6 @@ with st.sidebar:
     elif scan_mode == "產業族群板塊":
         ind_keys = sorted(list(industry_map.keys()))
         selected_inds = st.multiselect("板塊選擇 (支援複選)", ["[ALL] 載入全部板塊"] + ind_keys)
-        
         if "[ALL] 載入全部板塊" in selected_inds:
             for k in ind_keys: target_stocks.extend(industry_map[k])
         else:
@@ -686,22 +680,19 @@ with st.sidebar:
     elif scan_mode == "台灣 ETF 專區":
         etf_keys = list(etf_strategies.keys())
         selected_etfs = st.multiselect("ETF 分類 (支援複選)", ["[ALL] 載入全部 ETF"] + etf_keys, default=[etf_keys[0]])
-        
         if "[ALL] 載入全部 ETF" in selected_etfs:
             for k in etf_keys: target_stocks.extend(etf_strategies[k])
         else:
             for k in selected_etfs: target_stocks.extend(etf_strategies[k])
             
-    else: # 市場焦點策略
+    else: 
         strat_keys = list(strategies.keys())
         selected_strats = st.multiselect(f"推薦策略池 (支援複選)", ["[ALL] 載入全部策略"] + strat_keys, default=[strat_keys[0]])
-        
         if "[ALL] 載入全部策略" in selected_strats:
             for k in strat_keys: target_stocks.extend(strategies[k])
         else:
             for k in selected_strats: target_stocks.extend(strategies[k])
 
-    # 去除重複的股票代號
     target_stocks = list(dict.fromkeys(target_stocks))
 
     if st.button("🚀 啟動終端運算", type="primary", use_container_width=True):
@@ -718,7 +709,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: Multi-Select, AI Insight, PDF Export")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: Portfolio, AI Insight, PDF Export")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -849,6 +840,51 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     st.markdown(f"<div class='ai-box'>{st.session_state['ai_results'][code]}</div>", unsafe_allow_html=True)
 
                 st.markdown("</div>", unsafe_allow_html=True)
+
+        # 【核心新增】模型專屬投資組合 (Model-Driven Portfolio)
+        st.markdown("---")
+        st.subheader("💼 系統嚴選：模型專屬投資組合 (Model-Driven Portfolio)")
+        
+        portfolio_df = final_df.head(10).copy()
+        
+        if len(portfolio_df) > 0:
+            c1, c2 = st.columns([1, 1])
+            
+            with c1:
+                st.markdown(f"**核心驅動：{logic_badge}**")
+                st.markdown("依據當前運算模型，由系統在您的篩選池中優化出的**等權重 (Equal-Weight)** 投資組合清單（最多 10 檔）：")
+                
+                port_display = portfolio_df[['代號', '名稱', 'industry', 'Score']].copy()
+                port_display['配置權重'] = "10.0%" if len(portfolio_df) >= 10 else f"{100.0/len(portfolio_df):.1f}%"
+                st.dataframe(port_display, hide_index=True, use_container_width=True)
+                
+            with c2:
+                fig_pie = px.pie(portfolio_df, names='industry', title="板塊曝險分佈 (Sector Exposure)", hole=0.4, color_discrete_sequence=px.colors.sequential.Tealgrn)
+                fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#D1D5DB'))
+                st.plotly_chart(fig_pie, use_container_width=True)
+                
+            # 組合整體面貌 (Aggregate Metrics)
+            avg_pe = portfolio_df['pe'].mean()
+            avg_yield = portfolio_df['yield'].mean()
+            
+            if current_logic == "Quant":
+                avg_sharpe = portfolio_df['sharpe'].mean()
+                avg_vol = portfolio_df['volatility'].mean() * 100
+                st.markdown(f"""<div class='metrics-grid' style='grid-template-columns: repeat(4, 1fr);'>
+<div class='metric-item'><span class='m-label'>組合平均本益比</span><span class='m-val'>{'N/A' if pd.isna(avg_pe) else f"{avg_pe:.2f}"}</span></div>
+<div class='metric-item'><span class='m-label'>組合平均殖利率</span><span class='m-val'>{'N/A' if pd.isna(avg_yield) else f"{avg_yield:.2f}%"}</span></div>
+<div class='metric-item'><span class='m-label'>組合平均夏普值</span><span class='m-val m-high'>{'N/A' if pd.isna(avg_sharpe) else f"{avg_sharpe:.2f}"}</span></div>
+<div class='metric-item'><span class='m-label'>組合平均波動率</span><span class='m-val'>{'N/A' if pd.isna(avg_vol) else f"{avg_vol:.1f}%"}</span></div>
+</div>""", unsafe_allow_html=True)
+            else:
+                avg_roe = portfolio_df['roe'].mean() * 100
+                avg_fcf = portfolio_df['fcf_yield'].mean()
+                st.markdown(f"""<div class='metrics-grid' style='grid-template-columns: repeat(4, 1fr);'>
+<div class='metric-item'><span class='m-label'>組合平均本益比</span><span class='m-val'>{'N/A' if pd.isna(avg_pe) else f"{avg_pe:.2f}"}</span></div>
+<div class='metric-item'><span class='m-label'>組合平均殖利率</span><span class='m-val'>{'N/A' if pd.isna(avg_yield) else f"{avg_yield:.2f}%"}</span></div>
+<div class='metric-item'><span class='m-label'>組合平均 ROE</span><span class='m-val m-high'>{'N/A' if pd.isna(avg_roe) else f"{avg_roe:.1f}%"}</span></div>
+<div class='metric-item'><span class='m-label'>組合平均 FCF 收益率</span><span class='m-val m-high'>{'N/A' if pd.isna(avg_fcf) else f"{avg_fcf:.2f}%"}</span></div>
+</div>""", unsafe_allow_html=True)
 
 elif not st.session_state['scan_finished']:
     st.info("👈 請在左側設定分析參數，並點擊「啟動終端運算」。")
