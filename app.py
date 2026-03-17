@@ -33,18 +33,16 @@ st.set_page_config(
 # --- 2. CSS 華爾街專業看盤軟體風格 (極致深色/高對比) ---
 st.markdown("""
 <style>
-    /* 強制極致深色背景，消滅白底破圖 */
     .stApp { background-color: #06090F !important; }
     [data-testid="stSidebar"] { background-color: #0D131F !important; border-right: 1px solid #1E293B !important; }
     h1, h2, h3, p, span, div, label { font-family: 'Segoe UI', Tahoma, sans-serif; color: #E2E8F0 !important; }
     
-    /* 股票卡片：彭博終端機風格 */
     .stock-card { 
         background-color: #0D131F !important; 
         padding: 16px 24px; 
         border-radius: 4px; 
         border: 1px solid #1E293B !important; 
-        border-left: 4px solid #3B82F6 !important; /* 科技藍側邊 */
+        border-left: 4px solid #3B82F6 !important; 
         margin-bottom: 24px; 
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
@@ -55,43 +53,43 @@ st.markdown("""
     .header-title { font-size: 1.4rem; font-weight: 700; color: #FFFFFF !important; letter-spacing: 1px; }
     .header-price { font-size: 1.4rem; font-weight: 700; color: #10B981 !important; margin-left: 16px; font-family: 'Consolas', monospace; }
     
-    /* 專業報價網格 (Quote Board) */
     .quote-board {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
-        background-color: #1E293B !important; /* 網格線顏色 */
+        background-color: #1E293B !important; 
         border: 1px solid #1E293B !important; border-radius: 4px;
     }
     .quote-item { 
-        background-color: #06090F !important; /* 儲存格底色，絕對防白底 */
+        background-color: #06090F !important; 
         padding: 12px 16px; display: flex; flex-direction: column; justify-content: center;
     }
     .q-label { color: #64748B !important; font-size: 0.75rem; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px; }
     .q-val { color: #F8FAFC !important; font-weight: 700; font-size: 1.15rem; font-family: 'Consolas', 'Courier New', monospace; }
     
-    /* 霓虹漲跌色系 (Bull/Bear) */
-    .q-up { color: #10B981 !important; }   /* 華爾街綠 */
-    .q-down { color: #EF4444 !important; } /* 警戒紅 */
-    .q-neu { color: #F59E0B !important; }  /* 警示黃 */
+    .q-up { color: #10B981 !important; }   
+    .q-down { color: #EF4444 !important; } 
+    .q-neu { color: #F59E0B !important; }  
     
-    /* 標籤設計 */
     .tag { padding: 3px 8px; border-radius: 2px; font-size: 0.75rem; font-weight: 700; margin-left: 8px; text-transform: uppercase; border: 1px solid; }
     .tag-moat { background-color: rgba(16, 185, 129, 0.1) !important; color: #10B981 !important; border-color: #10B981 !important; }
     .tag-risk { background-color: rgba(239, 68, 68, 0.1) !important; color: #EF4444 !important; border-color: #EF4444 !important; }
     .tag-logic { background-color: rgba(59, 130, 246, 0.1) !important; color: #3B82F6 !important; border-color: #3B82F6 !important; }
 
-    /* Reverse DCF 面板 */
     .dcf-panel {
         background-color: #0D131F !important; border: 1px solid #334155 !important; border-left: 3px solid #8B5CF6 !important;
         padding: 12px 16px; margin-top: 16px; border-radius: 2px;
     }
     
-    /* AI 區塊 */
     .ai-box {
         background-color: #0D131F !important; border: 1px solid #1E293B !important; border-left: 3px solid #3B82F6 !important;
         padding: 16px; margin-top: 16px; border-radius: 2px; font-size: 0.95rem; line-height: 1.6; color: #CBD5E1 !important;
     }
     
-    /* 按鈕專業化 */
+    /* 標籤解釋區塊 */
+    .explain-box {
+        background-color: #0F172A !important; border: 1px solid #334155 !important; border-left: 4px solid #F59E0B !important;
+        padding: 16px 20px; border-radius: 4px; margin-bottom: 24px; color: #E2E8F0 !important; line-height: 1.7; font-size: 0.95rem;
+    }
+    
     .stButton button, .stDownloadButton button { 
         background-color: #1E293B !important; border: 1px solid #334155 !important; 
         color: #F8FAFC !important; border-radius: 2px !important; font-weight: 600 !important;
@@ -108,7 +106,8 @@ if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = 
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
 if 'history_storage' not in st.session_state: st.session_state['history_storage'] = {}
 if 'ai_results' not in st.session_state: st.session_state['ai_results'] = {}
-if 'current_logic' not in st.session_state: st.session_state['current_logic'] = "Quant" # 預設切換為量化
+if 'current_logic' not in st.session_state: st.session_state['current_logic'] = "Quant" 
+if 'panel_page' not in st.session_state: st.session_state['panel_page'] = 1 # 分頁紀錄
 
 # --- 4. API Key ---
 try:
@@ -116,7 +115,7 @@ try:
 except Exception:
     st.error("系統偵測不到 API Key，AI 洞察功能將受限。")
 
-# --- 5. 字型下載與註冊 (100% 原封不動保留防黑方塊) ---
+# --- 5. 字型下載與註冊 ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -144,7 +143,7 @@ def setup_chinese_font():
 
 font_name_global = setup_chinese_font()
 
-# --- 6. 核心數據引擎 (100% 原封不動) ---
+# --- 6. 核心數據引擎 ---
 def create_resilient_session():
     session = requests.Session()
     retry = Retry(total=3, read=3, connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
@@ -353,7 +352,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
         if c not in df.columns: df[c] = np.nan
     return df, history_map
 
-# --- 8. 評分邏輯 (依據您要求的量化排序優化) ---
+# --- 8. 評分邏輯 ---
 def calculate_score(df, logic_type="Quant"):
     if df.empty: return df, None
     
@@ -376,7 +375,7 @@ def calculate_score(df, logic_type="Quant"):
         
         if logic_type == "Quant":
             config = {
-                'Sharpe': {'col': 'sharpe', 'dir': 'max', 'w': 4.0, 'cat': '動能'}, # 極度強化夏普值比重
+                'Sharpe': {'col': 'sharpe', 'dir': 'max', 'w': 4.0, 'cat': '動能'},
                 'Volatility': {'col': 'volatility', 'dir': 'min', 'w': 2.0, 'cat': '風險'},
                 'Beta': {'col': 'beta', 'dir': 'mid', 'w': 1.0, 'cat': '風險'}, 
             }
@@ -496,7 +495,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     )
     return fig
 
-# --- 10. AI 與 PDF (100% 原封不動) ---
+# --- 10. AI 與 PDF ---
 def get_valid_model(key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
@@ -521,8 +520,7 @@ def call_ai(prompt):
     try:
         session = create_resilient_session()
         r = session.post(url, headers=headers, json=data, timeout=60)
-        if r.status_code == 200:
-            return r.json()['candidates'][0]['content']['parts'][0]['text']
+        if r.status_code == 200: return r.json()['candidates'][0]['content']['parts'][0]['text']
         else: return f"分析服務暫時無回應 (代碼: {r.status_code})"
     except Exception as e: return "分析服務連線逾時，請稍後再試。"
 
@@ -606,7 +604,31 @@ AI_PROMPT_TEMPLATE = """
 3. **操作結論**：結合中長期均線乖離狀況，給出客觀且具體的行動建議。
 """
 
-# --- 11. 主程式介面 ---
+# --- 11. 標籤解析函數 (動態生成原因) ---
+def get_tag_explanation(row, logic_type):
+    tag = row.get('Quality', '')
+    sharpe = row.get('sharpe', 0)
+    roe = (row.get('roe', 0)*100) if not pd.isna(row.get('roe')) else 0
+    gm = row.get('gross_margins', 0)
+    fcf = row.get('fcf_yield', 0)
+    de = row.get('de_ratio', 0)
+    
+    if logic_type == "Quant":
+        if tag == "高夏普 (CP值)":
+            return f"**為什麼被系統評定為「高夏普 (CP值)」？**<br>此標的近期年化夏普值高達 **{sharpe:.2f}**（系統門檻為 > 1.0）。在量化模型中，這代表投資人每承擔 1 單位的波動風險，就能獲得超過 1 單位的超額報酬，屬於極具盈虧比（CP值）的強勢動能標的。"
+        elif tag == "動能疲弱":
+            return f"**為什麼被系統評定為「動能疲弱」？**<br>此標的夏普值為 **{sharpe:.2f}**（小於 0）。這意味著其近期的報酬率甚至低於無風險利率（定存或公債），承擔了市場波動卻無法換取正向的超額利潤。"
+        else:
+            return "**標籤說明**<br>該標的各項量化指標（夏普值、波動率）落在市場均值區間，表現平穩，未觸發極端強勢或弱勢的演算法警示。"
+    else:
+        if tag == "護城河優良":
+            return f"**為什麼被系統評定為「護城河優良」？**<br>此標的完美符合巴菲特的核心護城河條件：<br>1. **高資本效率**：ROE 達 **{roe:.1f}%** (標準 > 15%)。<br>2. **強大定價權**：毛利率達 **{gm:.1f}%** (標準 > 40%)。<br>3. **真實變現力**：自由現金流收益率為正且無過度舉債。這是一檔擁有深厚經濟壁壘的優質資產。"
+        elif tag == "財務風險":
+            return f"**為什麼被系統評定為「財務風險」？**<br>系統偵測到其存在潛在危機：負債權益比(D/E) 高達 **{de:.1f}%**，或自由現金流收益率低至 **{fcf:.2f}%**。這代表該公司可能正在靠過度舉債擴張，或賺到的盈餘無法轉換為真實現金，具有高度「虛胖」或「資金斷鏈」風險。"
+        else:
+            return "**標籤說明**<br>該標的在財務體質（ROE、毛利率、現金流）上表現中規中矩，雖未達巴菲特嚴苛的「絕對護城河」標準，但也無明顯的財務致命傷。"
+
+# --- 12. 主程式介面 ---
 with st.sidebar:
     st.title("⚙️ 終端控制面板")
     
@@ -617,11 +639,9 @@ with st.sidebar:
         index=0, label_visibility="collapsed"
     )
     st.session_state['current_logic'] = "Quant" if "量化" in logic_choice_tw else "Buffett"
-    
     st.markdown("---")
     
     scan_mode = st.radio("篩選維度", ["市場焦點策略", "產業族群板塊", "台灣 ETF 專區", "自訂代碼輸入"])
-    
     target_stocks = []
     
     if st.session_state['current_logic'] == "Buffett":
@@ -678,10 +698,11 @@ with st.sidebar:
         else:
             for k in selected_strats: target_stocks.extend(strategies[k])
 
-    target_stocks = list(dict.fromkeys(target_stocks)) # 過濾重複
+    target_stocks = list(dict.fromkeys(target_stocks)) 
 
     if st.button("🚀 啟動終端運算", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False
+        st.session_state['panel_page'] = 1 # 每次重新掃描，分頁歸零
         with st.spinner(f"正在擷取並運算 {len(target_stocks)} 檔標的數據..."):
             raw, hist_map = batch_scan_stocks(target_stocks, st.session_state['tej_data'])
             raw = sanitize_data(raw)
@@ -695,7 +716,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | UI: Brokerage Dark")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: Interactive Selection, Smart Pagination")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -707,8 +728,11 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
     else:
         final_df, df_norm = calculate_score(df, logic_type=current_logic)
         
+        # 【核心升級 1】互動式檢索清單 (on_select="rerun")
         st.subheader("🏆 終端檢索清單")
-        st.dataframe(
+        st.caption("💡 提示：點擊下方表格內的任意一筆資料，即可直接跳轉查看該標的的「系統標籤說明」與「深度檢驗面板」。再次點擊即可取消選取。")
+        
+        df_event = st.dataframe(
             final_df[['代號', '名稱', 'industry', 'Score', 'Quality', 'Strategy', 'sharpe', 'roe', 'fcf_yield', 'implied_growth']],
             column_config={
                 "industry": st.column_config.TextColumn("產業/板塊"),
@@ -719,20 +743,50 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 "fcf_yield": st.column_config.NumberColumn("FCF收益", format="%.1f%%"),
                 "implied_growth": st.column_config.NumberColumn("隱含成長", format="%.2f"),
             },
-            use_container_width=True, hide_index=True
+            use_container_width=True, hide_index=True,
+            on_select="rerun", selection_mode="single-row" # 開啟互動模式
         )
         
         st.markdown("---")
-        st.subheader("🎯 個股深度檢驗面板")
         
+        selected_rows = df_event.selection.rows
+        
+        # 【核心升級 2】點擊後的單檔標籤解析與顯示邏輯
+        if selected_rows:
+            sel_idx = selected_rows[0]
+            sel_row = final_df.iloc[sel_idx]
+            
+            st.subheader(f"💡 系統標籤深度解析：{sel_row['名稱']} ({sel_row['代號']})")
+            explanation = get_tag_explanation(sel_row, current_logic)
+            st.markdown(f"<div class='explain-box'>{explanation}</div>", unsafe_allow_html=True)
+            
+            st.subheader("🎯 個股深度檢驗面板 (單檔檢視)")
+            st.info("📌 目前為「單檔檢視模式」。若要恢復分頁模式瀏覽全部標的，請在上方清單中再次點擊以取消選取。")
+            display_df = final_df.iloc[[sel_idx]]
+            
+        # 【核心升級 3】無點擊時的全覽分頁模式
+        else:
+            st.subheader("🎯 個股深度檢驗面板 (全覽分頁)")
+            
+            total_stocks = len(final_df)
+            items_per_page = 5
+            total_pages = max(1, (total_stocks - 1) // items_per_page + 1)
+            
+            if st.session_state['panel_page'] > total_pages:
+                st.session_state['panel_page'] = total_pages
+                
+            start_idx = (st.session_state['panel_page'] - 1) * items_per_page
+            end_idx = start_idx + items_per_page
+            display_df = final_df.iloc[start_idx:end_idx]
+            
         def safe_num(val): return 0 if (pd.isna(val) or val is None) else val
         def get_color_class(val, inverse=False):
             if pd.isna(val) or val == 0: return ""
             if inverse: return "q-up" if val < 0 else "q-down"
             return "q-up" if val > 0 else "q-down"
 
-        # 顯示前 10 檔作為面板檢視
-        for idx, row in final_df.head(10).iterrows():
+        # 輸出面板 (依據 display_df，可能是 1 檔或 5 檔)
+        for idx, row in display_df.iterrows():
             code = row['代號']
             
             with st.container():
@@ -745,7 +799,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     
                 logic_tag = f"<span class='tag tag-logic'>{logic_badge}</span>"
                 
-                # HTML 卡片: 確保所有字體顏色與背景色在自定義 CSS 內絕對鎖死
                 st.markdown(f"""<div class='stock-card'>
 <div class='card-header'>
 <div><span class='header-title'>{row['名稱']} ({code})</span><span class='header-price'>${row['close_price']}</span></div>
@@ -759,7 +812,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[idx])), use_container_width=True)
                 
                 with c2:
-                    # 專業報價網格 (添加漲跌顏色)
                     sharpe_val = safe_num(row.get('sharpe'))
                     sh_color = "q-up" if sharpe_val > 1 else ("q-down" if sharpe_val < 0 else "")
                     rev_val = safe_num(row.get('rev_growth'))
@@ -784,7 +836,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         elif implied_g < actual_g - 0.05: dcf_status = "<span class='q-up'>🟢 具安全邊際</span>"
                         else: dcf_status = "<span class='q-neu'>🟡 估值公允</span>"
                         st.markdown(f"""<div class='dcf-panel'>
-<div style='font-size: 0.8rem; color: #9CA3AF; font-weight: 600;'>REVERSE DCF 估值模型 (r=10%, TV=2%)</div>
+<div style='font-size: 0.8rem; color: #9CA3AF; font-weight: 600; text-transform: uppercase;'>REVERSE DCF 估值模型 (r=10%, TV=2%)</div>
 <div style='display: flex; justify-content: space-between; margin-top: 6px; align-items: baseline;'>
 <span style='color: #F8FAFC;'>市場隱含期望: <b style='font-size: 1.2rem; font-family: Consolas;'>{implied_g*100:.1f}%</b></span>
 <span style='font-weight: 700; font-size: 0.95rem;'>{dcf_status}</span>
@@ -839,20 +891,32 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
+        # 【核心升級 3】分頁導覽控制 UI (僅在全覽模式下顯示)
+        if not selected_rows:
+            st.markdown("<br>", unsafe_allow_html=True)
+            col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
+            with col_p1:
+                if st.button("⬅️ 上一頁", use_container_width=True, disabled=(st.session_state['panel_page'] == 1)):
+                    st.session_state['panel_page'] -= 1
+                    st.rerun()
+            with col_p2:
+                st.markdown(f"<div style='text-align: center; color: #9CA3AF; padding-top: 8px;'>第 <b>{st.session_state['panel_page']}</b> 頁 / 共 <b>{total_pages}</b> 頁 (總計 {total_stocks} 檔)</div>", unsafe_allow_html=True)
+            with col_p3:
+                if st.button("下一頁 ➡️", use_container_width=True, disabled=(st.session_state['panel_page'] == total_pages)):
+                    st.session_state['panel_page'] += 1
+                    st.rerun()
+
         # =========================================================
-        # 【核心新增】💼 林哲群教授：紀律長贏資產配置模組
+        # 💼 林哲群教授：紀律長贏資產配置模組
         # =========================================================
         st.markdown("---")
         st.subheader("💼 【紀律長贏】系統嚴選：模型專屬投資組合 (Top 10)")
         
         if current_logic == "Quant":
             st.caption("依據林哲群教授 (2026) 著作理論實踐：優先篩選 **高夏普值 (>1.0)** 確保單元風險報酬，次依 **低標準差 (波動率)** 排序控制絕對風險，並呈現 Beta 供投資人調控大盤關聯度。")
-            # 邏輯 1：篩選夏普 > 1.0
             port_df = final_df[final_df['sharpe'] > 1.0].copy()
-            # 若符合條件不足 10 檔，以整體夏普值最高者補足
             if len(port_df) < 10:
                 port_df = final_df.nlargest(10, 'sharpe').copy()
-            # 邏輯 2：依據低波動排序
             port_df = port_df.sort_values(by='volatility', ascending=True).head(10)
         else:
             st.caption("依據巴菲特護城河理論：優先篩選 **ROE > 15%** 與 **毛利率 > 40%**，並要求具備正向現金流能力。")
@@ -864,7 +928,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         if len(port_df) > 0:
             c1, c2 = st.columns([1.5, 1])
             with c1:
-                # 顯示等權重組合
                 port_display = port_df[['代號', '名稱', 'industry', 'sharpe', 'volatility', 'beta', 'roe']].copy()
                 port_display['配置權重'] = f"{100.0/len(port_df):.1f}%"
                 
@@ -882,7 +945,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 )
                 
             with c2:
-                # 組合整體面貌
                 avg_sharpe = port_df['sharpe'].mean()
                 avg_vol = port_df['volatility'].mean() * 100
                 avg_beta = port_df['beta'].mean()
@@ -906,7 +968,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # 產業圓餅圖
                 fig_pie = px.pie(port_df, names='industry', hole=0.5, color_discrete_sequence=px.colors.sequential.Blues_r)
                 fig_pie.update_layout(
                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
