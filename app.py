@@ -24,7 +24,7 @@ from reportlab.lib import colors
 
 # --- 1. 介面設定 ---
 st.set_page_config(
-    page_title="熵值決策選股平台 (Dual Engine)", 
+    page_title="熵值決策選股平台 (Dynamic UI & ETF)", 
     page_icon="🦅", 
     layout="wide", 
     initial_sidebar_state="expanded"
@@ -59,7 +59,6 @@ st.markdown("""
     .tag-warn { background-color: #b91c1c; color: white; border: 1px solid #ef4444; }
     .tag-quality { background-color: #7c3aed; color: white; border: 1px solid #8b5cf6; }
     
-    /* 升級為 3x4 網格以容納夏普值與Beta */
     .metrics-grid {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
         background-color: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px;
@@ -99,7 +98,7 @@ try:
 except Exception:
     st.error("⚠️ 系統偵測不到 API Key！")
 
-# --- 5. 字型下載與註冊 (保留防黑方塊修復) ---
+# --- 5. 字型下載與註冊 ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -136,6 +135,7 @@ def create_resilient_session():
     session.mount('https://', adapter)
     return session
 
+# 【核心修改 1】支援 ETF 資料寫入
 def get_tw_stock_list():
     try:
         import twstock
@@ -143,12 +143,17 @@ def get_tw_stock_list():
         stock_map = {}
         industry_map = {}
         for code, info in codes.items():
-            if info.type == '股票':
+            # 開放 ETF 進入清單
+            if info.type in ['股票', 'ETF']:
                 suffix = '.TW' if info.market == '上市' else '.TWO'
                 full = f"{code}{suffix}"
                 stock_map[full] = f"{full} {info.name}"
-                if info.group not in industry_map: industry_map[info.group] = []
-                industry_map[info.group].append(full)
+                
+                # 如果是 ETF，通常沒有 group，我們手動賦予 'ETF' 分類
+                group = info.group if info.group else info.type
+                if group not in industry_map: industry_map[group] = []
+                industry_map[group].append(full)
+                
         return stock_map, industry_map
     except: return {}, {}
 
@@ -226,12 +231,12 @@ def process_tej_upload(uploaded_files):
         except: continue
     return tej_map
 
-# --- 7. 批量掃描 (加入夏普值計算) ---
+# --- 7. 批量掃描 ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def batch_scan_stocks(stock_list, tej_data=None):
     results = []
     history_map = {} 
-    RISK_FREE_RATE = 0.015 # 台灣無風險利率假設 1.5%
+    RISK_FREE_RATE = 0.015 
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_to_stock = {executor.submit(get_stock_data, s.split(' ')[0]): s for s in stock_list}
@@ -269,9 +274,8 @@ def batch_scan_stocks(stock_list, tej_data=None):
                             ma60 = closes.rolling(60).mean().iloc[-1]
                             if not pd.isna(ma60): ma_bias = (price / ma60) - 1
                             
-                            # 【新增】計算夏普值 (Sharpe Ratio)
                             ret_6m = (closes.iloc[-1] / closes.iloc[0]) - 1
-                            ann_ret = ret_6m * 2 # 簡單年化
+                            ann_ret = ret_6m * 2 
                             if volatility > 0 and not pd.isna(volatility):
                                 sharpe = (ann_ret - RISK_FREE_RATE) / volatility
                     
@@ -314,6 +318,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
                 if code in ['2330', '2454', '2303', '3034', '3035', '2379', '2382', '3231']: industry = 'Semicon'
                 elif code.startswith('28') or code in ['5880']: industry = 'Finance'
                 elif code in ['1101', '1301', '2002', '2603', '1802', '1605']: industry = 'Cyclical'
+                elif code.startswith('00'): industry = 'ETF' # ETF 簡單識別
 
                 if not pd.isna(price):
                     results.append({
@@ -335,7 +340,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
         if c not in df.columns: df[c] = np.nan
     return df, history_map
 
-# --- 8. 評分邏輯 (雙引擎重構) ---
+# --- 8. 評分邏輯 ---
 def calculate_score(df, logic_type="Buffett"):
     if df.empty: return df, None
     
@@ -352,20 +357,17 @@ def calculate_score(df, logic_type="Buffett"):
     fill_map['pe'] = 50; fill_map['volatility'] = 0.5; fill_map['beta'] = 1.0; fill_map['de_ratio'] = 100
     calc_df = df.fillna(fill_map)
 
-    # 【核心】雙引擎評分權重定義
     for idx, row in calc_df.iterrows():
         total_score = 0
         total_weight = 0
         
         if logic_type == "Quant":
-            # 1. 量化風控模型 (Quant Risk Model)
             config = {
                 'Sharpe': {'col': 'sharpe', 'dir': 'max', 'w': 3.0, 'cat': '動能'},
                 'Volatility': {'col': 'volatility', 'dir': 'min', 'w': 2.0, 'cat': '風險'},
-                'Beta': {'col': 'beta', 'dir': 'mid', 'w': 1.0, 'cat': '風險'}, # Beta 偏好適中(不極端)
+                'Beta': {'col': 'beta', 'dir': 'mid', 'w': 1.0, 'cat': '風險'}, 
             }
         else:
-            # 2. 巴菲特護城河模型 (Buffett Value Model)
             config = {
                 'ROE': {'col': 'roe', 'dir': 'max', 'w': 2.0, 'cat': '財報'},
                 'GrossMargin': {'col': 'gross_margins', 'dir': 'max', 'w': 2.0, 'cat': '財報'},
@@ -381,7 +383,7 @@ def calculate_score(df, logic_type="Buffett"):
             
             if setting['dir'] == 'max': norm = rank
             elif setting['dir'] == 'min': norm = 1 - rank
-            else: norm = 1 - abs(rank - 0.5)*2 # 越靠近中位數越好 (針對Beta)
+            else: norm = 1 - abs(rank - 0.5)*2 
                 
             df_norm.loc[idx, f'{setting["cat"]}_n'] = norm * 100
             total_score += norm * 100 * setting['w']
@@ -390,7 +392,6 @@ def calculate_score(df, logic_type="Buffett"):
         final = total_score / total_weight if total_weight > 0 else 50
         scores.append(round(final, 1))
         
-        # 產生動態標籤與策略
         q_tag = ""
         if logic_type == "Quant":
             sh = row.get('sharpe', 0)
@@ -404,7 +405,7 @@ def calculate_score(df, logic_type="Buffett"):
             elif vol > 0.5: plans.append("⚠️ 高波動風險 (Warning)")
             else: plans.append("🟡 觀望 (Wait)")
             
-        else: # Buffett Logic
+        else: 
             roe = row.get('roe', 0)
             gm = row.get('gross_margins', 0)
             de = row.get('de_ratio', 100)
@@ -577,7 +578,6 @@ def create_pdf(stock_data):
     buffer.seek(0)
     return buffer
 
-# 【核心升級】動態 AI 提示詞模板
 AI_PROMPT_TEMPLATE = """
 請扮演華爾街基金經理人，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
 【時間基準】今天是 [CURRENT_DATE]，請以最新視角撰寫，**絕對不要捏造過去日期**。
@@ -589,6 +589,7 @@ AI_PROMPT_TEMPLATE = """
 1. 量化風險：夏普值=[SHARPE], 波動率=[VOL]%, Beta=[BETA].
 2. 價值護城河：ROE=[ROE]%, 毛利率=[GM]%, FCF收益率=[FCF_Y]%, 負債權益比=[DE]%, EPS成長=[EPS_G]%.
 3. 估值與時機：PE=[PE], Reverse DCF 隱含成長=[IMPLIED_G]%, 季線乖離=[MA_BIAS]%.
+(註：若標的為ETF，財報數據如ROE、毛利率為 N/A 屬正常現象，請專注於量化風險與時機分析)
 
 【輸出要求】
 請依照用戶選擇的「[LOGIC_NAME]」模型視角，輸出三大模塊：
@@ -602,7 +603,6 @@ AI_PROMPT_TEMPLATE = """
 with st.sidebar:
     st.title("🎛️ 決策控制台")
     
-    # 【核心新增】選股邏輯切換器
     st.subheader("🧠 核心選股邏輯")
     logic_choice_tw = st.radio(
         "請選擇演算法核心", 
@@ -619,33 +619,53 @@ with st.sidebar:
             st.session_state['tej_data'] = process_tej_upload(uploaded_files)
             st.success(f"已載入 TEJ 數據 (共 {len(uploaded_files)} 檔)")
     
-    scan_mode = st.radio("模式選擇", ["🔥 熱門策略", "🏭 產業掃描", "⌨️ 自訂輸入"])
+    # 【核心修改 2】UI 選單與策略連動
+    scan_mode = st.radio("模式選擇", ["🔥 熱門策略", "🏭 產業掃描", "📈 台灣 ETF", "⌨️ 自訂輸入"])
     
-    strategies = {
-        "🏆 台灣50 (TW50)": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2412.TW", "1301.TW"],
-        "🤖 AI 伺服器 (AI Server)": ["2382.TW", "3231.TW", "6669.TW", "2376.TW", "3017.TW", "2356.TW"],
-        "💰 高股息殖利率 (High Yield)": ["2454.TW", "2303.TW", "2357.TW", "1101.TW", "2891.TW", "0056.TW"],
-        "🍎 蘋果概念股 (Apple Concept)": ["2330.TW", "2317.TW", "3008.TW", "4938.TW", "2313.TW"],
-        "🚗 電動車與車電 (EV/Auto)": ["2308.TW", "2317.TW", "6235.TW", "1536.TW", "5425.TW"],
-        "🏦 金融保險 (Financials)": ["2881.TW", "2882.TW", "2886.TW", "2891.TW", "5880.TW", "2884.TW"],
-        "🚢 傳產與航運 (Cyclical/Shipping)": ["2603.TW", "2609.TW", "2002.TW", "1301.TW", "1303.TW", "1605.TW"]
+    # 依據選擇的邏輯，顯示不同的熱門策略
+    if st.session_state['current_logic'] == "Buffett":
+        strategies = {
+            "🏆 台灣50 (護城河權值)": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2412.TW", "1301.TW"],
+            "💰 高股息與穩健 (現金流)": ["2454.TW", "2303.TW", "2357.TW", "1101.TW", "2891.TW"],
+            "🏦 金融保險 (防禦收息)": ["2881.TW", "2882.TW", "2886.TW", "2891.TW", "5880.TW", "2884.TW"],
+            "🚢 傳產與航運 (景氣循環價值)": ["2603.TW", "2609.TW", "2002.TW", "1301.TW", "1303.TW", "1605.TW"]
+        }
+    else: # Quant Logic
+        strategies = {
+            "🚀 動能爆發 (高夏普/動能)": ["2382.TW", "3231.TW", "6669.TW", "2376.TW", "3017.TW", "3661.TW"],
+            "🛡️ 低波動防禦 (低標準差)": ["2412.TW", "3045.TW", "2881.TW", "2892.TW", "1101.TW"],
+            "🍎 蘋果與消費電 (Beta循環)": ["2330.TW", "2317.TW", "3008.TW", "4938.TW", "2313.TW"],
+            "🚗 電動車與車電 (趨勢Beta)": ["2308.TW", "2317.TW", "6235.TW", "1536.TW", "5425.TW"]
+        }
+        
+    # ETF 專屬策略分類
+    etf_strategies = {
+        "📊 市值型 ETF (跟隨大盤)": ["0050.TW", "006208.TW", "00692.TW", "00881.TW"],
+        "💰 高股息 ETF (穩定配息)": ["0056.TW", "00878.TW", "00919.TW", "00929.TW", "00713.TW"],
+        "🚀 科技與半導體 ETF": ["00891.TW", "00892.TW", "00881.TW", "00830.TW"],
+        "🌐 海外與美股 ETF": ["00757.TW", "00646.TW", "00830.TW", "00662.TW"]
     }
     
     target_stocks = []
     if scan_mode == "⌨️ 自訂輸入":
-        default = ["2330.TW 台積電", "2317.TW 鴻海", "2454.TW 聯發科", "2881.TW 富邦金"]
+        default = ["2330.TW 台積電", "2317.TW 鴻海", "2454.TW 聯發科", "0050.TW 元大台灣50"]
         options = sorted(list(stock_map.values())) if stock_map else default
-        selected = st.multiselect("選擇股票", options, default=[s for s in default if s in options])
-        manual = st.text_input("手動輸入代號", "")
+        selected = st.multiselect("選擇股票 / ETF", options, default=[s for s in default if s in options])
+        manual = st.text_input("手動輸入代號 (如 0050)", "")
         target_stocks = selected
         if manual: target_stocks.append(f"{manual}.TW")
         
     elif scan_mode == "🏭 產業掃描":
         ind_list = sorted(list(industry_map.keys()))
-        ind = st.selectbox("選擇產業", ind_list)
+        ind = st.selectbox("選擇產業 (含 ETF)", ind_list)
         if ind: target_stocks = [stock_map[c] for c in industry_map[ind] if c in stock_map]
-    else:
-        strat_name = st.selectbox("策略集", list(strategies.keys()))
+        
+    elif scan_mode == "📈 台灣 ETF":
+        strat_name = st.selectbox("選擇 ETF 類型", list(etf_strategies.keys()))
+        target_stocks = etf_strategies[strat_name]
+        
+    else: # 🔥 熱門策略
+        strat_name = st.selectbox(f"選擇策略 ({st.session_state['current_logic']} 推薦)", list(strategies.keys()))
         target_stocks = strategies[strat_name]
 
     if st.button("🚀 啟動全自動掃描", type="primary"):
@@ -660,9 +680,9 @@ with st.sidebar:
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("⚡ 熵值決策選股平台 40.0")
+    st.title("⚡ 熵值決策選股平台 40.1")
     logic_badge = "📊 量化風控" if st.session_state['current_logic'] == "Quant" else "👴 價值護城河"
-    st.caption(f"目前啟動引擎：**{logic_badge}** | PDF Font Guarantee + 3x4 Matrix")
+    st.caption(f"目前啟動引擎：**{logic_badge}** | Dynamic UI + ETF Support")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -672,17 +692,16 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
     if df.empty:
         st.error("❌ 查無數據，請檢查代號或網路。")
     else:
-        # 套用新的雙引擎計分邏輯
         final_df, df_norm = calculate_score(df, logic_type=current_logic)
         
         st.subheader("🏆 潛力標的排行")
         st.dataframe(
             final_df[['代號', '名稱', 'industry', 'Score', 'Quality', 'Strategy', 'sharpe', 'roe', 'fcf_yield', 'implied_growth']],
             column_config={
-                "industry": st.column_config.TextColumn("產業"),
+                "industry": st.column_config.TextColumn("產業/屬性"),
                 "Score": st.column_config.ProgressColumn("系統分數", min_value=0, max_value=100, format="%.1f"),
-                "Quality": st.column_config.TextColumn("屬性標籤"),
-                "sharpe": st.column_config.NumberColumn("夏普值(Sharpe)", format="%.2f"),
+                "Quality": st.column_config.TextColumn("標籤"),
+                "sharpe": st.column_config.NumberColumn("夏普值", format="%.2f"),
                 "roe": st.column_config.NumberColumn("ROE", format="%.1f"),
                 "fcf_yield": st.column_config.NumberColumn("FCF收益", format="%.1f%%"),
                 "implied_growth": st.column_config.NumberColumn("隱含成長", format="%.2f"),
@@ -701,14 +720,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             with st.container():
                 industry_tag = f"<span class='tag tag-sector'>{row['industry']}</span>"
                 
-                # 依據模型給予不同標籤顏色
                 q_tag = row['Quality']
-                if q_tag in ["High CP", "Moat", "Quality"]:
-                    quality_tag = f"<span class='tag tag-quality'>💎 {q_tag}</span>"
-                elif q_tag in ["Low CP", "Toxic Debt", "Profitless"]:
-                    quality_tag = f"<span class='tag tag-warn'>⚠️ {q_tag}</span>"
-                else:
-                    quality_tag = ""
+                if q_tag in ["High CP", "Moat", "Quality"]: quality_tag = f"<span class='tag tag-quality'>💎 {q_tag}</span>"
+                elif q_tag in ["Low CP", "Toxic Debt", "Profitless"]: quality_tag = f"<span class='tag tag-warn'>⚠️ {q_tag}</span>"
+                else: quality_tag = ""
                     
                 logic_tag = f"<span class='tag tag-logic'>{logic_badge}</span>"
                 
@@ -725,17 +740,16 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[idx])), use_container_width=True)
                 
                 with c2:
-                    # 【升級】3x4 數據矩陣 (加入夏普、波動、Beta、ROE)
                     st.markdown(f"""<div class='metrics-grid'>
 <div class='metric-item'><span class='m-label'>夏普值 (Sharpe)</span><span class='m-val m-high'>{safe_num(row.get('sharpe')):.2f}</span></div>
 <div class='metric-item'><span class='m-label'>波動率 (Volatility)</span><span class='m-val'>{safe_num(row.get('volatility'))*100:.1f}%</span></div>
 <div class='metric-item'><span class='m-label'>Beta (對盤連動)</span><span class='m-val'>{safe_num(row.get('beta')):.2f}</span></div>
-<div class='metric-item'><span class='m-label'>ROE (權益報酬)</span><span class='m-val m-high'>{safe_num(row.get('roe'))*100 if row.get('roe') and row.get('roe')<1 else safe_num(row.get('roe')):.1f}%</span></div>
-<div class='metric-item'><span class='m-label'>毛利率 (Gross Margin)</span><span class='m-val m-high'>{safe_num(row.get('gross_margins')):.1f}%</span></div>
-<div class='metric-item'><span class='m-label'>EPS成長 (EPS YoY)</span><span class='m-val m-high'>{safe_num(row.get('eps_growth')):.1f}%</span></div>
-<div class='metric-item'><span class='m-label'>本益比 (P/E)</span><span class='m-val'>{safe_num(row.get('pe')):.2f}</span></div>
-<div class='metric-item'><span class='m-label'>FCF 收益率</span><span class='m-val'>{safe_num(row.get('fcf_yield')):.2f}%</span></div>
-<div class='metric-item'><span class='m-label'>負債權益比 (D/E)</span><span class='m-val'>{safe_num(row.get('de_ratio')):.1f}%</span></div>
+<div class='metric-item'><span class='m-label'>ROE (權益報酬)</span><span class='m-val m-high'>{"N/A" if pd.isna(row.get('roe')) else f"{safe_num(row.get('roe'))*100 if row.get('roe') and row.get('roe')<1 else safe_num(row.get('roe')):.1f}%"}</span></div>
+<div class='metric-item'><span class='m-label'>毛利率 (Gross Margin)</span><span class='m-val m-high'>{"N/A" if pd.isna(row.get('gross_margins')) else f"{safe_num(row.get('gross_margins')):.1f}%"}</span></div>
+<div class='metric-item'><span class='m-label'>EPS成長 (EPS YoY)</span><span class='m-val m-high'>{"N/A" if pd.isna(row.get('eps_growth')) else f"{safe_num(row.get('eps_growth')):.1f}%"}</span></div>
+<div class='metric-item'><span class='m-label'>本益比 (P/E)</span><span class='m-val'>{"N/A" if pd.isna(row.get('pe')) else f"{safe_num(row.get('pe')):.2f}"}</span></div>
+<div class='metric-item'><span class='m-label'>FCF 收益率</span><span class='m-val'>{"N/A" if pd.isna(row.get('fcf_yield')) else f"{safe_num(row.get('fcf_yield')):.2f}%"}</span></div>
+<div class='metric-item'><span class='m-label'>季線乖離 (MA Bias)</span><span class='m-val'>{safe_num(row.get('priceToMA60'))*100:.1f}%</span></div>
 </div>""", unsafe_allow_html=True)
                     
                     implied_g = row.get('implied_growth', np.nan)
@@ -754,8 +768,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     b1, b2 = st.columns(2)
                     if b1.button(f"✨ {logic_badge} AI 分析", key=f"ai_{idx}"):
                         current_today = datetime.now().strftime('%Y年%m月%d日')
-                        
-                        # 動態寫入邏輯敘述
                         if current_logic == "Quant":
                             l_name = "量化風控模型 (Quant Risk Model)"
                             l_desc = "請優先看重『夏普值(大於1為佳)』確保CP值，其次看『波動率(越低越好)』控制絕對風險，並解釋『Beta值』代表的市場曝險程度。"
