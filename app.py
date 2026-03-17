@@ -128,42 +128,45 @@ try:
 except Exception:
     st.error("系統偵測不到 API Key，AI 洞察功能將受限。")
 
-# --- 5. 字型下載與註冊 (【終極修復】強力下載機制，根絕 PDF 隱形文字) ---
+# --- 5. 字型下載與註冊 (【終極防護】保證 PDF 絕不空白) ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
     
-    # 1. 檢查本地是否已有完整字體檔
-    if os.path.exists(font_path) and os.path.getsize(font_path) > 1000000:
-        try:
-            pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
-            return 'ChineseFont'
+    if os.path.exists(font_path) and os.path.getsize(font_path) < 1000000:
+        try: os.remove(font_path)
         except: pass
 
-    # 2. 備援下載點
-    urls = [
-        "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
-        "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanstc/NotoSansTC-Regular.ttf"
-    ]
-    
-    for url in urls:
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=30) as response, open(font_path, 'wb') as out_file:
-                out_file.write(response.read())
-            
-            if os.path.getsize(font_path) > 1000000:
-                pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
-                return 'ChineseFont'
-        except Exception as e:
-            continue
-            
-    # 3. 終極退路
+    if not os.path.exists(font_path):
+        urls = [
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
+            "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+        ]
+        for url in urls:
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=30) as response, open(font_path, 'wb') as out_file:
+                    out_file.write(response.read())
+                if os.path.getsize(font_path) > 1000000:
+                    break
+            except Exception:
+                continue
+                
     try:
-        pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
-        return 'MSung-Light'
+        if os.path.exists(font_path) and os.path.getsize(font_path) > 1000000:
+            pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+            return 'ChineseFont'
+    except Exception: pass
+    
+    # 終極備援：如果 TTF 下載失敗，啟用廣泛支援的 CID 宋體
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        return 'STSong-Light'
     except:
-        return 'Helvetica'
+        try:
+            pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
+            return 'MSung-Light'
+        except: return 'Helvetica'
 
 font_name_global = setup_chinese_font()
 
@@ -548,6 +551,7 @@ def call_ai(prompt):
         else: return f"分析服務暫時無回應 (代碼: {r.status_code})"
     except Exception as e: return "分析服務連線逾時，請稍後再試。"
 
+# 【核心更新 2】對齊深度面板的所有數據，並確保 AI 內容被安全寫入
 def create_pdf(stock_data):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -563,25 +567,27 @@ def create_pdf(stock_data):
     story.append(Paragraph(f"產出時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
     
-    # 【核心修復2】徹底轉義所有標題、名稱、內容中的 HTML 符號，杜絕 PDF 空白當機
     safe_name = html.escape(str(stock_data.get('名稱', '')))
     safe_code = html.escape(str(stock_data.get('代號', '')))
-    safe_strat = html.escape(str(stock_data.get('Strategy', '')))
     
     story.append(Paragraph(f"分析標的: {safe_name} ({safe_code})", h2_style))
-    story.append(Paragraph(f"系統判定: {safe_strat}", normal_style))
     story.append(Spacer(1, 10))
     
     def safe_str(val, fmt="{:.2f}"):
         try: return "N/A" if (pd.isna(val) or val is None) else fmt.format(float(val))
         except: return "N/A"
 
+    # 完整對應 3x3 網格的所有數據 (9個+分數與價格)
     metrics_data = [
+        ['綜合評分 (Score)', f"{stock_data.get('Score', 'N/A')}", '收盤價 (Price)', f"{stock_data.get('close_price', 'N/A')}"],
         ['夏普值 (Sharpe)', safe_str(stock_data.get('sharpe')), '波動率 (Volatility)', safe_str(stock_data.get('volatility')*100 if not pd.isna(stock_data.get('volatility')) else np.nan, "{:.1f}%")],
-        ['ROE (%)', safe_str(stock_data.get('roe')*100 if not pd.isna(stock_data.get('roe')) else np.nan, "{:.2f}%"), '毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.2f}%")],
-        ['負債權益比 (D/E)', safe_str(stock_data.get('de_ratio'), "{:.2f}%"), 'FCF 收益率', safe_str(stock_data.get('fcf_yield'), "{:.2f}%")],
-        ['隱含成長率 (Implied G)', safe_str(stock_data.get('implied_growth')*100 if not pd.isna(stock_data.get('implied_growth')) else np.nan, "{:.2f}%"), 'Beta (風險係數)', safe_str(stock_data.get('beta'), "{:.2f}")]
+        ['Beta (風險係數)', safe_str(stock_data.get('beta'), "{:.2f}"), '季線乖離 (MA Bias)', safe_str(stock_data.get('priceToMA60')*100 if not pd.isna(stock_data.get('priceToMA60')) else np.nan, "{:.1f}%")],
+        ['ROE (權益報酬)', safe_str(stock_data.get('roe')*100 if not pd.isna(stock_data.get('roe')) else np.nan, "{:.1f}%"), '毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.1f}%")],
+        ['營收 YoY (Rev Growth)', safe_str(stock_data.get('rev_growth'), "{:.1f}%"), 'EPS YoY (EPS Growth)', safe_str(stock_data.get('eps_growth'), "{:.1f}%")],
+        ['本益比 (P/E)', safe_str(stock_data.get('pe')), 'FCF 收益率 (FCF Yield)', safe_str(stock_data.get('fcf_yield'), "{:.2f}%")],
+        ['負債權益比 (D/E)', safe_str(stock_data.get('de_ratio'), "{:.1f}%"), '隱含成長率 (Implied G)', safe_str(stock_data.get('implied_growth')*100 if not pd.isna(stock_data.get('implied_growth')) else np.nan, "{:.1f}%")]
     ]
+    
     t = Table(metrics_data, colWidths=[120, 110, 120, 110])
     t.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), font_name),
@@ -598,10 +604,10 @@ def create_pdf(stock_data):
     
     if 'ai_analysis' in stock_data and stock_data['ai_analysis']:
         story.append(Paragraph("AI 系統深度洞察", h2_style))
-        # 【核心修復2】徹底轉義 AI 輸出的文字，避免報表引擎因為讀到 < 標籤而崩潰
         clean_text = stock_data['ai_analysis']
         for line in clean_text.split('\n'):
             if line.strip():
+                # 終極轉義，避免 <> 符號破壞 XML 結構
                 safe_line = html.escape(line.strip()).replace('**', '').replace('##', '')
                 story.append(Paragraph(safe_line, normal_style))
                 story.append(Spacer(1, 5))
@@ -737,7 +743,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: PDF Bug Fix & Tactical Portfolio")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: PDF Flow Fix, Full Panel Report")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -859,43 +865,80 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
 <span style='font-weight: 700; font-size: 0.95rem;'>{dcf_status}</span>
 </div></div>""", unsafe_allow_html=True)
                     
-                    b1, b2 = st.columns(2)
-                    if b1.button(f"🧠 執行 AI 洞察", key=f"ai_{idx}"):
-                        current_today = datetime.now().strftime('%Y年%m月%d日')
-                        if current_logic == "Quant":
-                            l_name = "量化風控模型"
-                            l_desc = "優先考量夏普值(CP值)與波動率(風險)，並解釋Beta值。"
-                        else:
-                            l_name = "價值護城河模型"
-                            l_desc = "優先考量ROE、毛利率、FCF現金流收益率，防禦高負債風險。"
-
-                        p_txt = AI_PROMPT_TEMPLATE.replace("[LOGIC_NAME]", l_name) \
-                            .replace("[LOGIC_DESC]", l_desc) \
-                            .replace("[STOCK]", row['名稱']) \
-                            .replace("[SECTOR]", str(row['industry'])) \
-                            .replace("[CURRENT_DATE]", current_today) \
-                            .replace("[SHARPE]", str(safe_num(row.get('sharpe')))) \
-                            .replace("[VOL]", str(safe_num(row.get('volatility'))*100)) \
-                            .replace("[BETA]", str(safe_num(row.get('beta')))) \
-                            .replace("[ROE]", str(safe_num(row.get('roe'))*100 if row.get('roe') and row.get('roe')<1 else safe_num(row.get('roe')))) \
-                            .replace("[GM]", str(safe_num(row.get('gross_margins')))) \
-                            .replace("[FCF_Y]", str(safe_num(row.get('fcf_yield')))) \
-                            .replace("[DE]", str(safe_num(row.get('de_ratio')))) \
-                            .replace("[EPS_G]", str(safe_num(row.get('eps_growth')))) \
-                            .replace("[PE]", str(safe_num(row.get('pe')))) \
-                            .replace("[IMPLIED_G]", str(safe_num(implied_g)*100)) \
-                            .replace("[MA_BIAS]", str(safe_num(row.get('priceToMA60'))*100))
-                        
-                        an = call_ai(p_txt)
-                        st.session_state['ai_results'][code] = an
+                    # 【核心修改 1】邏輯強制綁定：AI 執行後才顯示 PDF 輸出按鈕
+                    c_btn1, c_btn2 = st.columns(2)
                     
-                    pdf_payload = row.to_dict()
-                    if code in st.session_state['ai_results']:
-                        pdf_payload['ai_analysis'] = st.session_state['ai_results'][code]
-                    
-                    pdf = create_pdf(pdf_payload)
-                    file_name_dl = f"{code} {row['名稱']} ({(row.get('full_symbol', code))})_Report.pdf"
-                    b2.download_button("📥 輸出 PDF 報告", pdf, file_name_dl, key=f"dl_{idx}")
+                    if code not in st.session_state['ai_results']:
+                        # 如果還沒有 AI 結果，只顯示執行 AI 按鈕
+                        with c_btn1:
+                            if st.button(f"🧠 執行 AI 洞察", key=f"ai_{idx}"):
+                                current_today = datetime.now().strftime('%Y年%m月%d日')
+                                if current_logic == "Quant":
+                                    l_name = "量化風控模型"
+                                    l_desc = "優先考量夏普值(CP值)與波動率(風險)，並解釋Beta值。"
+                                else:
+                                    l_name = "價值護城河模型"
+                                    l_desc = "優先考量ROE、毛利率、FCF現金流收益率，防禦高負債風險。"
+        
+                                p_txt = AI_PROMPT_TEMPLATE.replace("[LOGIC_NAME]", l_name) \
+                                    .replace("[LOGIC_DESC]", l_desc) \
+                                    .replace("[STOCK]", row['名稱']) \
+                                    .replace("[SECTOR]", str(row['industry'])) \
+                                    .replace("[CURRENT_DATE]", current_today) \
+                                    .replace("[SHARPE]", str(safe_num(row.get('sharpe')))) \
+                                    .replace("[VOL]", str(safe_num(row.get('volatility'))*100)) \
+                                    .replace("[BETA]", str(safe_num(row.get('beta')))) \
+                                    .replace("[ROE]", str(safe_num(row.get('roe'))*100 if row.get('roe') and row.get('roe')<1 else safe_num(row.get('roe')))) \
+                                    .replace("[GM]", str(safe_num(row.get('gross_margins')))) \
+                                    .replace("[FCF_Y]", str(safe_num(row.get('fcf_yield')))) \
+                                    .replace("[DE]", str(safe_num(row.get('de_ratio')))) \
+                                    .replace("[EPS_G]", str(safe_num(row.get('eps_growth')))) \
+                                    .replace("[PE]", str(safe_num(row.get('pe')))) \
+                                    .replace("[IMPLIED_G]", str(safe_num(implied_g)*100)) \
+                                    .replace("[MA_BIAS]", str(safe_num(row.get('priceToMA60'))*100))
+                                
+                                an = call_ai(p_txt)
+                                st.session_state['ai_results'][code] = an
+                                st.rerun() # 重新載入以顯示分析結果與 PDF 按鈕
+                    else:
+                        # 已經有 AI 結果了，顯示重新執行按鈕與 PDF 輸出按鈕
+                        with c_btn1:
+                            if st.button(f"🔄 更新 AI 洞察", key=f"ai_re_{idx}"):
+                                current_today = datetime.now().strftime('%Y年%m月%d日')
+                                if current_logic == "Quant":
+                                    l_name = "量化風控模型"
+                                    l_desc = "優先考量夏普值(CP值)與波動率(風險)，並解釋Beta值。"
+                                else:
+                                    l_name = "價值護城河模型"
+                                    l_desc = "優先考量ROE、毛利率、FCF現金流收益率，防禦高負債風險。"
+        
+                                p_txt = AI_PROMPT_TEMPLATE.replace("[LOGIC_NAME]", l_name) \
+                                    .replace("[LOGIC_DESC]", l_desc) \
+                                    .replace("[STOCK]", row['名稱']) \
+                                    .replace("[SECTOR]", str(row['industry'])) \
+                                    .replace("[CURRENT_DATE]", current_today) \
+                                    .replace("[SHARPE]", str(safe_num(row.get('sharpe')))) \
+                                    .replace("[VOL]", str(safe_num(row.get('volatility'))*100)) \
+                                    .replace("[BETA]", str(safe_num(row.get('beta')))) \
+                                    .replace("[ROE]", str(safe_num(row.get('roe'))*100 if row.get('roe') and row.get('roe')<1 else safe_num(row.get('roe')))) \
+                                    .replace("[GM]", str(safe_num(row.get('gross_margins')))) \
+                                    .replace("[FCF_Y]", str(safe_num(row.get('fcf_yield')))) \
+                                    .replace("[DE]", str(safe_num(row.get('de_ratio')))) \
+                                    .replace("[EPS_G]", str(safe_num(row.get('eps_growth')))) \
+                                    .replace("[PE]", str(safe_num(row.get('pe')))) \
+                                    .replace("[IMPLIED_G]", str(safe_num(implied_g)*100)) \
+                                    .replace("[MA_BIAS]", str(safe_num(row.get('priceToMA60'))*100))
+                                
+                                an = call_ai(p_txt)
+                                st.session_state['ai_results'][code] = an
+                                st.rerun()
+                                
+                        with c_btn2:
+                            pdf_payload = row.to_dict()
+                            pdf_payload['ai_analysis'] = st.session_state['ai_results'][code]
+                            pdf = create_pdf(pdf_payload)
+                            file_name_dl = f"{code} {row['名稱']} ({(row.get('full_symbol', code))})_Report.pdf"
+                            st.download_button("📥 輸出 PDF 報告", pdf, file_name_dl, key=f"dl_{idx}")
 
                 with c3:
                     if code in hist_storage and not hist_storage[code].empty:
@@ -903,6 +946,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     else:
                         st.warning("無 K 線數據")
 
+                # 如果有 AI 分析結果，則顯示在面板最下方
                 if code in st.session_state['ai_results']:
                     st.markdown(f"<div class='ai-box'>{st.session_state['ai_results'][code]}</div>", unsafe_allow_html=True)
 
@@ -923,7 +967,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     st.rerun()
 
         # =========================================================
-        # 💼 林哲群教授：紀律長贏資產配置模組
+        # 💼 林哲群教授：紀律長贏資產配置模組 (戰略分類)
         # =========================================================
         st.markdown("---")
         st.subheader("💼 【紀律長贏】系統嚴選：模型專屬投資組合 (Top 10)")
