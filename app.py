@@ -22,81 +22,82 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# --- 1. 介面設定 (專業名稱) ---
+# --- 1. 介面設定 (專業終端名稱) ---
 st.set_page_config(
     page_title="台股量化與價值分析終端", 
-    page_icon="📊", 
+    page_icon="Terminal", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 專業儀表板風格 (俐落三色系：深藍/專業藍/灰白) ---
+# --- 2. CSS 華爾街專業看盤軟體風格 (極致深色/高對比) ---
 st.markdown("""
 <style>
-    /* 全域背景：深海藍 */
-    .stApp { background-color: #0B0F19 !important; }
-    [data-testid="stSidebar"] { background-color: #111827 !important; border-right: 1px solid #1F2937; }
-    h1, h2, h3, p, span, div, label { color: #F3F4F6 !important; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    /* 強制極致深色背景，消滅白底破圖 */
+    .stApp { background-color: #06090F !important; }
+    [data-testid="stSidebar"] { background-color: #0D131F !important; border-right: 1px solid #1E293B !important; }
+    h1, h2, h3, p, span, div, label { font-family: 'Segoe UI', Tahoma, sans-serif; color: #E2E8F0 !important; }
     
-    /* 選單樣式：專業極簡 */
-    div[role="listbox"] ul { background-color: #1F2937 !important; border: 1px solid #374151; }
-    li[role="option"] { color: #F3F4F6 !important; background-color: #1F2937 !important; }
-    li[role="option"]:hover { background-color: #2563EB !important; color: white !important; }
-    input { background-color: #111827 !important; color: white !important; border: 1px solid #374151 !important; border-radius: 4px !important; }
-    
-    /* 股票卡片：方正俐落 */
+    /* 股票卡片：彭博終端機風格 */
     .stock-card { 
-        background-color: #111827; padding: 20px; border-radius: 6px; 
-        border: 1px solid #1F2937; margin-bottom: 20px; 
-        border-left: 4px solid #2563EB; /* 專業藍色側邊條 */
+        background-color: #0D131F !important; 
+        padding: 16px 24px; 
+        border-radius: 4px; 
+        border: 1px solid #1E293B !important; 
+        border-left: 4px solid #3B82F6 !important; /* 科技藍側邊 */
+        margin-bottom: 24px; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
     .card-header {
-        display: flex; justify-content: space-between; align-items: center;
-        border-bottom: 1px solid #1F2937; padding-bottom: 12px; margin-bottom: 15px;
+        display: flex; justify-content: space-between; align-items: flex-end;
+        border-bottom: 1px solid #1E293B !important; padding-bottom: 12px; margin-bottom: 16px;
     }
-    .header-title { font-size: 1.5rem; font-weight: 600; color: #FFFFFF; letter-spacing: 0.5px; }
-    .header-price { font-size: 1.2rem; color: #9CA3AF; margin-left: 12px; font-family: 'Courier New', Courier, monospace;}
+    .header-title { font-size: 1.4rem; font-weight: 700; color: #FFFFFF !important; letter-spacing: 1px; }
+    .header-price { font-size: 1.4rem; font-weight: 700; color: #10B981 !important; margin-left: 16px; font-family: 'Consolas', monospace; }
     
-    /* 標籤：收斂色彩，微圓角 */
-    .tag { padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; margin-left: 6px; letter-spacing: 0.5px; }
-    .tag-logic { background-color: #1E3A8A; color: #BFDBFE; border: 1px solid #1D4ED8; }
-    .tag-sector { background-color: #374151; color: #E5E7EB; border: 1px solid #4B5563; }
-    .tag-warn { background-color: #7F1D1D; color: #FECACA; border: 1px solid #991B1B; }
-    .tag-quality { background-color: #064E3B; color: #BBF7D0; border: 1px solid #065F46; }
-    
-    /* 數據網格 */
-    .metrics-grid {
+    /* 專業報價網格 (Quote Board) */
+    .quote-board {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
-        background-color: #1F2937; padding: 1px; border-radius: 4px; border: 1px solid #374151;
+        background-color: #1E293B !important; /* 網格線顏色 */
+        border: 1px solid #1E293B !important; border-radius: 4px;
     }
-    .metric-item { 
-        display: flex; flex-direction: column; align-items: flex-start; justify-content: center; 
-        background-color: #111827; padding: 12px;
+    .quote-item { 
+        background-color: #06090F !important; /* 儲存格底色，絕對防白底 */
+        padding: 12px 16px; display: flex; flex-direction: column; justify-content: center;
     }
-    .m-label { color: #9CA3AF; font-size: 0.8rem; margin-bottom: 4px; text-transform: uppercase; }
-    .m-val { color: #FFFFFF; font-weight: bold; font-size: 1.1rem; font-family: 'Courier New', monospace; }
-    .m-high { color: #34D399; } .m-warn { color: #F87171; }
+    .q-label { color: #64748B !important; font-size: 0.75rem; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .q-val { color: #F8FAFC !important; font-weight: 700; font-size: 1.15rem; font-family: 'Consolas', 'Courier New', monospace; }
     
-    /* Reverse DCF 區塊 */
-    .dcf-box {
-        background-color: #111827; border: 1px solid #374151; border-left: 4px solid #8B5CF6;
-        padding: 12px 15px; margin-top: 15px; border-radius: 4px;
+    /* 霓虹漲跌色系 (Bull/Bear) */
+    .q-up { color: #10B981 !important; }   /* 華爾街綠 */
+    .q-down { color: #EF4444 !important; } /* 警戒紅 */
+    .q-neu { color: #F59E0B !important; }  /* 警示黃 */
+    
+    /* 標籤設計 */
+    .tag { padding: 3px 8px; border-radius: 2px; font-size: 0.75rem; font-weight: 700; margin-left: 8px; text-transform: uppercase; border: 1px solid; }
+    .tag-moat { background-color: rgba(16, 185, 129, 0.1) !important; color: #10B981 !important; border-color: #10B981 !important; }
+    .tag-risk { background-color: rgba(239, 68, 68, 0.1) !important; color: #EF4444 !important; border-color: #EF4444 !important; }
+    .tag-logic { background-color: rgba(59, 130, 246, 0.1) !important; color: #3B82F6 !important; border-color: #3B82F6 !important; }
+
+    /* Reverse DCF 面板 */
+    .dcf-panel {
+        background-color: #0D131F !important; border: 1px solid #334155 !important; border-left: 3px solid #8B5CF6 !important;
+        padding: 12px 16px; margin-top: 16px; border-radius: 2px;
     }
     
     /* AI 區塊 */
     .ai-box {
-        background-color: #111827; border: 1px solid #1F2937; border-left: 4px solid #3B82F6;
-        padding: 15px; margin-top: 15px; border-radius: 4px;
-        font-size: 0.95rem; line-height: 1.6; color: #D1D5DB;
+        background-color: #0D131F !important; border: 1px solid #1E293B !important; border-left: 3px solid #3B82F6 !important;
+        padding: 16px; margin-top: 16px; border-radius: 2px; font-size: 0.95rem; line-height: 1.6; color: #CBD5E1 !important;
     }
     
-    /* 按鈕：專業藍色系 */
-    .stDownloadButton button, .stButton button { 
-        background-color: #1F2937 !important; border: 1px solid #374151 !important; 
-        color: #F3F4F6 !important; border-radius: 4px !important; font-weight: 600 !important;
+    /* 按鈕專業化 */
+    .stButton button, .stDownloadButton button { 
+        background-color: #1E293B !important; border: 1px solid #334155 !important; 
+        color: #F8FAFC !important; border-radius: 2px !important; font-weight: 600 !important;
     }
-    .stDownloadButton button:hover, .stButton button:hover { 
-        border-color: #3B82F6 !important; color: #3B82F6 !important; background-color: #111827 !important;
+    .stButton button:hover, .stDownloadButton button:hover { 
+        border-color: #3B82F6 !important; color: #3B82F6 !important; background-color: #0D131F !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -107,22 +108,21 @@ if 'scan_finished' not in st.session_state: st.session_state['scan_finished'] = 
 if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
 if 'history_storage' not in st.session_state: st.session_state['history_storage'] = {}
 if 'ai_results' not in st.session_state: st.session_state['ai_results'] = {}
-if 'current_logic' not in st.session_state: st.session_state['current_logic'] = "Buffett"
+if 'current_logic' not in st.session_state: st.session_state['current_logic'] = "Quant" # 預設切換為量化
 
 # --- 4. API Key ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
-    st.error("系統偵測不到 API Key，部分 AI 功能可能受限。")
+    st.error("系統偵測不到 API Key，AI 洞察功能將受限。")
 
-# --- 5. 字型下載與註冊 ---
+# --- 5. 字型下載與註冊 (100% 原封不動保留防黑方塊) ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
     urls = [
         "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
-        "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanstc/NotoSansTC-Regular.ttf",
-        "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+        "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanstc/NotoSansTC-Regular.ttf"
     ]
     try:
         if not os.path.exists(font_path) or os.path.getsize(font_path) < 100000:
@@ -133,20 +133,18 @@ def setup_chinese_font():
                         with open(font_path, 'wb') as f: 
                             f.write(r.content)
                         break 
-                except:
-                    continue
+                except: continue
         pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
         return 'ChineseFont'
-    except Exception as e:
+    except Exception:
         try:
             pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
             return 'MSung-Light'
-        except:
-            return 'Helvetica'
+        except: return 'Helvetica'
 
 font_name_global = setup_chinese_font()
 
-# --- 6. 核心數據引擎 ---
+# --- 6. 核心數據引擎 (100% 原封不動) ---
 def create_resilient_session():
     session = requests.Session()
     retry = Retry(total=3, read=3, connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
@@ -355,8 +353,8 @@ def batch_scan_stocks(stock_list, tej_data=None):
         if c not in df.columns: df[c] = np.nan
     return df, history_map
 
-# --- 8. 評分邏輯 ---
-def calculate_score(df, logic_type="Buffett"):
+# --- 8. 評分邏輯 (依據您要求的量化排序優化) ---
+def calculate_score(df, logic_type="Quant"):
     if df.empty: return df, None
     
     required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'fcf_yield', 'de_ratio', 'beta', 'sharpe', 'implied_growth', 'peg', 'volatility', 'roe', 'priceToMA60']
@@ -378,16 +376,16 @@ def calculate_score(df, logic_type="Buffett"):
         
         if logic_type == "Quant":
             config = {
-                'Sharpe': {'col': 'sharpe', 'dir': 'max', 'w': 3.0, 'cat': '動能'},
+                'Sharpe': {'col': 'sharpe', 'dir': 'max', 'w': 4.0, 'cat': '動能'}, # 極度強化夏普值比重
                 'Volatility': {'col': 'volatility', 'dir': 'min', 'w': 2.0, 'cat': '風險'},
                 'Beta': {'col': 'beta', 'dir': 'mid', 'w': 1.0, 'cat': '風險'}, 
             }
         else:
             config = {
                 'ROE': {'col': 'roe', 'dir': 'max', 'w': 2.0, 'cat': '財報'},
-                'GrossMargin': {'col': 'gross_margins', 'dir': 'max', 'w': 2.0, 'cat': '財報'},
+                'GrossMargin': {'col': 'gross_margins', 'dir': 'max', 'w': 1.5, 'cat': '財報'},
                 'FCF_Yield': {'col': 'fcf_yield', 'dir': 'max', 'w': 2.0, 'cat': '價值'},
-                'DE_Ratio': {'col': 'de_ratio', 'dir': 'min', 'w': 2.0, 'cat': '風險'},
+                'DE_Ratio': {'col': 'de_ratio', 'dir': 'min', 'w': 1.5, 'cat': '風險'},
                 'EPS_Growth': {'col': 'eps_growth', 'dir': 'max', 'w': 1.0, 'cat': '成長'},
             }
             
@@ -412,8 +410,8 @@ def calculate_score(df, logic_type="Buffett"):
             sh = row.get('sharpe', 0)
             vol = row.get('volatility', 1)
             b = row.get('beta', 1)
-            if sh > 1.0: q_tag = "高 CP 值"
-            elif sh < 0: q_tag = "低動能"
+            if sh > 1.0: q_tag = "高夏普 (CP值)"
+            elif sh < 0: q_tag = "動能疲弱"
             
             if sh > 1.0 and vol < 0.3: plans.append("防禦型買進")
             elif sh > 0.5 and b > 1.2: plans.append("積極型買進")
@@ -426,10 +424,10 @@ def calculate_score(df, logic_type="Buffett"):
             de = row.get('de_ratio', 100)
             fcf = row.get('fcf_yield', 0)
             
-            if roe > 15 and gm > 40 and de < 100 and fcf > 0: q_tag = "護城河"
+            if roe > 15 and gm > 40 and de < 100 and fcf > 0: q_tag = "護城河優良"
             elif de > 200 or fcf < -5: q_tag = "財務風險"
             
-            if q_tag == "護城河" and final > 70: plans.append("價值浮現")
+            if q_tag == "護城河優良" and final > 70: plans.append("價值浮現")
             elif q_tag == "財務風險": plans.append("避開標的")
             elif final > 60: plans.append("合理估值")
             else: plans.append("中立觀望")
@@ -466,9 +464,9 @@ def plot_radar_chart_ui(title, radar_data):
         fill='toself', name=title, line_color='#3B82F6', fillcolor='rgba(59, 130, 246, 0.2)'
     ))
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#374151'), bgcolor='rgba(0,0,0,0)'),
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#334155'), bgcolor='rgba(0,0,0,0)'),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(t=20, b=20, l=30, r=30), height=250, font=dict(color='#D1D5DB')
+        margin=dict(t=20, b=20, l=30, r=30), height=250, font=dict(color='#9CA3AF')
     )
     return fig
 
@@ -484,21 +482,21 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     else: status_text = f"空頭弱勢"
     
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['Close'], name='Price', line=dict(color='#60A5FA', width=2)))
-    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['MA60'], name='MA60', line=dict(color='#FCD34D', width=1.5, dash='dash')))
-    fig.add_trace(go.Scatter(x=[history_df.index[-1]], y=[current_price], mode='markers', marker=dict(color='#34D399', size=8), showlegend=False))
+    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['Close'], name='Price', line=dict(color='#3B82F6', width=2)))
+    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['MA60'], name='MA60', line=dict(color='#F59E0B', width=1.5, dash='dash')))
+    fig.add_trace(go.Scatter(x=[history_df.index[-1]], y=[current_price], mode='markers', marker=dict(color='#10B981', size=8), showlegend=False))
 
     fig.update_layout(
-        title=dict(text=f"<b>中長期趨勢研判</b><br><span style='font-size:12px; color:#9CA3AF'>季線乖離 {bias_pct:.1f}% | {status_text}</span>", font=dict(color='#F3F4F6', size=14), y=0.95),
-        xaxis=dict(showgrid=False, linecolor='#374151', tickfont=dict(color='#6B7280')),
-        yaxis=dict(showgrid=True, gridcolor='#1F2937', tickfont=dict(color='#6B7280')),
+        title=dict(text=f"<b>中長期趨勢研判</b><br><span style='font-size:12px; color:#9CA3AF'>季線乖離 {bias_pct:.1f}% | {status_text}</span>", font=dict(color='#F8FAFC', size=14), y=0.95),
+        xaxis=dict(showgrid=False, linecolor='#334155', tickfont=dict(color='#64748B')),
+        yaxis=dict(showgrid=True, gridcolor='#1E293B', tickfont=dict(color='#64748B')),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
         margin=dict(t=60, b=20, l=0, r=0), height=250,
         showlegend=False, hovermode="x unified"
     )
     return fig
 
-# --- 10. AI 與 PDF ---
+# --- 10. AI 與 PDF (100% 原封不動) ---
 def get_valid_model(key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
@@ -516,27 +514,22 @@ def call_ai(prompt):
     if not api_key: return "⚠️ 尚未設定 API Key"
     if not st.session_state.get('ai_model_name'):
         st.session_state['ai_model_name'] = get_valid_model(api_key)
-    
     target_model = st.session_state['ai_model_name']
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
-    
     try:
         session = create_resilient_session()
         r = session.post(url, headers=headers, json=data, timeout=60)
         if r.status_code == 200:
             return r.json()['candidates'][0]['content']['parts'][0]['text']
-        else:
-            return f"分析服務暫時無回應 (代碼: {r.status_code})"
-    except Exception as e:
-        return "分析服務連線逾時，請稍後再試。"
+        else: return f"分析服務暫時無回應 (代碼: {r.status_code})"
+    except Exception as e: return "分析服務連線逾時，請稍後再試。"
 
 def create_pdf(stock_data):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
-    
     font_name = font_name_global 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, alignment=1, spaceAfter=20)
@@ -569,7 +562,7 @@ def create_pdf(stock_data):
     t = Table(metrics_data, colWidths=[120, 110, 120, 110])
     t.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), font_name),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F2937')),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F293B')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -613,27 +606,19 @@ AI_PROMPT_TEMPLATE = """
 3. **操作結論**：結合中長期均線乖離狀況，給出客觀且具體的行動建議。
 """
 
-# --- 11. 主程式 ---
+# --- 11. 主程式介面 ---
 with st.sidebar:
     st.title("⚙️ 終端控制面板")
     
     st.subheader("分析核心模型切換")
     logic_choice_tw = st.radio(
         "選擇運算引擎", 
-        ["價值護城河 (高ROE/毛利/現金流)", "量化風控模型 (夏普值/波動率/Beta)"],
+        ["📊 量化風控模型 (夏普值/波動率/Beta)", "👴 價值護城河 (高ROE/毛利/現金流)"],
         index=0, label_visibility="collapsed"
     )
     st.session_state['current_logic'] = "Quant" if "量化" in logic_choice_tw else "Buffett"
     
     st.markdown("---")
-    
-    uploaded_files = st.file_uploader("📂 擴充資料源 (CSV/Excel)", type=['csv','xlsx'], accept_multiple_files=True)
-    if uploaded_files: 
-        st.session_state['tej_data'] = process_tej_upload(uploaded_files)
-        st.success(f"已成功掛載 {len(uploaded_files)} 份外部數據庫")
-    
-    st.markdown("---")
-    st.subheader("資料池篩選")
     
     scan_mode = st.radio("篩選維度", ["市場焦點策略", "產業族群板塊", "台灣 ETF 專區", "自訂代碼輸入"])
     
@@ -693,11 +678,11 @@ with st.sidebar:
         else:
             for k in selected_strats: target_stocks.extend(strategies[k])
 
-    target_stocks = list(dict.fromkeys(target_stocks))
+    target_stocks = list(dict.fromkeys(target_stocks)) # 過濾重複
 
     if st.button("🚀 啟動終端運算", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False
-        with st.spinner(f"正在執行矩陣運算，擷取 {len(target_stocks)} 檔標的數據..."):
+        with st.spinner(f"正在擷取並運算 {len(target_stocks)} 檔標的數據..."):
             raw, hist_map = batch_scan_stocks(target_stocks, st.session_state['tej_data'])
             raw = sanitize_data(raw)
             st.session_state['raw_data'] = raw
@@ -705,11 +690,12 @@ with st.sidebar:
             st.session_state['scan_finished'] = True
             st.rerun()
 
+# --- 主畫面區 ---
 col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: Portfolio, AI Insight, PDF Export")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | UI: Brokerage Dark")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -721,7 +707,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
     else:
         final_df, df_norm = calculate_score(df, logic_type=current_logic)
         
-        st.subheader("🏆 系統評級與排名")
+        st.subheader("🏆 終端檢索清單")
         st.dataframe(
             final_df[['代號', '名稱', 'industry', 'Score', 'Quality', 'Strategy', 'sharpe', 'roe', 'fcf_yield', 'implied_growth']],
             column_config={
@@ -740,7 +726,12 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         st.subheader("🎯 個股深度檢驗面板")
         
         def safe_num(val): return 0 if (pd.isna(val) or val is None) else val
+        def get_color_class(val, inverse=False):
+            if pd.isna(val) or val == 0: return ""
+            if inverse: return "q-up" if val < 0 else "q-down"
+            return "q-up" if val > 0 else "q-down"
 
+        # 顯示前 10 檔作為面板檢視
         for idx, row in final_df.head(10).iterrows():
             code = row['代號']
             
@@ -748,12 +739,13 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 industry_tag = f"<span class='tag tag-sector'>{row['industry']}</span>"
                 
                 q_tag = row['Quality']
-                if q_tag in ["High CP", "護城河", "Quality"]: quality_tag = f"<span class='tag tag-quality'>💎 {q_tag}</span>"
-                elif q_tag in ["Low CP", "財務風險", "Profitless"]: quality_tag = f"<span class='tag tag-warn'>⚠️ {q_tag}</span>"
+                if q_tag in ["高夏普 (CP值)", "護城河優良", "Quality"]: quality_tag = f"<span class='tag tag-moat'>💎 {q_tag}</span>"
+                elif q_tag in ["動能疲弱", "財務風險", "Profitless"]: quality_tag = f"<span class='tag tag-risk'>⚠️ {q_tag}</span>"
                 else: quality_tag = ""
                     
                 logic_tag = f"<span class='tag tag-logic'>{logic_badge}</span>"
                 
+                # HTML 卡片: 確保所有字體顏色與背景色在自定義 CSS 內絕對鎖死
                 st.markdown(f"""<div class='stock-card'>
 <div class='card-header'>
 <div><span class='header-title'>{row['名稱']} ({code})</span><span class='header-price'>${row['close_price']}</span></div>
@@ -767,29 +759,35 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[idx])), use_container_width=True)
                 
                 with c2:
-                    st.markdown(f"""<div class='metrics-grid'>
-<div class='metric-item'><span class='m-label'>夏普值 (Sharpe)</span><span class='m-val m-high'>{safe_num(row.get('sharpe')):.2f}</span></div>
-<div class='metric-item'><span class='m-label'>波動率 (Volatility)</span><span class='m-val'>{safe_num(row.get('volatility'))*100:.1f}%</span></div>
-<div class='metric-item'><span class='m-label'>Beta (對盤連動)</span><span class='m-val'>{safe_num(row.get('beta')):.2f}</span></div>
-<div class='metric-item'><span class='m-label'>ROE (權益報酬)</span><span class='m-val m-high'>{"N/A" if pd.isna(row.get('roe')) else f"{safe_num(row.get('roe'))*100 if row.get('roe') and row.get('roe')<1 else safe_num(row.get('roe')):.1f}%"}</span></div>
-<div class='metric-item'><span class='m-label'>毛利率 (Gross Margin)</span><span class='m-val m-high'>{"N/A" if pd.isna(row.get('gross_margins')) else f"{safe_num(row.get('gross_margins')):.1f}%"}</span></div>
-<div class='metric-item'><span class='m-label'>EPS成長 (EPS YoY)</span><span class='m-val m-high'>{"N/A" if pd.isna(row.get('eps_growth')) else f"{safe_num(row.get('eps_growth')):.1f}%"}</span></div>
-<div class='metric-item'><span class='m-label'>本益比 (P/E)</span><span class='m-val'>{"N/A" if pd.isna(row.get('pe')) else f"{safe_num(row.get('pe')):.2f}"}</span></div>
-<div class='metric-item'><span class='m-label'>FCF 收益率</span><span class='m-val'>{"N/A" if pd.isna(row.get('fcf_yield')) else f"{safe_num(row.get('fcf_yield')):.2f}%"}</span></div>
-<div class='metric-item'><span class='m-label'>季線乖離 (MA Bias)</span><span class='m-val'>{safe_num(row.get('priceToMA60'))*100:.1f}%</span></div>
+                    # 專業報價網格 (添加漲跌顏色)
+                    sharpe_val = safe_num(row.get('sharpe'))
+                    sh_color = "q-up" if sharpe_val > 1 else ("q-down" if sharpe_val < 0 else "")
+                    rev_val = safe_num(row.get('rev_growth'))
+                    eps_val = safe_num(row.get('eps_growth'))
+                    
+                    st.markdown(f"""<div class='quote-board'>
+<div class='quote-item'><span class='q-label'>夏普值 (Sharpe)</span><span class='q-val {sh_color}'>{sharpe_val:.2f}</span></div>
+<div class='quote-item'><span class='q-label'>波動率 (Volatility)</span><span class='q-val'>{safe_num(row.get('volatility'))*100:.1f}%</span></div>
+<div class='quote-item'><span class='q-label'>Beta (風險係數)</span><span class='q-val'>{safe_num(row.get('beta')):.2f}</span></div>
+<div class='quote-item'><span class='q-label'>ROE (權益報酬)</span><span class='q-val'>{"N/A" if pd.isna(row.get('roe')) else f"{safe_num(row.get('roe'))*100 if row.get('roe') and row.get('roe')<1 else safe_num(row.get('roe')):.1f}%"}</span></div>
+<div class='quote-item'><span class='q-label'>毛利率 (Gross Mgn)</span><span class='q-val'>{"N/A" if pd.isna(row.get('gross_margins')) else f"{safe_num(row.get('gross_margins')):.1f}%"}</span></div>
+<div class='quote-item'><span class='q-label'>本益比 (P/E)</span><span class='q-val'>{"N/A" if pd.isna(row.get('pe')) else f"{safe_num(row.get('pe')):.2f}"}</span></div>
+<div class='quote-item'><span class='q-label'>營收 YoY</span><span class='q-val {get_color_class(rev_val)}'>{rev_val:.1f}%</span></div>
+<div class='quote-item'><span class='q-label'>EPS YoY</span><span class='q-val {get_color_class(eps_val)}'>{eps_val:.1f}%</span></div>
+<div class='quote-item'><span class='q-label'>FCF 收益率</span><span class='q-val'>{"N/A" if pd.isna(row.get('fcf_yield')) else f"{safe_num(row.get('fcf_yield')):.2f}%"}</span></div>
 </div>""", unsafe_allow_html=True)
                     
                     implied_g = row.get('implied_growth', np.nan)
                     actual_g = row.get('eps_growth', 0) / 100 
                     if not pd.isna(implied_g):
-                        if implied_g > actual_g + 0.1: dcf_status = "🔴 預估過熱"
-                        elif implied_g < actual_g - 0.05: dcf_status = "🟢 具安全邊際"
-                        else: dcf_status = "🟡 估值公允"
-                        st.markdown(f"""<div class='dcf-box'>
-<div style='font-size: 0.85rem; color: #9CA3AF; font-weight: 600; text-transform: uppercase;'>Reverse DCF 估值檢驗 (r=10%, TV=2%)</div>
-<div style='display: flex; justify-content: space-between; margin-top: 8px;'>
-<span>市場隱含期望成長: <b style='color: #F3F4F6; font-size: 1.1rem;'>{implied_g*100:.1f}%</b></span>
-<span style='font-weight: 600;'>{dcf_status}</span>
+                        if implied_g > actual_g + 0.1: dcf_status = "<span class='q-down'>🔴 預估過熱</span>"
+                        elif implied_g < actual_g - 0.05: dcf_status = "<span class='q-up'>🟢 具安全邊際</span>"
+                        else: dcf_status = "<span class='q-neu'>🟡 估值公允</span>"
+                        st.markdown(f"""<div class='dcf-panel'>
+<div style='font-size: 0.8rem; color: #9CA3AF; font-weight: 600;'>REVERSE DCF 估值模型 (r=10%, TV=2%)</div>
+<div style='display: flex; justify-content: space-between; margin-top: 6px; align-items: baseline;'>
+<span style='color: #F8FAFC;'>市場隱含期望: <b style='font-size: 1.2rem; font-family: Consolas;'>{implied_g*100:.1f}%</b></span>
+<span style='font-weight: 700; font-size: 0.95rem;'>{dcf_status}</span>
 </div></div>""", unsafe_allow_html=True)
                     
                     b1, b2 = st.columns(2)
@@ -841,50 +839,80 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
-        # 【核心新增】模型專屬投資組合 (Model-Driven Portfolio)
+        # =========================================================
+        # 【核心新增】💼 林哲群教授：紀律長贏資產配置模組
+        # =========================================================
         st.markdown("---")
-        st.subheader("💼 系統嚴選：模型專屬投資組合 (Model-Driven Portfolio)")
+        st.subheader("💼 【紀律長贏】系統嚴選：模型專屬投資組合 (Top 10)")
         
-        portfolio_df = final_df.head(10).copy()
-        
-        if len(portfolio_df) > 0:
-            c1, c2 = st.columns([1, 1])
-            
+        if current_logic == "Quant":
+            st.caption("依據林哲群教授 (2026) 著作理論實踐：優先篩選 **高夏普值 (>1.0)** 確保單元風險報酬，次依 **低標準差 (波動率)** 排序控制絕對風險，並呈現 Beta 供投資人調控大盤關聯度。")
+            # 邏輯 1：篩選夏普 > 1.0
+            port_df = final_df[final_df['sharpe'] > 1.0].copy()
+            # 若符合條件不足 10 檔，以整體夏普值最高者補足
+            if len(port_df) < 10:
+                port_df = final_df.nlargest(10, 'sharpe').copy()
+            # 邏輯 2：依據低波動排序
+            port_df = port_df.sort_values(by='volatility', ascending=True).head(10)
+        else:
+            st.caption("依據巴菲特護城河理論：優先篩選 **ROE > 15%** 與 **毛利率 > 40%**，並要求具備正向現金流能力。")
+            port_df = final_df[(final_df['roe'] > 0.15) & (final_df['gross_margins'] > 40)].copy()
+            if len(port_df) < 10:
+                port_df = final_df.nlargest(10, 'roe').copy()
+            port_df = port_df.sort_values(by='Score', ascending=False).head(10)
+
+        if len(port_df) > 0:
+            c1, c2 = st.columns([1.5, 1])
             with c1:
-                st.markdown(f"**核心驅動：{logic_badge}**")
-                st.markdown("依據當前運算模型，由系統在您的篩選池中優化出的**等權重 (Equal-Weight)** 投資組合清單（最多 10 檔）：")
+                # 顯示等權重組合
+                port_display = port_df[['代號', '名稱', 'industry', 'sharpe', 'volatility', 'beta', 'roe']].copy()
+                port_display['配置權重'] = f"{100.0/len(port_df):.1f}%"
                 
-                port_display = portfolio_df[['代號', '名稱', 'industry', 'Score']].copy()
-                port_display['配置權重'] = "10.0%" if len(portfolio_df) >= 10 else f"{100.0/len(portfolio_df):.1f}%"
-                st.dataframe(port_display, hide_index=True, use_container_width=True)
+                st.dataframe(
+                    port_display, 
+                    hide_index=True, 
+                    use_container_width=True,
+                    column_config={
+                        "industry": "板塊",
+                        "sharpe": st.column_config.NumberColumn("夏普值", format="%.2f"),
+                        "volatility": st.column_config.NumberColumn("波動率", format="%.2f"),
+                        "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+                        "roe": st.column_config.NumberColumn("ROE", format="%.2f"),
+                    }
+                )
                 
             with c2:
-                fig_pie = px.pie(portfolio_df, names='industry', title="板塊曝險分佈 (Sector Exposure)", hole=0.4, color_discrete_sequence=px.colors.sequential.Tealgrn)
-                fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#D1D5DB'))
-                st.plotly_chart(fig_pie, use_container_width=True)
+                # 組合整體面貌
+                avg_sharpe = port_df['sharpe'].mean()
+                avg_vol = port_df['volatility'].mean() * 100
+                avg_beta = port_df['beta'].mean()
+                avg_pe = port_df['pe'].mean()
                 
-            # 組合整體面貌 (Aggregate Metrics)
-            avg_pe = portfolio_df['pe'].mean()
-            avg_yield = portfolio_df['yield'].mean()
-            
-            if current_logic == "Quant":
-                avg_sharpe = portfolio_df['sharpe'].mean()
-                avg_vol = portfolio_df['volatility'].mean() * 100
-                st.markdown(f"""<div class='metrics-grid' style='grid-template-columns: repeat(4, 1fr);'>
-<div class='metric-item'><span class='m-label'>組合平均本益比</span><span class='m-val'>{'N/A' if pd.isna(avg_pe) else f"{avg_pe:.2f}"}</span></div>
-<div class='metric-item'><span class='m-label'>組合平均殖利率</span><span class='m-val'>{'N/A' if pd.isna(avg_yield) else f"{avg_yield:.2f}%"}</span></div>
-<div class='metric-item'><span class='m-label'>組合平均夏普值</span><span class='m-val m-high'>{'N/A' if pd.isna(avg_sharpe) else f"{avg_sharpe:.2f}"}</span></div>
-<div class='metric-item'><span class='m-label'>組合平均波動率</span><span class='m-val'>{'N/A' if pd.isna(avg_vol) else f"{avg_vol:.1f}%"}</span></div>
-</div>""", unsafe_allow_html=True)
-            else:
-                avg_roe = portfolio_df['roe'].mean() * 100
-                avg_fcf = portfolio_df['fcf_yield'].mean()
-                st.markdown(f"""<div class='metrics-grid' style='grid-template-columns: repeat(4, 1fr);'>
-<div class='metric-item'><span class='m-label'>組合平均本益比</span><span class='m-val'>{'N/A' if pd.isna(avg_pe) else f"{avg_pe:.2f}"}</span></div>
-<div class='metric-item'><span class='m-label'>組合平均殖利率</span><span class='m-val'>{'N/A' if pd.isna(avg_yield) else f"{avg_yield:.2f}%"}</span></div>
-<div class='metric-item'><span class='m-label'>組合平均 ROE</span><span class='m-val m-high'>{'N/A' if pd.isna(avg_roe) else f"{avg_roe:.1f}%"}</span></div>
-<div class='metric-item'><span class='m-label'>組合平均 FCF 收益率</span><span class='m-val m-high'>{'N/A' if pd.isna(avg_fcf) else f"{avg_fcf:.2f}%"}</span></div>
-</div>""", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style='background-color:#1E293B; padding:15px; border-radius:4px; border:1px solid #334155;'>
+                    <h4 style='margin-top:0; color:#F8FAFC; border-bottom:1px solid #334155; padding-bottom:10px;'>組合總體檢驗 (Aggregate)</h4>
+                    <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                        <span style='color:#9CA3AF;'>組合平均夏普值</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_sharpe:.2f}</span>
+                    </div>
+                    <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                        <span style='color:#9CA3AF;'>組合平均波動率</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_vol:.1f}%</span>
+                    </div>
+                    <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                        <span style='color:#9CA3AF;'>組合平均 Beta</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_beta:.2f}</span>
+                    </div>
+                    <div style='display:flex; justify-content:space-between;'>
+                        <span style='color:#9CA3AF;'>組合平均本益比</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_pe:.1f}x</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # 產業圓餅圖
+                fig_pie = px.pie(port_df, names='industry', hole=0.5, color_discrete_sequence=px.colors.sequential.Blues_r)
+                fig_pie.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                    font=dict(color='#9CA3AF'), margin=dict(t=30, b=0, l=0, r=0), height=200
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
 
 elif not st.session_state['scan_finished']:
     st.info("👈 請在左側設定分析參數，並點擊「啟動終端運算」。")
