@@ -12,6 +12,8 @@ import io
 import os
 import time
 from datetime import datetime
+import urllib.request
+import html
 
 # PDF 函式庫
 from reportlab.lib.pagesizes import A4
@@ -39,7 +41,7 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #0D131F !important; border-right: 1px solid #1E293B !important; }
     h1, h2, h3, p, span, div, label { font-family: 'Segoe UI', Tahoma, sans-serif; color: #E2E8F0 !important; }
     
-    /* 【核心修復1】下拉選單與複選框強制深色白字 */
+    /* 下拉選單與複選框強制深色白字 */
     .stMultiSelect [data-baseweb="select"] { background-color: #0D131F !important; }
     .stMultiSelect [data-baseweb="select"] > div { background-color: #0D131F !important; color: #F8FAFC !important; border-color: #1E293B !important; }
     .stMultiSelect span[data-baseweb="tag"] { background-color: #1E293B !important; color: #F8FAFC !important; }
@@ -126,35 +128,46 @@ try:
 except Exception:
     st.error("系統偵測不到 API Key，AI 洞察功能將受限。")
 
-# --- 5. 字型下載與註冊 (保證不變) ---
+# --- 5. 字型下載與註冊 (【終極修復】強力下載機制，根絕 PDF 隱形文字) ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
+    
+    # 1. 檢查本地是否已有完整字體檔
+    if os.path.exists(font_path) and os.path.getsize(font_path) > 1000000:
+        try:
+            pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+            return 'ChineseFont'
+        except: pass
+
+    # 2. 備援下載點
     urls = [
         "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
         "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanstc/NotoSansTC-Regular.ttf"
     ]
-    try:
-        if not os.path.exists(font_path) or os.path.getsize(font_path) < 100000:
-            for url in urls:
-                try:
-                    r = requests.get(url, allow_redirects=True, timeout=30)
-                    if r.status_code == 200 and len(r.content) > 100000:
-                        with open(font_path, 'wb') as f: 
-                            f.write(r.content)
-                        break 
-                except: continue
-        pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
-        return 'ChineseFont'
-    except Exception:
+    
+    for url in urls:
         try:
-            pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
-            return 'MSung-Light'
-        except: return 'Helvetica'
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=30) as response, open(font_path, 'wb') as out_file:
+                out_file.write(response.read())
+            
+            if os.path.getsize(font_path) > 1000000:
+                pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+                return 'ChineseFont'
+        except Exception as e:
+            continue
+            
+    # 3. 終極退路
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
+        return 'MSung-Light'
+    except:
+        return 'Helvetica'
 
 font_name_global = setup_chinese_font()
 
-# --- 6. 核心數據引擎 (保證不變) ---
+# --- 6. 核心數據引擎 ---
 def create_resilient_session():
     session = requests.Session()
     retry = Retry(total=3, read=3, connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
@@ -506,7 +519,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     )
     return fig
 
-# --- 10. AI 與 PDF (保證不變) ---
+# --- 10. AI 與 PDF ---
 def get_valid_model(key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
@@ -550,9 +563,10 @@ def create_pdf(stock_data):
     story.append(Paragraph(f"產出時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
     
-    safe_name = str(stock_data.get('名稱', '')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    safe_code = str(stock_data.get('代號', '')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    safe_strat = str(stock_data.get('Strategy', '')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    # 【核心修復2】徹底轉義所有標題、名稱、內容中的 HTML 符號，杜絕 PDF 空白當機
+    safe_name = html.escape(str(stock_data.get('名稱', '')))
+    safe_code = html.escape(str(stock_data.get('代號', '')))
+    safe_strat = html.escape(str(stock_data.get('Strategy', '')))
     
     story.append(Paragraph(f"分析標的: {safe_name} ({safe_code})", h2_style))
     story.append(Paragraph(f"系統判定: {safe_strat}", normal_style))
@@ -584,10 +598,12 @@ def create_pdf(stock_data):
     
     if 'ai_analysis' in stock_data and stock_data['ai_analysis']:
         story.append(Paragraph("AI 系統深度洞察", h2_style))
-        clean_text = stock_data['ai_analysis'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('**', '').replace('##', '')
+        # 【核心修復2】徹底轉義 AI 輸出的文字，避免報表引擎因為讀到 < 標籤而崩潰
+        clean_text = stock_data['ai_analysis']
         for line in clean_text.split('\n'):
             if line.strip():
-                story.append(Paragraph(line, normal_style))
+                safe_line = html.escape(line.strip()).replace('**', '').replace('##', '')
+                story.append(Paragraph(safe_line, normal_style))
                 story.append(Spacer(1, 5))
                 
     try: doc.build(story)
@@ -721,7 +737,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: Interactive Selection, Portfolio Builder")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: PDF Bug Fix & Tactical Portfolio")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -734,8 +750,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         final_df, df_norm = calculate_score(df, logic_type=current_logic)
         
         st.subheader("🏆 終端檢索清單")
-        # 【核心修復2】加入明顯的 Dark Mode 提示，確保 Canvas 呈現完美深色
-        st.caption("💡 提示：點擊下方表格內的任意一筆資料，可查看單檔深度面板。 ***(若表格不慎呈現白底，請點擊網頁右上角「⋮」-> Settings -> Theme 選擇 Dark)***")
+        st.caption("💡 點擊下方表格內的任意資料可查看「深度解析」。**(若表格呈現白底，請點擊網頁右上角「⋮」-> Settings -> Theme 選擇 Dark)**")
         
         df_event = st.dataframe(
             final_df[['代號', '名稱', 'industry', 'Score', 'Quality', 'Strategy', 'sharpe', 'roe', 'fcf_yield', 'implied_growth']],
@@ -908,7 +923,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     st.rerun()
 
         # =========================================================
-        # 💼 林哲群教授：紀律長贏資產配置模組 (戰略分類)
+        # 💼 林哲群教授：紀律長贏資產配置模組
         # =========================================================
         st.markdown("---")
         st.subheader("💼 【紀律長贏】系統嚴選：模型專屬投資組合 (Top 10)")
@@ -920,13 +935,12 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 port_df = final_df.nlargest(10, 'sharpe').copy()
             port_df = port_df.sort_values(by='volatility', ascending=True).head(10)
             
-            # 【核心升級3】給予明確的戰略分類
             def classify_quant(r):
                 b = r.get('beta', 1.0)
                 if pd.isna(b): b = 1.0
                 return "🔥 攻擊動能 (高Beta)" if b >= 1.0 else "🛡️ 穩健防禦 (低Beta)"
-            port_df['配置定位'] = port_df.apply(classify_quant, axis=1)
-            port_df = port_df.sort_values(by=['配置定位', 'sharpe'], ascending=[False, False])
+            port_df['戰略定位'] = port_df.apply(classify_quant, axis=1)
+            port_df = port_df.sort_values(by=['戰略定位', 'sharpe'], ascending=[False, False])
             
         else:
             st.caption("依據巴菲特護城河理論：優先篩選 **ROE > 15%** 與 **毛利率 > 40%**，並依照 EPS 成長率分類成長與價值防禦屬性。")
@@ -935,18 +949,17 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 port_df = final_df.nlargest(10, 'roe').copy()
             port_df = port_df.sort_values(by='Score', ascending=False).head(10)
             
-            # 【核心升級3】給予明確的戰略分類
             def classify_buffett(r):
                 g = r.get('eps_growth', 0)
                 if pd.isna(g): g = 0
                 return "🚀 成長護城河 (高EPS增長)" if g > 15.0 else "💰 穩健價值 (高ROE收息)"
-            port_df['配置定位'] = port_df.apply(classify_buffett, axis=1)
-            port_df = port_df.sort_values(by=['配置定位', 'roe'], ascending=[False, False])
+            port_df['戰略定位'] = port_df.apply(classify_buffett, axis=1)
+            port_df = port_df.sort_values(by=['戰略定位', 'roe'], ascending=[False, False])
 
         if len(port_df) > 0:
             c1, c2 = st.columns([1.6, 1])
             with c1:
-                port_display = port_df[['代號', '名稱', '配置定位', 'industry', 'sharpe', 'volatility', 'beta', 'roe']].copy()
+                port_display = port_df[['代號', '名稱', '戰略定位', 'industry', 'sharpe', 'volatility', 'beta', 'roe']].copy()
                 port_display['配置權重'] = f"{100.0/len(port_df):.1f}%"
                 
                 st.dataframe(
@@ -955,7 +968,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     use_container_width=True,
                     column_config={
                         "industry": "板塊",
-                        "配置定位": st.column_config.TextColumn("戰略配置定位"),
+                        "戰略定位": st.column_config.TextColumn("配置定位"),
                         "sharpe": st.column_config.NumberColumn("夏普值", format="%.2f"),
                         "volatility": st.column_config.NumberColumn("波動率", format="%.2f"),
                         "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
@@ -987,7 +1000,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 </div>
                 """, unsafe_allow_html=True)
                 
-                fig_pie = px.pie(port_df, names='配置定位', hole=0.5, color_discrete_sequence=['#3B82F6', '#10B981', '#F59E0B'])
+                fig_pie = px.pie(port_df, names='戰略定位', hole=0.5, color_discrete_sequence=['#3B82F6', '#10B981', '#F59E0B'])
                 fig_pie.update_layout(
                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
                     font=dict(color='#9CA3AF'), margin=dict(t=20, b=0, l=0, r=0), height=200,
