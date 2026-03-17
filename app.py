@@ -33,18 +33,30 @@ st.set_page_config(
 # --- 2. CSS 華爾街專業看盤軟體風格 (極致深色/高對比) ---
 st.markdown("""
 <style>
+    /* 強制極致深色背景 */
+    :root { color-scheme: dark !important; }
     .stApp { background-color: #06090F !important; }
     [data-testid="stSidebar"] { background-color: #0D131F !important; border-right: 1px solid #1E293B !important; }
     h1, h2, h3, p, span, div, label { font-family: 'Segoe UI', Tahoma, sans-serif; color: #E2E8F0 !important; }
     
+    /* 【核心修復1】下拉選單與複選框強制深色白字 */
+    .stMultiSelect [data-baseweb="select"] { background-color: #0D131F !important; }
+    .stMultiSelect [data-baseweb="select"] > div { background-color: #0D131F !important; color: #F8FAFC !important; border-color: #1E293B !important; }
+    .stMultiSelect span[data-baseweb="tag"] { background-color: #1E293B !important; color: #F8FAFC !important; }
+    .stMultiSelect span[data-baseweb="tag"] span { color: #F8FAFC !important; }
+    .stSelectbox [data-baseweb="select"] > div { background-color: #0D131F !important; color: #F8FAFC !important; border-color: #1E293B !important; }
+    ul[role="listbox"] { background-color: #0D131F !important; color: #F8FAFC !important; border: 1px solid #1E293B !important; }
+    li[role="option"] { background-color: #0D131F !important; color: #F8FAFC !important; }
+    li[role="option"]:hover { background-color: #3B82F6 !important; }
+    input { background-color: #0D131F !important; color: white !important; border: 1px solid #1E293B !important; }
+    input::placeholder { color: #64748B !important; }
+    
+    /* 股票卡片：彭博終端機風格 */
     .stock-card { 
         background-color: #0D131F !important; 
-        padding: 16px 24px; 
-        border-radius: 4px; 
-        border: 1px solid #1E293B !important; 
-        border-left: 4px solid #3B82F6 !important; 
-        margin-bottom: 24px; 
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        padding: 16px 24px; border-radius: 4px; 
+        border: 1px solid #1E293B !important; border-left: 4px solid #3B82F6 !important; 
+        margin-bottom: 24px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
     .card-header {
         display: flex; justify-content: space-between; align-items: flex-end;
@@ -53,18 +65,18 @@ st.markdown("""
     .header-title { font-size: 1.4rem; font-weight: 700; color: #FFFFFF !important; letter-spacing: 1px; }
     .header-price { font-size: 1.4rem; font-weight: 700; color: #10B981 !important; margin-left: 16px; font-family: 'Consolas', monospace; }
     
+    /* 專業報價網格 (Quote Board) */
     .quote-board {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
-        background-color: #1E293B !important; 
-        border: 1px solid #1E293B !important; border-radius: 4px;
+        background-color: #1E293B !important; border: 1px solid #1E293B !important; border-radius: 4px;
     }
     .quote-item { 
-        background-color: #06090F !important; 
-        padding: 12px 16px; display: flex; flex-direction: column; justify-content: center;
+        background-color: #06090F !important; padding: 12px 16px; display: flex; flex-direction: column; justify-content: center;
     }
     .q-label { color: #64748B !important; font-size: 0.75rem; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px; }
     .q-val { color: #F8FAFC !important; font-weight: 700; font-size: 1.15rem; font-family: 'Consolas', 'Courier New', monospace; }
     
+    /* 霓虹漲跌色系 (Bull/Bear) */
     .q-up { color: #10B981 !important; }   
     .q-down { color: #EF4444 !important; } 
     .q-neu { color: #F59E0B !important; }  
@@ -84,7 +96,6 @@ st.markdown("""
         padding: 16px; margin-top: 16px; border-radius: 2px; font-size: 0.95rem; line-height: 1.6; color: #CBD5E1 !important;
     }
     
-    /* 標籤解釋區塊 */
     .explain-box {
         background-color: #0F172A !important; border: 1px solid #334155 !important; border-left: 4px solid #F59E0B !important;
         padding: 16px 20px; border-radius: 4px; margin-bottom: 24px; color: #E2E8F0 !important; line-height: 1.7; font-size: 0.95rem;
@@ -107,7 +118,7 @@ if 'tej_data' not in st.session_state: st.session_state['tej_data'] = None
 if 'history_storage' not in st.session_state: st.session_state['history_storage'] = {}
 if 'ai_results' not in st.session_state: st.session_state['ai_results'] = {}
 if 'current_logic' not in st.session_state: st.session_state['current_logic'] = "Quant" 
-if 'panel_page' not in st.session_state: st.session_state['panel_page'] = 1 # 分頁紀錄
+if 'panel_page' not in st.session_state: st.session_state['panel_page'] = 1 
 
 # --- 4. API Key ---
 try:
@@ -115,7 +126,7 @@ try:
 except Exception:
     st.error("系統偵測不到 API Key，AI 洞察功能將受限。")
 
-# --- 5. 字型下載與註冊 ---
+# --- 5. 字型下載與註冊 (保證不變) ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -143,7 +154,7 @@ def setup_chinese_font():
 
 font_name_global = setup_chinese_font()
 
-# --- 6. 核心數據引擎 ---
+# --- 6. 核心數據引擎 (保證不變) ---
 def create_resilient_session():
     session = requests.Session()
     retry = Retry(total=3, read=3, connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
@@ -495,7 +506,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     )
     return fig
 
-# --- 10. AI 與 PDF ---
+# --- 10. AI 與 PDF (保證不變) ---
 def get_valid_model(key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
@@ -604,7 +615,7 @@ AI_PROMPT_TEMPLATE = """
 3. **操作結論**：結合中長期均線乖離狀況，給出客觀且具體的行動建議。
 """
 
-# --- 11. 標籤解析函數 (動態生成原因) ---
+# --- 11. 標籤解析函數 ---
 def get_tag_explanation(row, logic_type):
     tag = row.get('Quality', '')
     sharpe = row.get('sharpe', 0)
@@ -614,19 +625,13 @@ def get_tag_explanation(row, logic_type):
     de = row.get('de_ratio', 0)
     
     if logic_type == "Quant":
-        if tag == "高夏普 (CP值)":
-            return f"**為什麼被系統評定為「高夏普 (CP值)」？**<br>此標的近期年化夏普值高達 **{sharpe:.2f}**（系統門檻為 > 1.0）。在量化模型中，這代表投資人每承擔 1 單位的波動風險，就能獲得超過 1 單位的超額報酬，屬於極具盈虧比（CP值）的強勢動能標的。"
-        elif tag == "動能疲弱":
-            return f"**為什麼被系統評定為「動能疲弱」？**<br>此標的夏普值為 **{sharpe:.2f}**（小於 0）。這意味著其近期的報酬率甚至低於無風險利率（定存或公債），承擔了市場波動卻無法換取正向的超額利潤。"
-        else:
-            return "**標籤說明**<br>該標的各項量化指標（夏普值、波動率）落在市場均值區間，表現平穩，未觸發極端強勢或弱勢的演算法警示。"
+        if tag == "高夏普 (CP值)": return f"**為什麼被系統評定為「高夏普 (CP值)」？**<br>此標的近期年化夏普值高達 **{sharpe:.2f}**（系統門檻為 > 1.0）。在量化模型中，這代表投資人每承擔 1 單位的波動風險，就能獲得超過 1 單位的超額報酬，屬於極具盈虧比（CP值）的強勢動能標的。"
+        elif tag == "動能疲弱": return f"**為什麼被系統評定為「動能疲弱」？**<br>此標的夏普值為 **{sharpe:.2f}**（小於 0）。這意味著其近期的報酬率甚至低於無風險利率，承擔了市場波動卻無法換取正向的超額利潤。"
+        else: return "**標籤說明**<br>該標的各項量化指標（夏普值、波動率）落在市場均值區間，表現平穩，未觸發極端強勢或弱勢的演算法警示。"
     else:
-        if tag == "護城河優良":
-            return f"**為什麼被系統評定為「護城河優良」？**<br>此標的完美符合巴菲特的核心護城河條件：<br>1. **高資本效率**：ROE 達 **{roe:.1f}%** (標準 > 15%)。<br>2. **強大定價權**：毛利率達 **{gm:.1f}%** (標準 > 40%)。<br>3. **真實變現力**：自由現金流收益率為正且無過度舉債。這是一檔擁有深厚經濟壁壘的優質資產。"
-        elif tag == "財務風險":
-            return f"**為什麼被系統評定為「財務風險」？**<br>系統偵測到其存在潛在危機：負債權益比(D/E) 高達 **{de:.1f}%**，或自由現金流收益率低至 **{fcf:.2f}%**。這代表該公司可能正在靠過度舉債擴張，或賺到的盈餘無法轉換為真實現金，具有高度「虛胖」或「資金斷鏈」風險。"
-        else:
-            return "**標籤說明**<br>該標的在財務體質（ROE、毛利率、現金流）上表現中規中矩，雖未達巴菲特嚴苛的「絕對護城河」標準，但也無明顯的財務致命傷。"
+        if tag == "護城河優良": return f"**為什麼被系統評定為「護城河優良」？**<br>此標的完美符合巴菲特的核心護城河條件：<br>1. **高資本效率**：ROE 達 **{roe:.1f}%** (標準 > 15%)。<br>2. **強大定價權**：毛利率達 **{gm:.1f}%** (標準 > 40%)。<br>3. **真實變現力**：自由現金流收益率為正且無過度舉債。這是一檔擁有深厚經濟壁壘的優質資產。"
+        elif tag == "財務風險": return f"**為什麼被系統評定為「財務風險」？**<br>系統偵測到其存在潛在危機：負債權益比(D/E) 高達 **{de:.1f}%**，或自由現金流收益率低至 **{fcf:.2f}%**。這代表該公司可能正在靠過度舉債擴張，或賺到的盈餘無法轉換為真實現金，具有高度風險。"
+        else: return "**標籤說明**<br>該標的在財務體質（ROE、毛利率、現金流）上表現中規中矩，雖未達巴菲特嚴苛的「絕對護城河」標準，但也無明顯的財務致命傷。"
 
 # --- 12. 主程式介面 ---
 with st.sidebar:
@@ -702,7 +707,7 @@ with st.sidebar:
 
     if st.button("🚀 啟動終端運算", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False
-        st.session_state['panel_page'] = 1 # 每次重新掃描，分頁歸零
+        st.session_state['panel_page'] = 1 
         with st.spinner(f"正在擷取並運算 {len(target_stocks)} 檔標的數據..."):
             raw, hist_map = batch_scan_stocks(target_stocks, st.session_state['tej_data'])
             raw = sanitize_data(raw)
@@ -716,7 +721,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: Interactive Selection, Smart Pagination")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: Interactive Selection, Portfolio Builder")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -728,9 +733,9 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
     else:
         final_df, df_norm = calculate_score(df, logic_type=current_logic)
         
-        # 【核心升級 1】互動式檢索清單 (on_select="rerun")
         st.subheader("🏆 終端檢索清單")
-        st.caption("💡 提示：點擊下方表格內的任意一筆資料，即可直接跳轉查看該標的的「系統標籤說明」與「深度檢驗面板」。再次點擊即可取消選取。")
+        # 【核心修復2】加入明顯的 Dark Mode 提示，確保 Canvas 呈現完美深色
+        st.caption("💡 提示：點擊下方表格內的任意一筆資料，可查看單檔深度面板。 ***(若表格不慎呈現白底，請點擊網頁右上角「⋮」-> Settings -> Theme 選擇 Dark)***")
         
         df_event = st.dataframe(
             final_df[['代號', '名稱', 'industry', 'Score', 'Quality', 'Strategy', 'sharpe', 'roe', 'fcf_yield', 'implied_growth']],
@@ -744,14 +749,13 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 "implied_growth": st.column_config.NumberColumn("隱含成長", format="%.2f"),
             },
             use_container_width=True, hide_index=True,
-            on_select="rerun", selection_mode="single-row" # 開啟互動模式
+            on_select="rerun", selection_mode="single-row" 
         )
         
         st.markdown("---")
         
         selected_rows = df_event.selection.rows
         
-        # 【核心升級 2】點擊後的單檔標籤解析與顯示邏輯
         if selected_rows:
             sel_idx = selected_rows[0]
             sel_row = final_df.iloc[sel_idx]
@@ -761,10 +765,9 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             st.markdown(f"<div class='explain-box'>{explanation}</div>", unsafe_allow_html=True)
             
             st.subheader("🎯 個股深度檢驗面板 (單檔檢視)")
-            st.info("📌 目前為「單檔檢視模式」。若要恢復分頁模式瀏覽全部標的，請在上方清單中再次點擊以取消選取。")
+            st.info("📌 目前為「單檔檢視模式」。若要恢復分頁瀏覽模式，請在上方清單中再次點擊以取消選取。")
             display_df = final_df.iloc[[sel_idx]]
             
-        # 【核心升級 3】無點擊時的全覽分頁模式
         else:
             st.subheader("🎯 個股深度檢驗面板 (全覽分頁)")
             
@@ -785,7 +788,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             if inverse: return "q-up" if val < 0 else "q-down"
             return "q-up" if val > 0 else "q-down"
 
-        # 輸出面板 (依據 display_df，可能是 1 檔或 5 檔)
         for idx, row in display_df.iterrows():
             code = row['代號']
             
@@ -891,7 +893,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
-        # 【核心升級 3】分頁導覽控制 UI (僅在全覽模式下顯示)
         if not selected_rows:
             st.markdown("<br>", unsafe_allow_html=True)
             col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
@@ -907,28 +908,45 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     st.rerun()
 
         # =========================================================
-        # 💼 林哲群教授：紀律長贏資產配置模組
+        # 💼 林哲群教授：紀律長贏資產配置模組 (戰略分類)
         # =========================================================
         st.markdown("---")
         st.subheader("💼 【紀律長贏】系統嚴選：模型專屬投資組合 (Top 10)")
         
         if current_logic == "Quant":
-            st.caption("依據林哲群教授 (2026) 著作理論實踐：優先篩選 **高夏普值 (>1.0)** 確保單元風險報酬，次依 **低標準差 (波動率)** 排序控制絕對風險，並呈現 Beta 供投資人調控大盤關聯度。")
+            st.caption("依據林哲群教授 (2026) 著作理論實踐：優先篩選 **高夏普值 (>1.0)**，次依 **低標準差 (波動率)** 排序。並透過 Beta 值調控組合之曝險攻守定位。")
             port_df = final_df[final_df['sharpe'] > 1.0].copy()
             if len(port_df) < 10:
                 port_df = final_df.nlargest(10, 'sharpe').copy()
             port_df = port_df.sort_values(by='volatility', ascending=True).head(10)
+            
+            # 【核心升級3】給予明確的戰略分類
+            def classify_quant(r):
+                b = r.get('beta', 1.0)
+                if pd.isna(b): b = 1.0
+                return "🔥 攻擊動能 (高Beta)" if b >= 1.0 else "🛡️ 穩健防禦 (低Beta)"
+            port_df['配置定位'] = port_df.apply(classify_quant, axis=1)
+            port_df = port_df.sort_values(by=['配置定位', 'sharpe'], ascending=[False, False])
+            
         else:
-            st.caption("依據巴菲特護城河理論：優先篩選 **ROE > 15%** 與 **毛利率 > 40%**，並要求具備正向現金流能力。")
+            st.caption("依據巴菲特護城河理論：優先篩選 **ROE > 15%** 與 **毛利率 > 40%**，並依照 EPS 成長率分類成長與價值防禦屬性。")
             port_df = final_df[(final_df['roe'] > 0.15) & (final_df['gross_margins'] > 40)].copy()
             if len(port_df) < 10:
                 port_df = final_df.nlargest(10, 'roe').copy()
             port_df = port_df.sort_values(by='Score', ascending=False).head(10)
+            
+            # 【核心升級3】給予明確的戰略分類
+            def classify_buffett(r):
+                g = r.get('eps_growth', 0)
+                if pd.isna(g): g = 0
+                return "🚀 成長護城河 (高EPS增長)" if g > 15.0 else "💰 穩健價值 (高ROE收息)"
+            port_df['配置定位'] = port_df.apply(classify_buffett, axis=1)
+            port_df = port_df.sort_values(by=['配置定位', 'roe'], ascending=[False, False])
 
         if len(port_df) > 0:
-            c1, c2 = st.columns([1.5, 1])
+            c1, c2 = st.columns([1.6, 1])
             with c1:
-                port_display = port_df[['代號', '名稱', 'industry', 'sharpe', 'volatility', 'beta', 'roe']].copy()
+                port_display = port_df[['代號', '名稱', '配置定位', 'industry', 'sharpe', 'volatility', 'beta', 'roe']].copy()
                 port_display['配置權重'] = f"{100.0/len(port_df):.1f}%"
                 
                 st.dataframe(
@@ -937,6 +955,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     use_container_width=True,
                     column_config={
                         "industry": "板塊",
+                        "配置定位": st.column_config.TextColumn("戰略配置定位"),
                         "sharpe": st.column_config.NumberColumn("夏普值", format="%.2f"),
                         "volatility": st.column_config.NumberColumn("波動率", format="%.2f"),
                         "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
@@ -968,12 +987,14 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 </div>
                 """, unsafe_allow_html=True)
                 
-                fig_pie = px.pie(port_df, names='industry', hole=0.5, color_discrete_sequence=px.colors.sequential.Blues_r)
+                fig_pie = px.pie(port_df, names='配置定位', hole=0.5, color_discrete_sequence=['#3B82F6', '#10B981', '#F59E0B'])
                 fig_pie.update_layout(
                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                    font=dict(color='#9CA3AF'), margin=dict(t=30, b=0, l=0, r=0), height=200
+                    font=dict(color='#9CA3AF'), margin=dict(t=20, b=0, l=0, r=0), height=200,
+                    showlegend=False
                 )
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                 st.plotly_chart(fig_pie, use_container_width=True)
 
 elif not st.session_state['scan_finished']:
-    st.info("👈 請在左側設定分析參數，並點擊「啟動終端運算」。")
+    st.info("👈 請在左側設定篩選維度，並點擊「啟動終端運算」。")
