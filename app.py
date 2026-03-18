@@ -24,7 +24,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# --- 1. 介面設定 ---
+# --- 1. 介面設定 (專業終端名稱) ---
 st.set_page_config(
     page_title="台股量化與價值分析終端", 
     page_icon="Terminal", 
@@ -32,14 +32,16 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 華爾街專業看盤軟體風格 ---
+# --- 2. CSS 華爾街專業看盤軟體風格 (極致深色/高對比) ---
 st.markdown("""
 <style>
+    /* 強制極致深色背景 */
     :root { color-scheme: dark !important; }
     .stApp { background-color: #06090F !important; }
     [data-testid="stSidebar"] { background-color: #0D131F !important; border-right: 1px solid #1E293B !important; }
     h1, h2, h3, p, span, div, label { font-family: 'Segoe UI', Tahoma, sans-serif; color: #E2E8F0 !important; }
     
+    /* 下拉選單與複選框強制深色白字 */
     .stMultiSelect [data-baseweb="select"] { background-color: #0D131F !important; }
     .stMultiSelect [data-baseweb="select"] > div { background-color: #0D131F !important; color: #F8FAFC !important; border-color: #1E293B !important; }
     .stMultiSelect span[data-baseweb="tag"] { background-color: #1E293B !important; color: #F8FAFC !important; }
@@ -49,7 +51,9 @@ st.markdown("""
     li[role="option"] { background-color: #0D131F !important; color: #F8FAFC !important; }
     li[role="option"]:hover { background-color: #3B82F6 !important; }
     input { background-color: #0D131F !important; color: white !important; border: 1px solid #1E293B !important; }
+    input::placeholder { color: #64748B !important; }
     
+    /* 股票卡片：彭博終端機風格 */
     .stock-card { 
         background-color: #0D131F !important; 
         padding: 16px 24px; border-radius: 4px; 
@@ -63,6 +67,7 @@ st.markdown("""
     .header-title { font-size: 1.4rem; font-weight: 700; color: #FFFFFF !important; letter-spacing: 1px; }
     .header-price { font-size: 1.4rem; font-weight: 700; color: #10B981 !important; margin-left: 16px; font-family: 'Consolas', monospace; }
     
+    /* 專業報價網格 (Quote Board) */
     .quote-board {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
         background-color: #1E293B !important; border: 1px solid #1E293B !important; border-radius: 4px;
@@ -73,6 +78,7 @@ st.markdown("""
     .q-label { color: #64748B !important; font-size: 0.75rem; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px; }
     .q-val { color: #F8FAFC !important; font-weight: 700; font-size: 1.15rem; font-family: 'Consolas', 'Courier New', monospace; }
     
+    /* 霓虹漲跌色系 (Bull/Bear) */
     .q-up { color: #10B981 !important; }   
     .q-down { color: #EF4444 !important; } 
     .q-neu { color: #F59E0B !important; }  
@@ -122,7 +128,7 @@ try:
 except Exception:
     st.error("系統偵測不到 API Key，AI 洞察功能將受限。")
 
-# --- 5. 字型下載與註冊 (強固 PDF 輸出) ---
+# --- 5. 字型下載與註冊 (【終極防護】保證 PDF 絕不空白) ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -141,8 +147,10 @@ def setup_chinese_font():
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=30) as response, open(font_path, 'wb') as out_file:
                     out_file.write(response.read())
-                if os.path.getsize(font_path) > 1000000: break
-            except Exception: continue
+                if os.path.getsize(font_path) > 1000000:
+                    break
+            except Exception:
+                continue
                 
     try:
         if os.path.exists(font_path) and os.path.getsize(font_path) > 1000000:
@@ -150,6 +158,7 @@ def setup_chinese_font():
             return 'ChineseFont'
     except Exception: pass
     
+    # 終極備援：如果 TTF 下載失敗，啟用廣泛支援的 CID 宋體
     try:
         pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
         return 'STSong-Light'
@@ -370,7 +379,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
         if c not in df.columns: df[c] = np.nan
     return df, history_map
 
-# --- 8. 評分邏輯 (結合紀律長贏思維) ---
+# --- 8. 評分邏輯 ---
 def calculate_score(df, logic_type="Quant"):
     if df.empty: return df, None
     
@@ -578,7 +587,6 @@ def create_pdf(stock_data):
         ['本益比 (P/E)', safe_str(stock_data.get('pe')), 'FCF 收益率 (FCF Yield)', safe_str(stock_data.get('fcf_yield'), "{:.2f}%")],
         ['負債權益比 (D/E)', safe_str(stock_data.get('de_ratio'), "{:.1f}%"), '隱含成長率 (Implied G)', safe_str(stock_data.get('implied_growth')*100 if not pd.isna(stock_data.get('implied_growth')) else np.nan, "{:.1f}%")]
     ]
-    
     t = Table(metrics_data, colWidths=[120, 110, 120, 110])
     t.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), font_name),
@@ -607,10 +615,9 @@ def create_pdf(stock_data):
     buffer.seek(0)
     return buffer
 
-# 【核心升級1】導入林哲群教授學理之 AI Prompt
 AI_PROMPT_TEMPLATE = """
 請扮演專業的法人機構量化研究員，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
-【時間基準】今天是 [CURRENT_DATE]，請以最新視角撰寫，絕對不要在報告中捏造過去日期。
+【時間基準】今天是 [CURRENT_DATE]，請以最新視角撰寫，絕對不要在報告中捏造或顯示過去的歷史日期。
 
 【驅動模型】：[LOGIC_NAME]
 [LOGIC_DESC]
@@ -628,7 +635,7 @@ AI_PROMPT_TEMPLATE = """
 3. **操作結論**：結合 Beta 屬性與季線乖離，給出客觀的資產配置定位與具體行動建議。
 """
 
-# --- 11. 標籤解析函數 (加入林教授學理) ---
+# --- 11. 標籤解析函數 ---
 def get_tag_explanation(row, logic_type):
     tag = row.get('Quality', '')
     sharpe = row.get('sharpe', 0)
@@ -856,6 +863,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
 <span style='font-weight: 700; font-size: 0.95rem;'>{dcf_status}</span>
 </div></div>""", unsafe_allow_html=True)
                     
+                    # 【強制綁定邏輯】未執行 AI 前，隱藏 PDF 輸出按鈕
                     c_btn1, c_btn2 = st.columns(2)
                     
                     if code not in st.session_state['ai_results']:
@@ -959,37 +967,66 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         st.markdown("---")
         st.subheader("💼 【紀律長贏】系統嚴選：模型專屬投資組合 (Top 10)")
         
-        # 【核心升級2】完全落實《紀律長贏》的效率前緣過濾邏輯
         if current_logic == "Quant":
-            st.caption("依據林哲群教授 (2026) 著作理論實踐：優先篩選 **高夏普值 (>1.0)** 確保單元風險報酬，次依 **低標準差 (波動率)** 排序控制絕對風險。並排除夏普值為負的風險報酬不對等資產。")
-            port_df = final_df[final_df['sharpe'] > 1.0].copy()
-            if len(port_df) < 10:
-                # 降維尋找夏普最高者，但堅決排除負夏普 (落實紀律長贏精神)
-                port_df = final_df[final_df['sharpe'] > 0].nlargest(10, 'sharpe').copy()
+            st.caption("依據林哲群教授 (2026) 著作理論實踐：優先篩選 **高夏普值 (>1.0)** 確保單元風險報酬，次依 **低標準差 (波動率)** 排序控制絕對風險。並透過均衡抽取，為您搭配高低 Beta 資產組合。")
             
-            port_df = port_df.sort_values(by='volatility', ascending=True).head(10)
-            
+            # 【核心演算法：攻守均衡抽取】
+            pool_df = final_df[final_df['sharpe'] > 1.0].copy()
+            if len(pool_df) < 10:
+                pool_df = final_df[final_df['sharpe'] > 0].copy()
+            if len(pool_df) == 0:
+                pool_df = final_df.head(10).copy()
+                
             def classify_quant(r):
                 b = r.get('beta', 1.0)
                 if pd.isna(b): b = 1.0
-                return "🔥 高品質成長 (高夏普/高Beta)" if b >= 1.0 else "🛡️ 風險優化防禦 (高夏普/低Beta)"
+                return "🔥 攻擊動能 (高Beta)" if b >= 1.0 else "🛡️ 穩健防禦 (低Beta)"
             
-            port_df['戰略定位'] = port_df.apply(classify_quant, axis=1)
+            pool_df['戰略定位'] = pool_df.apply(classify_quant, axis=1)
+            
+            atk_df = pool_df[pool_df['戰略定位'] == "🔥 攻擊動能 (高Beta)"].sort_values(by=['sharpe', 'volatility'], ascending=[False, True])
+            def_df = pool_df[pool_df['戰略定位'] == "🛡️ 穩健防禦 (低Beta)"].sort_values(by=['sharpe', 'volatility'], ascending=[False, True])
+            
+            target_total = min(10, len(pool_df))
+            target_atk = min(5, len(atk_df))
+            target_def = min(5, len(def_df))
+            
+            if target_atk + target_def < target_total:
+                if len(atk_df) > target_atk: target_atk = target_total - target_def
+                elif len(def_df) > target_def: target_def = target_total - target_atk
+                
+            port_df = pd.concat([atk_df.head(target_atk), def_df.head(target_def)])
             port_df = port_df.sort_values(by=['戰略定位', 'sharpe'], ascending=[False, False])
             
         else:
-            st.caption("依據巴菲特護城河理論：優先篩選 **ROE > 15%** 與 **毛利率 > 40%**，並依照 EPS 成長率分類成長與價值防禦屬性。")
-            port_df = final_df[(final_df['roe'] > 0.15) & (final_df['gross_margins'] > 40)].copy()
-            if len(port_df) < 10:
-                port_df = final_df.nlargest(10, 'roe').copy()
-            port_df = port_df.sort_values(by='Score', ascending=False).head(10)
+            st.caption("依據巴菲特護城河理論：優先篩選 **ROE > 15%** 與 **毛利率 > 40%**，並透過均衡抽取，為您搭配兼具成長動能與價值收息的資產組合。")
             
+            # 【核心演算法：成長與價值均衡抽取】
+            pool_df = final_df[(final_df['roe'] > 0.15) & (final_df['gross_margins'] > 40)].copy()
+            if len(pool_df) < 10:
+                pool_df = final_df.nlargest(max(10, len(final_df)//2), 'roe').copy()
+            if len(pool_df) == 0:
+                pool_df = final_df.head(10).copy()
+                
             def classify_buffett(r):
                 g = r.get('eps_growth', 0)
                 if pd.isna(g): g = 0
                 return "🚀 成長護城河 (高EPS增長)" if g > 15.0 else "💰 穩健價值 (高ROE收息)"
             
-            port_df['戰略定位'] = port_df.apply(classify_buffett, axis=1)
+            pool_df['戰略定位'] = pool_df.apply(classify_buffett, axis=1)
+            
+            grw_df = pool_df[pool_df['戰略定位'] == "🚀 成長護城河 (高EPS增長)"].sort_values(by='Score', ascending=False)
+            val_df = pool_df[pool_df['戰略定位'] == "💰 穩健價值 (高ROE收息)"].sort_values(by='Score', ascending=False)
+            
+            target_total = min(10, len(pool_df))
+            target_grw = min(5, len(grw_df))
+            target_val = min(5, len(val_df))
+            
+            if target_grw + target_val < target_total:
+                if len(grw_df) > target_grw: target_grw = target_total - target_val
+                elif len(val_df) > target_val: target_val = target_total - target_grw
+                
+            port_df = pd.concat([grw_df.head(target_grw), val_df.head(target_val)])
             port_df = port_df.sort_values(by=['戰略定位', 'roe'], ascending=[False, False])
 
         if len(port_df) > 0:
