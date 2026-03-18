@@ -171,22 +171,30 @@ def create_resilient_session():
     session.mount('https://', adapter)
     return session
 
+# 【重大升級】：內建高質量主力板塊資料庫，徹底擺脫外部套件阻擋問題
+@st.cache_data
 def get_tw_stock_list():
-    try:
-        import twstock
-        codes = twstock.codes
-        stock_map = {}
-        industry_map = {}
-        for code, info in codes.items():
-            if info.type in ['股票', 'ETF']:
-                suffix = '.TW' if info.market == '上市' else '.TWO'
-                full = f"{code}{suffix}"
-                stock_map[full] = f"{full} {info.name}"
-                group = info.group if info.group else info.type
-                if group not in industry_map: industry_map[group] = []
-                industry_map[group].append(full)
-        return stock_map, industry_map
-    except: return {}, {}
+    industry_map = {
+        "半導體業": ["2330.TW 台積電", "2454.TW 聯發科", "2303.TW 聯電", "3711.TW 日月光投控", "2379.TW 瑞昱", "3034.TW 聯詠", "2344.TW 華邦電", "2337.TW 旺宏", "3443.TW 創意", "2408.TW 南亞科", "3035.TW 智原", "3529.TW 力旺"],
+        "電腦及週邊設備業": ["2382.TW 廣達", "3231.TW 緯創", "2356.TW 英業達", "2376.TW 技嘉", "2324.TW 仁寶", "2353.TW 宏碁", "2357.TW 華碩", "6669.TW 緯穎", "2362.TW 藍天", "3017.TW 奇鋐", "3324.TW 雙鴻", "3232.TW 呈碩"],
+        "電子零組件業": ["2308.TW 台達電", "3008.TW 大立光", "2327.TW 國巨", "2368.TW 金像電", "3037.TW 欣興", "2313.TW 華通", "2383.TW 台光電", "3044.TW 健鼎", "3653.TW 健策", "6269.TW 台郡"],
+        "其他電子業": ["2317.TW 鴻海", "2354.TW 鴻準", "6139.TW 亞翔", "2395.TW 研華"],
+        "光電業": ["2409.TW 友達", "3481.TW 群創", "6116.TW 彩晶", "2466.TW 冠捷", "6209.TW 今國電"],
+        "通信網路業": ["2412.TW 中華電", "3045.TW 台灣大", "4904.TW 遠傳", "2345.TW 智邦", "3596.TW 智易", "5388.TW 中磊", "3163.TW 波若威"],
+        "電子通路業": ["3702.TW 大聯大", "3036.TW 文曄"],
+        "金融保險業": ["2881.TW 富邦金", "2882.TW 國泰金", "2891.TW 中信金", "2886.TW 兆豐金", "2884.TW 玉山金", "2892.TW 第一金", "5880.TW 合庫金", "2883.TW 開發金"],
+        "航運業": ["2603.TW 長榮", "2609.TW 陽明", "2615.TW 萬海", "2610.TW 華航", "2618.TW 長榮航", "2606.TW 裕民"],
+        "水泥建材與鋼鐵": ["1101.TW 台泥", "1102.TW 亞泥", "2002.TW 中鋼", "2014.TW 中鴻", "2027.TW 大成鋼"],
+        "塑膠與化學": ["1301.TW 台塑", "1303.TW 南亞", "1326.TW 台化", "1304.TW 台聚", "1717.TW 長興", "1722.TW 台肥"],
+        "電機機械與電纜": ["1504.TW 東元", "1519.TW 華城", "1590.TW 亞力", "1513.TW 中興電", "1605.TW 華新", "1609.TW 大亞"],
+        "生技醫療業": ["1707.TW 葡萄王", "1720.TW 生達", "4743.TW 合一", "4736.TW 泰博", "1795.TW 美時"],
+        "汽車工業": ["2201.TW 裕隆", "2207.TW 和泰車", "1536.TW 和大", "1319.TW 東陽"]
+    }
+    stock_map = {}
+    for ind, stocks in industry_map.items():
+        for s in stocks:
+            stock_map[s] = s
+    return stock_map, industry_map
 
 stock_map, industry_map = get_tw_stock_list()
 
@@ -277,11 +285,6 @@ def batch_scan_stocks(stock_list, tej_data=None):
                 code = stock_str.split(' ')[0].split('.')[0]
                 name = code 
                 if len(stock_str.split(' ')) > 1: name = stock_str.split(' ')[1]
-                else:
-                    try:
-                        import twstock
-                        if code in twstock.codes: name = twstock.codes[code].name
-                    except: pass
 
                 y_data = future.result()
                 if y_data is None: continue
@@ -339,12 +342,17 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     if not pd.isna(price) and not pd.isna(t_eps):
                         implied_g = calculate_implied_growth(price, t_eps)
 
+                # 【核心修改】從內建資料庫判斷產業，若無則抓取 Yahoo Sector
                 industry = 'General'
-                try:
-                    import twstock
-                    if code in twstock.codes:
-                        industry = twstock.codes[code].group if twstock.codes[code].group else twstock.codes[code].type
-                except: pass
+                for k, v in industry_map.items():
+                    if any(code in s for s in v):
+                        industry = k
+                        break
+                if industry == 'General':
+                     try:
+                         y_sector = y_data.get('sector')
+                         if y_sector: industry = str(y_sector)
+                     except: pass
                 if code.startswith('00'): industry = 'ETF'
 
                 if not pd.isna(price):
@@ -659,7 +667,6 @@ def get_tag_explanation(row, logic_type):
         elif tag == "財務風險": return f"**為什麼被系統評定為「財務風險」？**<br>系統偵測到其負債權益比高達 **{de:.1f}%**，或現金流低至 **{fcf:.2f}%**。代表該公司可能正在靠過度舉債擴張，具有高度「虛胖」風險。"
         else: return "**標籤說明**<br>該標的在財務體質上表現中規中矩，雖未達嚴苛的「絕對護城河」標準，但也無明顯的財務致命傷。"
 
-# --- 12. 演算法核心：MPT 波動率與相關性強制鎖定法 ---
 def greedy_mpt_optimization(pool_df, returns_df, target_n, metric_col, initial_selected=None, target_vol_max=0.15):
     selected_codes = list(initial_selected) if initial_selected else []
     candidates = pool_df['代號'].tolist()
@@ -938,7 +945,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 c1, c2, c3 = st.columns([1, 1.8, 1.5])
                 with c1:
-                    # 原本的 df_norm 用來畫雷達圖，必須用原 dataframe index 尋找
                     orig_idx = df_norm.index[df_norm['代號'] == code]
                     if len(orig_idx) > 0:
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[orig_idx[0]])), use_container_width=True)
@@ -1071,7 +1077,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     st.rerun()
 
         # =========================================================
-        # 🛠️ 戰略指揮中心：自選組合監控與多空情境推演 (保持不變)
+        # 🛠️ 戰略指揮中心：自選組合監控與多空情境推演
         # =========================================================
         st.markdown("---")
         st.subheader("🛠️ 戰略指揮中心：自選組合監控與多空情境推演")
@@ -1152,7 +1158,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 st.warning(f"⚠️ 您的自選組合中有 {count_bad} 檔被判定為「劣勢/剔除」資產 (MDD 破防或夏普小於 0)，強烈建議依照上方訊號表進行減碼或停損！")
 
         # =========================================================
-        # 💼 系統嚴選：自動化 10 檔模型專屬投資組合 (完美接回)
+        # 💼 系統嚴選：自動化 10 檔模型專屬投資組合
         # =========================================================
         st.markdown("---")
         
