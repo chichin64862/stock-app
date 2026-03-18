@@ -162,63 +162,93 @@ def setup_chinese_font():
 
 font_name_global = setup_chinese_font()
 
-# --- 6. 核心數據引擎 ---
+# --- 6. 核心數據引擎 (加入防機器人驗證機制) ---
 def create_resilient_session():
     session = requests.Session()
-    retry = Retry(total=3, read=3, connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retry)
+    retry = Retry(total=5, read=5, connect=5, backoff_factor=0.3, status_forcelist=[429, 500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
     session.mount('http://', adapter)
     session.mount('https://', adapter)
+    # 偽裝為真實使用者，避免 Cloudflare 阻擋
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    })
     return session
 
-# 【核心修正】：內建產業覆寫字典，確保核心大股票不會被分錯
-@st.cache_data
+# 【重大升級】完全串接證交所 OpenAPI，捨棄脆弱爬蟲
+@st.cache_data(ttl=86400) # 快取一天
 def get_tw_stock_list():
+    stock_map = {}
+    industry_map = {}
+    code_to_industry = {}
+    
+    try:
+        # 1. 串接 TWSE OpenAPI 獲取上市股票與產業分類
+        res_twse = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", timeout=10)
+        if res_twse.status_code == 200:
+            for item in res_twse.json():
+                code = str(item.get('公司代號', '')).strip()
+                # 官方 API 欄位
+                name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
+                ind = str(item.get('產業別', '其他')).strip()
+                
+                if len(code) == 4 and code.isdigit():
+                    full = f"{code}.TW"
+                    stock_map[full] = f"{full} {name}"
+                    if ind not in industry_map: industry_map[ind] = []
+                    if full not in industry_map[ind]: industry_map[ind].append(full)
+                    code_to_industry[code] = ind
+    except Exception as e:
+        st.warning(f"TWSE API 連線失敗，啟動備援機制... ({e})")
+
+    try:
+        # 2. 串接 TPEx OpenAPI 獲取上櫃股票與產業分類
+        res_tpex = requests.get("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", timeout=10)
+        if res_tpex.status_code == 200:
+            for item in res_tpex.json():
+                code = str(item.get('公司代號', '')).strip()
+                name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
+                ind = str(item.get('產業別', '其他')).strip()
+                
+                if len(code) == 4 and code.isdigit():
+                    full = f"{code}.TWO"
+                    stock_map[full] = f"{full} {name}"
+                    if ind not in industry_map: industry_map[ind] = []
+                    if full not in industry_map[ind]: industry_map[ind].append(full)
+                    code_to_industry[code] = ind
+    except: pass
+
+    # 3. 備援與 ETF 補齊 (OpenAPI 未涵蓋 ETF，透過本地套件補足)
     try:
         import twstock
-        codes = twstock.codes
-        stock_map = {}
-        industry_map = {}
-        code_to_industry = {}
-        
-        # 覆寫字典：當 twstock 分錯時，以此為準
-        custom_sector_override = {
-            "2330": "半導體業", "2454": "半導體業", "2303": "半導體業", "3711": "半導體業",
-            "2382": "電腦及週邊設備業", "3231": "電腦及週邊設備業", "2356": "電腦及週邊設備業", "2376": "電腦及週邊設備業", "6669": "電腦及週邊設備業",
-            "2308": "電子零組件業", "3008": "光電業", "2327": "電子零組件業", "2383": "電子零組件業",
-            "2317": "其他電子業", "2354": "其他電子業",
-            "2881": "金融保險業", "2882": "金融保險業", "2891": "金融保險業",
-            "2603": "航運業", "2609": "航運業", "2615": "航運業",
-            "1519": "電機機械", "1513": "電機機械",
-        }
-
-        for code, info in codes.items():
+        for code, info in twstock.codes.items():
             if info.type in ['股票', 'ETF']:
                 suffix = '.TW' if info.market == '上市' else '.TWO'
                 full = f"{code}{suffix}"
-                stock_map[full] = f"{full} {info.name}"
                 
-                # 決定產業分類：優先使用自訂字典
-                if code in custom_sector_override:
-                    group = custom_sector_override[code]
-                else:
+                if full not in stock_map:
+                    stock_map[full] = f"{full} {info.name}"
                     group = info.group if info.group else info.type
-                    
-                if not group: group = "其他"
-                
-                if group not in industry_map: industry_map[group] = []
-                industry_map[group].append(full)
-                code_to_industry[code] = group
-                
-        return stock_map, industry_map, code_to_industry
-    except: return {}, {}, {}
+                    if not group: group = "其他"
+                    if group not in industry_map: industry_map[group] = []
+                    if full not in industry_map[group]: industry_map[group].append(full)
+                    code_to_industry[code] = group
+    except: pass
+    
+    return stock_map, industry_map, code_to_industry
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
 
-def get_stock_data(symbol):
+def get_stock_data(symbol, session):
     try:
+        # 【核心風控】隨機微延遲，防止觸發 Yahoo Rate Limit 阻擋
+        time.sleep(np.random.uniform(0.01, 0.1))
+        
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
-        ticker = yf.Ticker(symbol)
+        # 強制綁定防護 Session 進行呼叫
+        ticker = yf.Ticker(symbol, session=session)
+        
         try: info = ticker.info 
         except: info = {}
         try:
@@ -227,8 +257,13 @@ def get_stock_data(symbol):
         except: hist = pd.DataFrame()
 
         def g(k): return info.get(k)
+        
+        price = g('currentPrice') or g('previousClose')
+        if (price is None or pd.isna(price)) and not hist.empty:
+            price = float(hist['Close'].iloc[-1])
+            
         data = {
-            'close_price': g('currentPrice') or g('previousClose'),
+            'close_price': price,
             'pe': g('trailingPE'),
             'peg': g('pegRatio'),
             'pb': g('priceToBook'),
@@ -274,8 +309,12 @@ def batch_scan_stocks(stock_list, tej_data=None):
     history_map = {} 
     RISK_FREE_RATE = 0.015 
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        future_to_stock = {executor.submit(get_stock_data, s.split(' ')[0]): s for s in stock_list}
+    # 啟動全域連線池
+    global_session = create_resilient_session()
+    
+    # 調降並行數量至 3，確保高穩定性不漏股
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        future_to_stock = {executor.submit(get_stock_data, s.split(' ')[0], global_session): s for s in stock_list}
         
         for future in concurrent.futures.as_completed(future_to_stock):
             stock_str = future_to_stock[future]
@@ -345,7 +384,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     if not pd.isna(price) and not pd.isna(t_eps):
                         implied_g = calculate_implied_growth(price, t_eps)
 
-                # 【精確修正】：透過反向字典找到中文分類，如果是 ETF 就寫 ETF
+                # 【精準映射】：從全域官方 OpenAPI 字典反查產業分類
                 industry = code_to_industry_map.get(code, '未分類')
                 if code.startswith('00'): industry = 'ETF'
 
@@ -813,7 +852,7 @@ with st.sidebar:
     if st.button("🚀 啟動終端運算", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False
         st.session_state['panel_page'] = 1 
-        with st.spinner(f"正在擷取並運算 {len(target_stocks)} 檔標的數據..."):
+        with st.spinner(f"正在擷取並運算 {len(target_stocks)} 檔標的數據... (若選取大量標的，需等待防阻擋機制運行)"):
             raw, hist_map = batch_scan_stocks(target_stocks, st.session_state['tej_data'])
             raw = sanitize_data(raw)
             st.session_state['raw_data'] = raw
@@ -826,7 +865,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 內建主力板塊覆寫版")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 官方 OpenAPI 精準對齊版")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -1186,7 +1225,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             
             pool_df['戰略定位'] = pool_df.apply(classify_quant_bucket, axis=1)
             
-            # 【4-3-3 均衡降維抽取】
             grow_pool = pool_df[pool_df['戰略定位'] == "🚀 成長型資產"]
             def_pool = pool_df[pool_df['戰略定位'] == "🛡️ 防禦型資產"]
             neu_pool = pool_df[pool_df['戰略定位'] == "⚖️ 中性資產"]
