@@ -162,18 +162,13 @@ def setup_chinese_font():
 
 font_name_global = setup_chinese_font()
 
-# --- 6. 核心數據引擎 (高韌性連線) ---
+# --- 6. 核心數據引擎 ---
 def create_resilient_session():
     session = requests.Session()
-    # 增加重試次數與退避時間，防禦 Yahoo API 封鎖
-    retry = Retry(total=5, read=5, connect=5, backoff_factor=0.3, status_forcelist=[429, 500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
+    retry = Retry(total=3, read=3, connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
     session.mount('http://', adapter)
     session.mount('https://', adapter)
-    # 偽裝成正常瀏覽器
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    })
     return session
 
 def get_tw_stock_list():
@@ -195,31 +190,20 @@ def get_tw_stock_list():
 
 stock_map, industry_map = get_tw_stock_list()
 
-def get_stock_data(symbol, session):
+def get_stock_data(symbol):
     try:
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
-        # 注入防封鎖 Session
-        ticker = yf.Ticker(symbol, session=session)
-        
-        info = {}
+        ticker = yf.Ticker(symbol)
         try: info = ticker.info 
-        except: pass
-        
-        hist = pd.DataFrame()
+        except: info = {}
         try:
             hist = ticker.history(period="6mo")
             if not hist.empty and hist['Volume'].iloc[-1] == 0: pass 
-        except: pass
+        except: hist = pd.DataFrame()
 
         def g(k): return info.get(k)
-        
-        # 雙重備援：確保一定抓得到價格
-        price = g('currentPrice') or g('previousClose')
-        if (price is None or pd.isna(price)) and not hist.empty:
-            price = float(hist['Close'].iloc[-1])
-            
         data = {
-            'close_price': price,
+            'close_price': g('currentPrice') or g('previousClose'),
             'pe': g('trailingPE'),
             'peg': g('pegRatio'),
             'pb': g('priceToBook'),
@@ -259,18 +243,33 @@ def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
         else: low = mid
     return (low + high) / 2
 
-# --- 7. 批量掃描 (高併發與防呆機制) ---
+def process_tej_upload(uploaded_files):
+    if not uploaded_files: return None
+    tej_map = {}
+    if not isinstance(uploaded_files, list): uploaded_files = [uploaded_files]
+    for uploaded_file in uploaded_files:
+        try:
+            if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
+            else: df = pd.read_excel(uploaded_file)
+            df.columns = [str(c).strip() for c in df.columns]
+            code_col = next((c for c in df.columns if '代號' in c or 'Code' in c), None)
+            if not code_col: continue 
+            for _, row in df.iterrows():
+                raw_code = str(row[code_col]).split('.')[0].strip()
+                if raw_code in tej_map: tej_map[raw_code].update(row.to_dict())
+                else: tej_map[raw_code] = row.to_dict()
+        except: continue
+    return tej_map
+
+# --- 7. 批量掃描 ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def batch_scan_stocks(stock_list, tej_data=None):
     results = []
     history_map = {} 
     RISK_FREE_RATE = 0.015 
     
-    # 建立全域防禦 Session 供執行緒使用
-    global_session = create_resilient_session()
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        future_to_stock = {executor.submit(get_stock_data, s.split(' ')[0], global_session): s for s in stock_list}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_stock = {executor.submit(get_stock_data, s.split(' ')[0]): s for s in stock_list}
         
         for future in concurrent.futures.as_completed(future_to_stock):
             stock_str = future_to_stock[future]
@@ -314,7 +313,6 @@ def batch_scan_stocks(stock_list, tej_data=None):
                             mdd = drawdown.min()
                     
                     if pd.isna(price): price = y_data.get('close_price')
-                    
                     def get_val(key):
                         v = y_data.get(key)
                         return float(v) if v is not None else np.nan
@@ -341,17 +339,15 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     if not pd.isna(price) and not pd.isna(t_eps):
                         implied_g = calculate_implied_growth(price, t_eps)
 
-                # 精準同步台灣官方產業分類
+                # 【精確校正】：完美同步 twstock 的分類，取代硬編碼
                 industry = '未知'
                 try:
                     import twstock
                     if code in twstock.codes:
-                        ind_info = twstock.codes[code]
-                        industry = ind_info.group if ind_info.group else ind_info.type
+                        industry = twstock.codes[code].group if twstock.codes[code].group else twstock.codes[code].type
                 except: pass
-                if code.startswith('00'): industry = 'ETF' 
+                if code.startswith('00'): industry = 'ETF'
 
-                # 只要價格不是 NaN，就算安全抓取成功，存入結果
                 if not pd.isna(price):
                     results.append({
                         '代號': code, '名稱': name, 'close_price': price,
@@ -372,7 +368,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
         if c not in df.columns: df[c] = np.nan
     return df, history_map
 
-# --- 8. 評分邏輯 (黃金三角：成長/防禦/中性) ---
+# --- 8. 評分邏輯 (三大水桶：成長/防禦/中性) ---
 def calculate_score(df, logic_type="Quant"):
     if df.empty: return df, None
     required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'fcf_yield', 'de_ratio', 'beta', 'sharpe', 'mdd', 'implied_growth', 'peg', 'volatility', 'roe', 'priceToMA60']
@@ -383,6 +379,7 @@ def calculate_score(df, logic_type="Quant"):
     scores = []
     plans = []
     quality_tags = []
+    
     fill_map = {c: 0 for c in required_cols}
     fill_map['pe'] = 50; fill_map['volatility'] = 0.5; fill_map['beta'] = 1.0; fill_map['de_ratio'] = 100
     calc_df = df.fillna(fill_map)
@@ -390,6 +387,7 @@ def calculate_score(df, logic_type="Quant"):
     for idx, row in calc_df.iterrows():
         total_score = 0
         total_weight = 0
+        
         if logic_type == "Quant":
             config = {
                 'Sharpe': {'col': 'sharpe', 'dir': 'max', 'w': 4.0, 'cat': '動能'},
@@ -767,7 +765,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: API 防阻擋與高韌性修復版")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 動態快篩過濾器修復版")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -880,6 +878,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 c1, c2, c3 = st.columns([1, 1.8, 1.5])
                 with c1:
+                    # 原本的 df_norm 用來畫雷達圖，必須用原 dataframe index 尋找
                     orig_idx = df_norm.index[df_norm['代號'] == code]
                     if len(orig_idx) > 0:
                         st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[orig_idx[0]])), use_container_width=True)
