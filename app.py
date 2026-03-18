@@ -416,7 +416,7 @@ def calculate_score(df, logic_type="Quant"):
             else: q_tag = "中立觀望"
             
             if sh > 1.0: plans.append("納入效率前緣")
-            elif vol > 0.5: plans.append("高波動警示")
+            elif sh < 0: plans.append("避開標的")
             else: plans.append("中立觀望")
         else: 
             roe = row.get('roe', 0)
@@ -542,6 +542,7 @@ def create_pdf(stock_data):
     
     safe_name = html.escape(str(stock_data.get('名稱', '')))
     safe_code = html.escape(str(stock_data.get('代號', '')))
+    
     story.append(Paragraph(f"分析標的: {safe_name} ({safe_code})", h2_style))
     story.append(Spacer(1, 10))
     
@@ -580,6 +581,7 @@ def create_pdf(stock_data):
                 safe_line = html.escape(line.strip()).replace('**', '').replace('##', '')
                 story.append(Paragraph(safe_line, normal_style))
                 story.append(Spacer(1, 5))
+                
     try: doc.build(story)
     except Exception as e: print(e)
     buffer.seek(0)
@@ -782,7 +784,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 清大林哲群《紀律長贏》MPT 絕對屏障版")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 清大林哲群《紀律長贏》MPT 極限降維修復版")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -912,7 +914,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 current_today = datetime.now().strftime('%Y年%m月%d日')
                                 if current_logic == "Quant":
                                     l_name = "量化風控模型"
-                                    l_desc = "請以清大林哲群教授《紀律長贏》的『風險優化』核心精神：辨識高夏普/高Beta的『高品質成長型資產』，以及高夏普/低Beta的『風險優化防禦資產』。並警示夏普值為負的風險報酬不對等現象。"
+                                    l_desc = "請以清大林哲群教授《紀律長贏》的『風險優化』核心精神，優先評估夏普值(CP值)是否在效率前緣，並警示夏普值為負的風險報酬不對等現象。"
                                 else:
                                     l_name = "價值護城河模型"
                                     l_desc = "優先考量ROE、毛利率、FCF現金流收益率，防禦高負債風險。"
@@ -943,7 +945,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 current_today = datetime.now().strftime('%Y年%m月%d日')
                                 if current_logic == "Quant":
                                     l_name = "量化風控模型"
-                                    l_desc = "請以清大林哲群教授《紀律長贏》的『風險優化』核心精神：辨識高夏普/高Beta的『高品質成長型資產』，以及高夏普/低Beta的『風險優化防禦資產』。並警示夏普值為負的風險報酬不對等現象。"
+                                    l_desc = "請以清大林哲群教授《紀律長贏》的『風險優化』核心精神，優先評估夏普值(CP值)是否在效率前緣，並警示夏普值為負的風險報酬不對等現象。"
                                 else:
                                     l_name = "價值護城河模型"
                                     l_desc = "優先考量ROE、毛利率、FCF現金流收益率，防禦高負債風險。"
@@ -1002,7 +1004,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     st.rerun()
 
         # =========================================================
-        # 💼 林哲群教授：紀律長贏資產配置模組 (極限降維鎖定 10%-15%)
+        # 💼 林哲群教授：紀律長贏資產配置模組 (MPT 波動率極限強制鎖定 10-15%)
         # =========================================================
         st.markdown("---")
         st.subheader("💼 【紀律長贏】效率前緣投資組合 (MPT Risk-Targeted Optimization)")
@@ -1023,7 +1025,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         port_df = pd.DataFrame()
         
         if current_logic == "Quant":
-            st.caption("依據林哲群教授理論：鎖定 **高夏普值 (>1.0)**，並透過 MPT 極限降維演算法，對高度正相關或導致組合波動突破 15% 的標的給予毀滅性懲罰，強迫系統尋找走勢互補的防禦型資產。(⚠️若篩選池全為高波電子股，請加入金融或大型ETF以利降維)")
+            st.caption("依據林哲群教授理論：嚴格限制 MPT 真實組合波動率於 **10% ~ 15%** 黃金區間。系統透過極限降維演算法，對高度正相關(>0.4)或導致波動超標的資產給予毀滅性懲罰，強迫尋找走勢互補的防禦資產。(⚠️建議於候選池加入金融/ETF以利順利降維)")
             
             pool_df = final_df[final_df['sharpe'] > 1.0].copy()
             if len(pool_df) < 10: pool_df = final_df[final_df['sharpe'] > 0].copy()
@@ -1040,6 +1042,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             
             pool_df['戰略定位'] = pool_df.apply(classify_quant, axis=1)
             
+            # 【極限鎖定演算法】
             final_codes = greedy_mpt_optimization(pool_df, returns_df, target_n=10, metric_col='sharpe', target_vol_max=0.15)
                 
             port_df = pool_df[pool_df['代號'].isin(final_codes)].sort_values(by=['戰略定位', 'sharpe'], ascending=[False, False])
@@ -1063,7 +1066,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             port_df = pool_df[pool_df['代號'].isin(final_codes)].sort_values(by=['戰略定位', 'roe'], ascending=[False, False])
 
         if len(port_df) > 0:
-            c1, c2, c3 = st.columns([1.6, 1, 1])
+            c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
             with c1:
                 port_display = port_df[['代號', '名稱', '戰略定位', 'sharpe', 'volatility', 'beta', 'roe']].copy()
                 port_display['配置權重'] = f"{100.0/len(port_df):.1f}%"
@@ -1125,10 +1128,11 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         corr_matrix_port.columns = short_codes
                         corr_matrix_port.index = short_codes
                         
-                        fig_corr = px.imshow(corr_matrix_port, text_auto=".1f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, title="組合資產關聯熱力圖")
+                        st.markdown("<div style='font-size:0.85rem; color:#9CA3AF; margin-bottom:5px;'>🔍 提示：滑鼠移至圖表右上角，點擊「⤢」可全螢幕放大</div>", unsafe_allow_html=True)
+                        fig_corr = px.imshow(corr_matrix_port, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, title="組合資產關聯熱力圖")
                         fig_corr.update_layout(
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                            font=dict(color='#9CA3AF', size=10), margin=dict(t=30, b=0, l=0, r=0), height=240,
+                            font=dict(color='#9CA3AF', size=11), margin=dict(t=40, b=20, l=20, r=20), height=380,
                             coloraxis_showscale=False
                         )
                         fig_corr.update_xaxes(type='category')
