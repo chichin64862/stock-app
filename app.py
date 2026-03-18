@@ -24,7 +24,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# --- 1. 介面設定 (專業終端名稱) ---
+# --- 1. 介面設定 ---
 st.set_page_config(
     page_title="台股量化與價值分析終端", 
     page_icon="Terminal", 
@@ -32,16 +32,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 華爾街專業看盤軟體風格 (極致深色/高對比) ---
+# --- 2. CSS 華爾街專業看盤軟體風格 ---
 st.markdown("""
 <style>
-    /* 強制極致深色背景 */
     :root { color-scheme: dark !important; }
     .stApp { background-color: #06090F !important; }
     [data-testid="stSidebar"] { background-color: #0D131F !important; border-right: 1px solid #1E293B !important; }
     h1, h2, h3, p, span, div, label { font-family: 'Segoe UI', Tahoma, sans-serif; color: #E2E8F0 !important; }
     
-    /* 下拉選單與複選框強制深色白字 */
     .stMultiSelect [data-baseweb="select"] { background-color: #0D131F !important; }
     .stMultiSelect [data-baseweb="select"] > div { background-color: #0D131F !important; color: #F8FAFC !important; border-color: #1E293B !important; }
     .stMultiSelect span[data-baseweb="tag"] { background-color: #1E293B !important; color: #F8FAFC !important; }
@@ -51,9 +49,7 @@ st.markdown("""
     li[role="option"] { background-color: #0D131F !important; color: #F8FAFC !important; }
     li[role="option"]:hover { background-color: #3B82F6 !important; }
     input { background-color: #0D131F !important; color: white !important; border: 1px solid #1E293B !important; }
-    input::placeholder { color: #64748B !important; }
     
-    /* 股票卡片：彭博終端機風格 */
     .stock-card { 
         background-color: #0D131F !important; 
         padding: 16px 24px; border-radius: 4px; 
@@ -67,7 +63,6 @@ st.markdown("""
     .header-title { font-size: 1.4rem; font-weight: 700; color: #FFFFFF !important; letter-spacing: 1px; }
     .header-price { font-size: 1.4rem; font-weight: 700; color: #10B981 !important; margin-left: 16px; font-family: 'Consolas', monospace; }
     
-    /* 專業報價網格 (Quote Board) */
     .quote-board {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
         background-color: #1E293B !important; border: 1px solid #1E293B !important; border-radius: 4px;
@@ -78,7 +73,6 @@ st.markdown("""
     .q-label { color: #64748B !important; font-size: 0.75rem; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px; }
     .q-val { color: #F8FAFC !important; font-weight: 700; font-size: 1.15rem; font-family: 'Consolas', 'Courier New', monospace; }
     
-    /* 霓虹漲跌色系 (Bull/Bear) */
     .q-up { color: #10B981 !important; }   
     .q-down { color: #EF4444 !important; } 
     .q-neu { color: #F59E0B !important; }  
@@ -128,7 +122,7 @@ try:
 except Exception:
     st.error("系統偵測不到 API Key，AI 洞察功能將受限。")
 
-# --- 5. 字型下載與註冊 (【終極防護】保證 PDF 絕不空白) ---
+# --- 5. 字型下載與註冊 (強固 PDF 輸出) ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -147,10 +141,8 @@ def setup_chinese_font():
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=30) as response, open(font_path, 'wb') as out_file:
                     out_file.write(response.read())
-                if os.path.getsize(font_path) > 1000000:
-                    break
-            except Exception:
-                continue
+                if os.path.getsize(font_path) > 1000000: break
+            except Exception: continue
                 
     try:
         if os.path.exists(font_path) and os.path.getsize(font_path) > 1000000:
@@ -158,7 +150,6 @@ def setup_chinese_font():
             return 'ChineseFont'
     except Exception: pass
     
-    # 終極備援：如果 TTF 下載失敗，啟用廣泛支援的 CID 宋體
     try:
         pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
         return 'STSong-Light'
@@ -379,7 +370,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
         if c not in df.columns: df[c] = np.nan
     return df, history_map
 
-# --- 8. 評分邏輯 ---
+# --- 8. 評分邏輯 (結合紀律長贏思維) ---
 def calculate_score(df, logic_type="Quant"):
     if df.empty: return df, None
     
@@ -437,10 +428,11 @@ def calculate_score(df, logic_type="Quant"):
             vol = row.get('volatility', 1)
             b = row.get('beta', 1)
             if sh > 1.0: q_tag = "高夏普 (CP值)"
-            elif sh < 0: q_tag = "動能疲弱"
+            elif sh < 0: q_tag = "風險報酬不對等"
+            else: q_tag = "中立觀望"
             
-            if sh > 1.0 and vol < 0.3: plans.append("防禦型買進")
-            elif sh > 0.5 and b > 1.2: plans.append("積極型買進")
+            if sh > 1.0 and b > 1.0: plans.append("攻擊成長型")
+            elif sh > 1.0 and vol < 0.3: plans.append("防禦優化型")
             elif vol > 0.5: plans.append("高波動警示")
             else: plans.append("中立觀望")
             
@@ -452,6 +444,7 @@ def calculate_score(df, logic_type="Quant"):
             
             if roe > 15 and gm > 40 and de < 100 and fcf > 0: q_tag = "護城河優良"
             elif de > 200 or fcf < -5: q_tag = "財務風險"
+            else: q_tag = "中立觀望"
             
             if q_tag == "護城河優良" and final > 70: plans.append("價值浮現")
             elif q_tag == "財務風險": plans.append("避開標的")
@@ -551,7 +544,6 @@ def call_ai(prompt):
         else: return f"分析服務暫時無回應 (代碼: {r.status_code})"
     except Exception as e: return "分析服務連線逾時，請稍後再試。"
 
-# 【核心更新 2】對齊深度面板的所有數據，並確保 AI 內容被安全寫入
 def create_pdf(stock_data):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
@@ -577,7 +569,6 @@ def create_pdf(stock_data):
         try: return "N/A" if (pd.isna(val) or val is None) else fmt.format(float(val))
         except: return "N/A"
 
-    # 完整對應 3x3 網格的所有數據 (9個+分數與價格)
     metrics_data = [
         ['綜合評分 (Score)', f"{stock_data.get('Score', 'N/A')}", '收盤價 (Price)', f"{stock_data.get('close_price', 'N/A')}"],
         ['夏普值 (Sharpe)', safe_str(stock_data.get('sharpe')), '波動率 (Volatility)', safe_str(stock_data.get('volatility')*100 if not pd.isna(stock_data.get('volatility')) else np.nan, "{:.1f}%")],
@@ -607,7 +598,6 @@ def create_pdf(stock_data):
         clean_text = stock_data['ai_analysis']
         for line in clean_text.split('\n'):
             if line.strip():
-                # 終極轉義，避免 <> 符號破壞 XML 結構
                 safe_line = html.escape(line.strip()).replace('**', '').replace('##', '')
                 story.append(Paragraph(safe_line, normal_style))
                 story.append(Spacer(1, 5))
@@ -617,9 +607,10 @@ def create_pdf(stock_data):
     buffer.seek(0)
     return buffer
 
+# 【核心升級1】導入林哲群教授學理之 AI Prompt
 AI_PROMPT_TEMPLATE = """
 請扮演專業的法人機構量化研究員，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
-【時間基準】今天是 [CURRENT_DATE]，請以最新視角撰寫，絕對不要在報告中捏造或顯示過去的歷史日期。
+【時間基準】今天是 [CURRENT_DATE]，請以最新視角撰寫，絕對不要在報告中捏造過去日期。
 
 【驅動模型】：[LOGIC_NAME]
 [LOGIC_DESC]
@@ -632,12 +623,12 @@ AI_PROMPT_TEMPLATE = """
 
 【輸出要求】
 請依照「[LOGIC_NAME]」模型視角，輸出三大分析模塊：
-1. **核心檢驗**：針對該模型最看重的指標進行評判。
-2. **估值與風險**：檢視 Reverse DCF 與潛在財務或波動風險。
-3. **操作結論**：結合中長期均線乖離狀況，給出客觀且具體的行動建議。
+1. **風險與效率前緣檢驗**：依據清大林哲群教授《紀律長贏》的學理，嚴格檢視夏普值是否匹配風險（若為負值請特別警示風險報酬不對等）。
+2. **護城河與估值**：檢視 ROE/現金流 財務體質，並對照 Reverse DCF 評估是否透支未來。
+3. **操作結論**：結合 Beta 屬性與季線乖離，給出客觀的資產配置定位與具體行動建議。
 """
 
-# --- 11. 標籤解析函數 ---
+# --- 11. 標籤解析函數 (加入林教授學理) ---
 def get_tag_explanation(row, logic_type):
     tag = row.get('Quality', '')
     sharpe = row.get('sharpe', 0)
@@ -647,13 +638,13 @@ def get_tag_explanation(row, logic_type):
     de = row.get('de_ratio', 0)
     
     if logic_type == "Quant":
-        if tag == "高夏普 (CP值)": return f"**為什麼被系統評定為「高夏普 (CP值)」？**<br>此標的近期年化夏普值高達 **{sharpe:.2f}**（系統門檻為 > 1.0）。在量化模型中，這代表投資人每承擔 1 單位的波動風險，就能獲得超過 1 單位的超額報酬，屬於極具盈虧比（CP值）的強勢動能標的。"
-        elif tag == "動能疲弱": return f"**為什麼被系統評定為「動能疲弱」？**<br>此標的夏普值為 **{sharpe:.2f}**（小於 0）。這意味著其近期的報酬率甚至低於無風險利率，承擔了市場波動卻無法換取正向的超額利潤。"
-        else: return "**標籤說明**<br>該標的各項量化指標（夏普值、波動率）落在市場均值區間，表現平穩，未觸發極端強勢或弱勢的演算法警示。"
+        if tag == "高夏普 (CP值)": return f"**為什麼被系統評定為「高夏普 (CP值)」？**<br>此標的近期年化夏普值高達 **{sharpe:.2f}**。依據林哲群教授《紀律長贏》的『風險優化』觀念：這代表投資人每承擔 1 單位的波動風險，就能獲得超過 1 單位的超額報酬。此標的位於『效率前緣』上，屬於風險調整後報酬極佳的高品質資產。"
+        elif tag == "風險報酬不對等": return f"**為什麼被系統評定為「風險報酬不對等」？**<br>此標的夏普值為 **{sharpe:.2f}**（小於 0）。如《紀律長贏》所述：即便部分傳產或金融股擁有高殖利率，但當夏普率為負時，代表其實際累積報酬低於無風險利率。投資此類資產並未為投資人帶來與風險相匹配的回報，不符合長期紀律投資精神。"
+        else: return "**標籤說明**<br>該標的各項量化指標（夏普值、波動率）落在市場均值區間，風險與報酬呈現中性，未觸發極端強勢或弱勢的演算法警示。"
     else:
         if tag == "護城河優良": return f"**為什麼被系統評定為「護城河優良」？**<br>此標的完美符合巴菲特的核心護城河條件：<br>1. **高資本效率**：ROE 達 **{roe:.1f}%** (標準 > 15%)。<br>2. **強大定價權**：毛利率達 **{gm:.1f}%** (標準 > 40%)。<br>3. **真實變現力**：自由現金流收益率為正且無過度舉債。這是一檔擁有深厚經濟壁壘的優質資產。"
-        elif tag == "財務風險": return f"**為什麼被系統評定為「財務風險」？**<br>系統偵測到其存在潛在危機：負債權益比(D/E) 高達 **{de:.1f}%**，或自由現金流收益率低至 **{fcf:.2f}%**。這代表該公司可能正在靠過度舉債擴張，或賺到的盈餘無法轉換為真實現金，具有高度風險。"
-        else: return "**標籤說明**<br>該標的在財務體質（ROE、毛利率、現金流）上表現中規中矩，雖未達巴菲特嚴苛的「絕對護城河」標準，但也無明顯的財務致命傷。"
+        elif tag == "財務風險": return f"**為什麼被系統評定為「財務風險」？**<br>系統偵測到其存在潛在危機：負債權益比(D/E) 高達 **{de:.1f}%**，或自由現金流收益率低至 **{fcf:.2f}%**。這代表該公司可能正在靠過度舉債擴張，或賺到的盈餘無法轉換為真實現金，具有高度「虛胖」或「資金斷鏈」風險。"
+        else: return "**標籤說明**<br>該標的在財務體質（ROE、毛利率、現金流）上表現中規中矩，雖未達嚴苛的「絕對護城河」標準，但也無明顯的財務致命傷。"
 
 # --- 12. 主程式介面 ---
 with st.sidebar:
@@ -743,7 +734,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | MODULES: PDF Flow Fix, Full Panel Report")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 清華大學林哲群教授《紀律長贏》框架導入")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -817,7 +808,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 q_tag = row['Quality']
                 if q_tag in ["高夏普 (CP值)", "護城河優良", "Quality"]: quality_tag = f"<span class='tag tag-moat'>💎 {q_tag}</span>"
-                elif q_tag in ["動能疲弱", "財務風險", "Profitless"]: quality_tag = f"<span class='tag tag-risk'>⚠️ {q_tag}</span>"
+                elif q_tag in ["風險報酬不對等", "財務風險", "Profitless"]: quality_tag = f"<span class='tag tag-risk'>⚠️ {q_tag}</span>"
                 else: quality_tag = ""
                     
                 logic_tag = f"<span class='tag tag-logic'>{logic_badge}</span>"
@@ -865,17 +856,15 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
 <span style='font-weight: 700; font-size: 0.95rem;'>{dcf_status}</span>
 </div></div>""", unsafe_allow_html=True)
                     
-                    # 【核心修改 1】邏輯強制綁定：AI 執行後才顯示 PDF 輸出按鈕
                     c_btn1, c_btn2 = st.columns(2)
                     
                     if code not in st.session_state['ai_results']:
-                        # 如果還沒有 AI 結果，只顯示執行 AI 按鈕
                         with c_btn1:
                             if st.button(f"🧠 執行 AI 洞察", key=f"ai_{idx}"):
                                 current_today = datetime.now().strftime('%Y年%m月%d日')
                                 if current_logic == "Quant":
                                     l_name = "量化風控模型"
-                                    l_desc = "優先考量夏普值(CP值)與波動率(風險)，並解釋Beta值。"
+                                    l_desc = "請以清大林哲群教授《紀律長贏》的『風險優化』核心精神，優先評估夏普值(CP值)是否在效率前緣，並警示夏普值為負的風險報酬不對等現象。"
                                 else:
                                     l_name = "價值護城河模型"
                                     l_desc = "優先考量ROE、毛利率、FCF現金流收益率，防禦高負債風險。"
@@ -899,15 +888,14 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 
                                 an = call_ai(p_txt)
                                 st.session_state['ai_results'][code] = an
-                                st.rerun() # 重新載入以顯示分析結果與 PDF 按鈕
+                                st.rerun() 
                     else:
-                        # 已經有 AI 結果了，顯示重新執行按鈕與 PDF 輸出按鈕
                         with c_btn1:
                             if st.button(f"🔄 更新 AI 洞察", key=f"ai_re_{idx}"):
                                 current_today = datetime.now().strftime('%Y年%m月%d日')
                                 if current_logic == "Quant":
                                     l_name = "量化風控模型"
-                                    l_desc = "優先考量夏普值(CP值)與波動率(風險)，並解釋Beta值。"
+                                    l_desc = "請以清大林哲群教授《紀律長贏》的『風險優化』核心精神，優先評估夏普值(CP值)是否在效率前緣，並警示夏普值為負的風險報酬不對等現象。"
                                 else:
                                     l_name = "價值護城河模型"
                                     l_desc = "優先考量ROE、毛利率、FCF現金流收益率，防禦高負債風險。"
@@ -946,7 +934,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     else:
                         st.warning("無 K 線數據")
 
-                # 如果有 AI 分析結果，則顯示在面板最下方
                 if code in st.session_state['ai_results']:
                     st.markdown(f"<div class='ai-box'>{st.session_state['ai_results'][code]}</div>", unsafe_allow_html=True)
 
@@ -972,17 +959,21 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         st.markdown("---")
         st.subheader("💼 【紀律長贏】系統嚴選：模型專屬投資組合 (Top 10)")
         
+        # 【核心升級2】完全落實《紀律長贏》的效率前緣過濾邏輯
         if current_logic == "Quant":
-            st.caption("依據林哲群教授 (2026) 著作理論實踐：優先篩選 **高夏普值 (>1.0)**，次依 **低標準差 (波動率)** 排序。並透過 Beta 值調控組合之曝險攻守定位。")
+            st.caption("依據林哲群教授 (2026) 著作理論實踐：優先篩選 **高夏普值 (>1.0)** 確保單元風險報酬，次依 **低標準差 (波動率)** 排序控制絕對風險。並排除夏普值為負的風險報酬不對等資產。")
             port_df = final_df[final_df['sharpe'] > 1.0].copy()
             if len(port_df) < 10:
-                port_df = final_df.nlargest(10, 'sharpe').copy()
+                # 降維尋找夏普最高者，但堅決排除負夏普 (落實紀律長贏精神)
+                port_df = final_df[final_df['sharpe'] > 0].nlargest(10, 'sharpe').copy()
+            
             port_df = port_df.sort_values(by='volatility', ascending=True).head(10)
             
             def classify_quant(r):
                 b = r.get('beta', 1.0)
                 if pd.isna(b): b = 1.0
-                return "🔥 攻擊動能 (高Beta)" if b >= 1.0 else "🛡️ 穩健防禦 (低Beta)"
+                return "🔥 高品質成長 (高夏普/高Beta)" if b >= 1.0 else "🛡️ 風險優化防禦 (高夏普/低Beta)"
+            
             port_df['戰略定位'] = port_df.apply(classify_quant, axis=1)
             port_df = port_df.sort_values(by=['戰略定位', 'sharpe'], ascending=[False, False])
             
@@ -997,6 +988,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 g = r.get('eps_growth', 0)
                 if pd.isna(g): g = 0
                 return "🚀 成長護城河 (高EPS增長)" if g > 15.0 else "💰 穩健價值 (高ROE收息)"
+            
             port_df['戰略定位'] = port_df.apply(classify_buffett, axis=1)
             port_df = port_df.sort_values(by=['戰略定位', 'roe'], ascending=[False, False])
 
@@ -1028,7 +1020,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 st.markdown(f"""
                 <div style='background-color:#1E293B; padding:15px; border-radius:4px; border:1px solid #334155;'>
-                    <h4 style='margin-top:0; color:#F8FAFC; border-bottom:1px solid #334155; padding-bottom:10px;'>組合總體檢驗 (Aggregate)</h4>
+                    <h4 style='margin-top:0; color:#F8FAFC; border-bottom:1px solid #334155; padding-bottom:10px;'>組合總體檢驗 (效率前緣評估)</h4>
                     <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
                         <span style='color:#9CA3AF;'>組合平均夏普值</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_sharpe:.2f}</span>
                     </div>
