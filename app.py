@@ -171,32 +171,49 @@ def create_resilient_session():
     session.mount('https://', adapter)
     return session
 
-# 【重大升級】：內建高質量主力板塊資料庫，徹底擺脫外部套件阻擋問題
+# 【核心修正】：內建產業覆寫字典，確保核心大股票不會被分錯
 @st.cache_data
 def get_tw_stock_list():
-    industry_map = {
-        "半導體業": ["2330.TW 台積電", "2454.TW 聯發科", "2303.TW 聯電", "3711.TW 日月光投控", "2379.TW 瑞昱", "3034.TW 聯詠", "2344.TW 華邦電", "2337.TW 旺宏", "3443.TW 創意", "2408.TW 南亞科", "3035.TW 智原", "3529.TW 力旺"],
-        "電腦及週邊設備業": ["2382.TW 廣達", "3231.TW 緯創", "2356.TW 英業達", "2376.TW 技嘉", "2324.TW 仁寶", "2353.TW 宏碁", "2357.TW 華碩", "6669.TW 緯穎", "2362.TW 藍天", "3017.TW 奇鋐", "3324.TW 雙鴻", "3232.TW 呈碩"],
-        "電子零組件業": ["2308.TW 台達電", "3008.TW 大立光", "2327.TW 國巨", "2368.TW 金像電", "3037.TW 欣興", "2313.TW 華通", "2383.TW 台光電", "3044.TW 健鼎", "3653.TW 健策", "6269.TW 台郡"],
-        "其他電子業": ["2317.TW 鴻海", "2354.TW 鴻準", "6139.TW 亞翔", "2395.TW 研華"],
-        "光電業": ["2409.TW 友達", "3481.TW 群創", "6116.TW 彩晶", "2466.TW 冠捷", "6209.TW 今國電"],
-        "通信網路業": ["2412.TW 中華電", "3045.TW 台灣大", "4904.TW 遠傳", "2345.TW 智邦", "3596.TW 智易", "5388.TW 中磊", "3163.TW 波若威"],
-        "電子通路業": ["3702.TW 大聯大", "3036.TW 文曄"],
-        "金融保險業": ["2881.TW 富邦金", "2882.TW 國泰金", "2891.TW 中信金", "2886.TW 兆豐金", "2884.TW 玉山金", "2892.TW 第一金", "5880.TW 合庫金", "2883.TW 開發金"],
-        "航運業": ["2603.TW 長榮", "2609.TW 陽明", "2615.TW 萬海", "2610.TW 華航", "2618.TW 長榮航", "2606.TW 裕民"],
-        "水泥建材與鋼鐵": ["1101.TW 台泥", "1102.TW 亞泥", "2002.TW 中鋼", "2014.TW 中鴻", "2027.TW 大成鋼"],
-        "塑膠與化學": ["1301.TW 台塑", "1303.TW 南亞", "1326.TW 台化", "1304.TW 台聚", "1717.TW 長興", "1722.TW 台肥"],
-        "電機機械與電纜": ["1504.TW 東元", "1519.TW 華城", "1590.TW 亞力", "1513.TW 中興電", "1605.TW 華新", "1609.TW 大亞"],
-        "生技醫療業": ["1707.TW 葡萄王", "1720.TW 生達", "4743.TW 合一", "4736.TW 泰博", "1795.TW 美時"],
-        "汽車工業": ["2201.TW 裕隆", "2207.TW 和泰車", "1536.TW 和大", "1319.TW 東陽"]
-    }
-    stock_map = {}
-    for ind, stocks in industry_map.items():
-        for s in stocks:
-            stock_map[s] = s
-    return stock_map, industry_map
+    try:
+        import twstock
+        codes = twstock.codes
+        stock_map = {}
+        industry_map = {}
+        code_to_industry = {}
+        
+        # 覆寫字典：當 twstock 分錯時，以此為準
+        custom_sector_override = {
+            "2330": "半導體業", "2454": "半導體業", "2303": "半導體業", "3711": "半導體業",
+            "2382": "電腦及週邊設備業", "3231": "電腦及週邊設備業", "2356": "電腦及週邊設備業", "2376": "電腦及週邊設備業", "6669": "電腦及週邊設備業",
+            "2308": "電子零組件業", "3008": "光電業", "2327": "電子零組件業", "2383": "電子零組件業",
+            "2317": "其他電子業", "2354": "其他電子業",
+            "2881": "金融保險業", "2882": "金融保險業", "2891": "金融保險業",
+            "2603": "航運業", "2609": "航運業", "2615": "航運業",
+            "1519": "電機機械", "1513": "電機機械",
+        }
 
-stock_map, industry_map = get_tw_stock_list()
+        for code, info in codes.items():
+            if info.type in ['股票', 'ETF']:
+                suffix = '.TW' if info.market == '上市' else '.TWO'
+                full = f"{code}{suffix}"
+                stock_map[full] = f"{full} {info.name}"
+                
+                # 決定產業分類：優先使用自訂字典
+                if code in custom_sector_override:
+                    group = custom_sector_override[code]
+                else:
+                    group = info.group if info.group else info.type
+                    
+                if not group: group = "其他"
+                
+                if group not in industry_map: industry_map[group] = []
+                industry_map[group].append(full)
+                code_to_industry[code] = group
+                
+        return stock_map, industry_map, code_to_industry
+    except: return {}, {}, {}
+
+stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
 
 def get_stock_data(symbol):
     try:
@@ -225,7 +242,6 @@ def get_stock_data(symbol):
             'market_cap': g('marketCap'),
             'fcf': g('freeCashflow'),
             'debt_to_equity': g('debtToEquity'),
-            'sector': g('sector') or 'General',
             'history': hist
         }
         return data
@@ -251,24 +267,6 @@ def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
         else: low = mid
     return (low + high) / 2
 
-def process_tej_upload(uploaded_files):
-    if not uploaded_files: return None
-    tej_map = {}
-    if not isinstance(uploaded_files, list): uploaded_files = [uploaded_files]
-    for uploaded_file in uploaded_files:
-        try:
-            if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
-            else: df = pd.read_excel(uploaded_file)
-            df.columns = [str(c).strip() for c in df.columns]
-            code_col = next((c for c in df.columns if '代號' in c or 'Code' in c), None)
-            if not code_col: continue 
-            for _, row in df.iterrows():
-                raw_code = str(row[code_col]).split('.')[0].strip()
-                if raw_code in tej_map: tej_map[raw_code].update(row.to_dict())
-                else: tej_map[raw_code] = row.to_dict()
-        except: continue
-    return tej_map
-
 # --- 7. 批量掃描 ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def batch_scan_stocks(stock_list, tej_data=None):
@@ -285,6 +283,11 @@ def batch_scan_stocks(stock_list, tej_data=None):
                 code = stock_str.split(' ')[0].split('.')[0]
                 name = code 
                 if len(stock_str.split(' ')) > 1: name = stock_str.split(' ')[1]
+                else:
+                    try:
+                        import twstock
+                        if code in twstock.codes: name = twstock.codes[code].name
+                    except: pass
 
                 y_data = future.result()
                 if y_data is None: continue
@@ -342,17 +345,8 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     if not pd.isna(price) and not pd.isna(t_eps):
                         implied_g = calculate_implied_growth(price, t_eps)
 
-                # 【核心修改】從內建資料庫判斷產業，若無則抓取 Yahoo Sector
-                industry = 'General'
-                for k, v in industry_map.items():
-                    if any(code in s for s in v):
-                        industry = k
-                        break
-                if industry == 'General':
-                     try:
-                         y_sector = y_data.get('sector')
-                         if y_sector: industry = str(y_sector)
-                     except: pass
+                # 【精確修正】：透過反向字典找到中文分類，如果是 ETF 就寫 ETF
+                industry = code_to_industry_map.get(code, '未分類')
                 if code.startswith('00'): industry = 'ETF'
 
                 if not pd.isna(price):
@@ -832,7 +826,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 動態快篩過濾器修復版")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 內建主力板塊覆寫版")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
