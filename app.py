@@ -120,7 +120,7 @@ if 'panel_page' not in st.session_state: st.session_state['panel_page'] = 1
 try: api_key = st.secrets["GEMINI_API_KEY"]
 except Exception: st.error("系統偵測不到 API Key，AI 洞察功能將受限。")
 
-# --- 5. 字型下載與註冊 (強固 PDF 輸出) ---
+# --- 5. 字型下載與註冊 ---
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
@@ -196,7 +196,6 @@ def get_stock_data(symbol):
         except: hist = pd.DataFrame()
 
         def g(k): return info.get(k)
-
         data = {
             'close_price': g('currentPrice') or g('previousClose'),
             'pe': g('trailingPE'),
@@ -365,7 +364,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
         if c not in df.columns: df[c] = np.nan
     return df, history_map
 
-# --- 8. 評分邏輯 (完全吻合紀律長贏理論) ---
+# --- 8. 評分邏輯 ---
 def calculate_score(df, logic_type="Quant"):
     if df.empty: return df, None
     
@@ -423,7 +422,6 @@ def calculate_score(df, logic_type="Quant"):
             vol = row.get('volatility', 1)
             b = row.get('beta', 1)
             
-            # 【核心正名】：嚴格落實林哲群教授理論
             if sh > 1.0 and b >= 1.0: q_tag = "高品質成長"
             elif sh > 1.0 and b < 1.0: q_tag = "風險優化防禦"
             elif sh < 0: q_tag = "風險報酬不對等"
@@ -603,7 +601,6 @@ def create_pdf(stock_data):
     buffer.seek(0)
     return buffer
 
-# 【核心更新】AI Prompt 注入《紀律長贏》理論
 AI_PROMPT_TEMPLATE = """
 請扮演專業的法人機構量化研究員，使用**繁體中文 (Traditional Chinese)** 分析 [STOCK] ([SECTOR])。
 【時間基準】今天是 [CURRENT_DATE]，請以最新視角撰寫，絕對不要在報告中捏造或顯示過去的歷史日期。
@@ -624,7 +621,6 @@ AI_PROMPT_TEMPLATE = """
 3. **操作結論**：結合 Beta 屬性與季線乖離，給出客觀的資產配置定位與具體行動建議。
 """
 
-# --- 11. 標籤解析函數 (依據林哲群教授理論精確詮釋) ---
 def get_tag_explanation(row, logic_type):
     tag = row.get('Quality', '')
     sharpe = row.get('sharpe', 0)
@@ -779,7 +775,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 清大林哲群《紀律長贏》框架導入")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 清大林哲群《紀律長贏》MPT 關聯性優化")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -1020,7 +1016,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         port_df = pd.DataFrame()
         
         if current_logic == "Quant":
-            st.caption("依據《紀律長贏》核心精神：嚴格要求 **高夏普值 (>1.0)** 確保位於效率前緣。系統進一步透過 MPT 貪婪演算法尋找 **「相關性最低」** 的資產組合，為您配置 5 檔高品質成長 (高Beta) 與 5 檔風險優化防禦 (低Beta)。")
+            st.caption("依據林哲群教授 (2026) 著作理論實踐：優先篩選 **高夏普值 (>1.0)** 確保單元風險報酬，次依 **低標準差 (波動率)** 排序控制絕對風險。並排除夏普值為負的風險報酬不對等資產。")
             
             # 【嚴格鎖死學理邏輯】
             pool_df = final_df[final_df['sharpe'] > 1.0].copy()
@@ -1044,7 +1040,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             
             pool_df['戰略定位'] = pool_df.apply(classify_quant, axis=1)
             
-            # 將符合嚴格標準的資產分別放入水桶
             atk_pool = pool_df[pool_df['戰略定位'] == "🔥 高品質成長 (高夏普/高Beta)"]
             def_pool = pool_df[pool_df['戰略定位'] == "🛡️ 風險優化防禦 (高夏普/低Beta)"]
             
@@ -1097,7 +1092,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     hide_index=True, 
                     use_container_width=True,
                     column_config={
-                        "戰略定位": st.column_config.TextColumn("戰略配置定位"),
+                        "戰略定位": st.column_config.TextColumn("配置定位"),
                         "sharpe": st.column_config.NumberColumn("夏普值", format="%.2f"),
                         "volatility": st.column_config.NumberColumn("波動率", format="%.2f"),
                         "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
@@ -1153,6 +1148,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                             font=dict(color='#9CA3AF', size=10), margin=dict(t=30, b=0, l=0, r=0), height=240,
                             coloraxis_showscale=False
                         )
+                        # 【熱力圖視覺修復】：強制將 X 與 Y 軸設定為「類別 (category)」
+                        fig_corr.update_xaxes(type='category')
+                        fig_corr.update_yaxes(type='category')
+                        
                         st.plotly_chart(fig_corr, use_container_width=True)
 
 elif not st.session_state['scan_finished']:
