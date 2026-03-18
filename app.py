@@ -109,7 +109,6 @@ st.markdown("""
     .stButton button:hover, .stDownloadButton button:hover { 
         border-color: #3B82F6 !important; color: #3B82F6 !important; background-color: #0D131F !important;
     }
-    /* 美化單選按鈕呈現過濾器風格 */
     div.row-widget.stRadio > div { flex-direction: row; flex-wrap: wrap; gap: 15px; }
 </style>
 """, unsafe_allow_html=True)
@@ -271,6 +270,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_to_stock = {executor.submit(get_stock_data, s.split(' ')[0]): s for s in stock_list}
+        
         for future in concurrent.futures.as_completed(future_to_stock):
             stock_str = future_to_stock[future]
             try:
@@ -339,11 +339,14 @@ def batch_scan_stocks(stock_list, tej_data=None):
                     if not pd.isna(price) and not pd.isna(t_eps):
                         implied_g = calculate_implied_growth(price, t_eps)
 
-                industry = 'General'
-                if code in ['2330', '2454', '2303', '3034', '3035', '2379', '2382', '3231']: industry = 'Semicon'
-                elif code.startswith('28') or code in ['5880']: industry = 'Finance'
-                elif code in ['1101', '1301', '2002', '2603', '1802', '1605']: industry = 'Cyclical'
-                elif code.startswith('00'): industry = 'ETF' 
+                # 【精確校正】：完美同步 twstock 的分類，取代硬編碼
+                industry = '未知'
+                try:
+                    import twstock
+                    if code in twstock.codes:
+                        industry = twstock.codes[code].group if twstock.codes[code].group else twstock.codes[code].type
+                except: pass
+                if code.startswith('00'): industry = 'ETF'
 
                 if not pd.isna(price):
                     results.append({
@@ -365,7 +368,7 @@ def batch_scan_stocks(stock_list, tej_data=None):
         if c not in df.columns: df[c] = np.nan
     return df, history_map
 
-# --- 8. 評分邏輯 ---
+# --- 8. 評分邏輯 (三大水桶：成長/防禦/中性) ---
 def calculate_score(df, logic_type="Quant"):
     if df.empty: return df, None
     required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'fcf_yield', 'de_ratio', 'beta', 'sharpe', 'mdd', 'implied_growth', 'peg', 'volatility', 'roe', 'priceToMA60']
@@ -376,6 +379,7 @@ def calculate_score(df, logic_type="Quant"):
     scores = []
     plans = []
     quality_tags = []
+    
     fill_map = {c: 0 for c in required_cols}
     fill_map['pe'] = 50; fill_map['volatility'] = 0.5; fill_map['beta'] = 1.0; fill_map['de_ratio'] = 100
     calc_df = df.fillna(fill_map)
@@ -383,6 +387,7 @@ def calculate_score(df, logic_type="Quant"):
     for idx, row in calc_df.iterrows():
         total_score = 0
         total_weight = 0
+        
         if logic_type == "Quant":
             config = {
                 'Sharpe': {'col': 'sharpe', 'dir': 'max', 'w': 4.0, 'cat': '動能'},
@@ -671,7 +676,7 @@ def generate_custom_signal(row, regime):
         if tag == "成長型資產" and s > 2.0 and mdd > -0.10: return "🔥 強勢加碼 (放大獲利)"
         if tag == "防禦型資產" or tag == "中性資產": return "📉 逢高減碼 (釋放資金)"
         return "⚖️ 持有續抱"
-    else: # Bear
+    else: 
         if b > 1.2: return "📉 降持高波 (收回現金)"
         if tag == "防禦型資產" or tag == "中性資產": return "🛡️ 逢低加碼 (鞏固底盤)"
         return "⚖️ 持有觀望"
@@ -760,7 +765,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 多空雙軌戰略與自選監控")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 動態快篩過濾器修復版")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -773,7 +778,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         final_df, df_norm = calculate_score(df, logic_type=current_logic)
         
         # =========================================================
-        # 🔍 核心新增：終端快速篩選器 (Quick Filter)
+        # 🔍 終端快速篩選器 (Quick Filter)
         # =========================================================
         st.subheader("🏆 終端檢索清單")
         
@@ -873,9 +878,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 
                 c1, c2, c3 = st.columns([1, 1.8, 1.5])
                 with c1:
-                    # 確保能透過原索引找到 radar data
-                    if idx in df_norm.index:
-                        st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[idx])), use_container_width=True)
+                    # 原本的 df_norm 用來畫雷達圖，必須用原 dataframe index 尋找
+                    orig_idx = df_norm.index[df_norm['代號'] == code]
+                    if len(orig_idx) > 0:
+                        st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[orig_idx[0]])), use_container_width=True)
                 with c2:
                     sharpe_val = safe_num(row.get('sharpe'))
                     sh_color = "q-up" if sharpe_val > 1 else ("q-down" if sharpe_val < 0 else "")
@@ -915,7 +921,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     c_btn1, c_btn2 = st.columns(2)
                     if code not in st.session_state['ai_results']:
                         with c_btn1:
-                            if st.button(f"🧠 執行 AI 洞察", key=f"ai_{idx}"):
+                            if st.button(f"🧠 執行 AI 洞察", key=f"ai_{code}"):
                                 current_today = datetime.now().strftime('%Y年%m月%d日')
                                 if current_logic == "Quant":
                                     l_name = "量化風控模型"
@@ -945,7 +951,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                                 st.rerun() 
                     else:
                         with c_btn1:
-                            if st.button(f"🔄 更新 AI 洞察", key=f"ai_re_{idx}"):
+                            if st.button(f"🔄 更新 AI 洞察", key=f"ai_re_{code}"):
                                 current_today = datetime.now().strftime('%Y年%m月%d日')
                                 if current_logic == "Quant":
                                     l_name = "量化風控模型"
@@ -978,7 +984,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                             pdf_payload['ai_analysis'] = st.session_state['ai_results'][code]
                             pdf = create_pdf(pdf_payload)
                             file_name_dl = f"{code} {row['名稱']} ({(row.get('full_symbol', code))})_Report.pdf"
-                            st.download_button("📥 輸出 PDF 報告", pdf, file_name_dl, key=f"dl_{idx}")
+                            st.download_button("📥 輸出 PDF 報告", pdf, file_name_dl, key=f"dl_{code}")
 
                 with c3:
                     if code in hist_storage and not hist_storage[code].empty:
