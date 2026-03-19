@@ -90,11 +90,9 @@ font_name_global = setup_chinese_font()
 # 💡 工具函數與核心數學引擎
 # =========================================================================
 
-# 【✅ 重大修正：解決千分位逗號導致 NaN 的問題】
 def safe_float(val):
     try:
         if pd.isna(val) or val is None or str(val).strip() == '': return np.nan
-        # 移除逗號，確保能正確轉換為浮點數
         return float(str(val).replace(',', '').strip())
     except:
         return np.nan
@@ -132,7 +130,13 @@ def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
         else: low = mid
     return (low + high) / 2
 
-# EPS YoY 備援
+# 【✅ 修復的清洗函數】
+def sanitize_data(df):
+    if df.empty: return df
+    if 'yield' in df.columns: 
+        df['yield'] = df['yield'].apply(lambda x: x/100 if pd.notna(x) and x > 20 else x)
+    return df
+
 def calc_eps_yoy(fin, bal):
     try:
         if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
@@ -143,7 +147,6 @@ def calc_eps_yoy(fin, bal):
     except: pass
     return np.nan
 
-# PEG 備援
 def calc_peg(pe, eps_growth):
     try:
         if pd.isna(pe) or pd.isna(eps_growth) or eps_growth <= 0: return np.nan
@@ -183,7 +186,6 @@ def get_tw_stock_list():
         "2317": "其他電子業", "2881": "金融保險業", "2603": "航運業"
     }
     
-    # 【✅ 重大修正：從證交所 API 拿取正確中文名稱】
     for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
                          ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
         try:
@@ -202,7 +204,6 @@ def get_tw_stock_list():
                         code_to_industry[code] = group
         except: pass
 
-    # ETF 補充
     try:
         import twstock
         for code, info in twstock.codes.items():
@@ -230,7 +231,6 @@ def fetch_global_market_data():
             res = requests.get(mkt_url, verify=False, timeout=10)
             if res.status_code == 200:
                 for item in res.json():
-                    # safe_float 已可過濾逗號，保證順利取得 PE 與 Yield
                     pe = safe_float(item.get("本益比"))
                     pb = safe_float(item.get("股價淨值比"))
                     yld = safe_float(item.get("殖利率(%)"))
@@ -259,7 +259,7 @@ def fetch_global_market_data():
     return twse_data, rev_data, mkt_ret
 
 # =========================================================================
-# 💡 核心自研數據庫 (完全整合您提供的手算反推邏輯)
+# 💡 核心自研數據庫
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -281,25 +281,23 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     }
     if code.startswith('00'): data['industry'] = 'ETF'
     
-    # 1️⃣ 價格與風險指標 (這段您說原本就有數據的，保留不動)
     try:
         hist = ticker.history(period="6mo")
         if not hist.empty:
             price = hist['Close']
             returns = price.pct_change().dropna()
-            
-            data["close_price"] = float(price.iloc[-1])
-            data["volatility"] = returns.std() * np.sqrt(252)
-            data["mdd"] = calc_mdd(price)
-            data["sharpe"] = calc_sharpe(returns)
-            data["history"] = hist
+            current_price = float(price.iloc[-1])
+            data['close_price'] = current_price
+            data['volatility'] = returns.std() * np.sqrt(252)
+            data['mdd'] = calc_mdd(price)
+            data['sharpe'] = calc_sharpe(returns)
+            data['history'] = hist
             
             ma60 = price.rolling(60).mean().iloc[-1]
-            if pd.notna(ma60) and ma60 > 0: data["priceToMA60"] = (data["close_price"] / ma60) - 1
+            if pd.notna(ma60) and ma60 > 0: data["priceToMA60"] = (current_price / ma60) - 1
             if not mkt_ret.empty: data["beta"] = calc_beta(returns, mkt_ret)
     except: pass
 
-    # 2️⃣ Yahoo info fallback
     try:
         info = ticker.info
         data["pe"] = info.get("trailingPE", np.nan)
@@ -310,7 +308,6 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
         if pd.isna(data["beta"]): data["beta"] = info.get("beta", np.nan)
     except: pass
 
-    # 3️⃣ 財報自行計算 fallback
     try:
         fin = ticker.quarterly_financials
         bal = ticker.quarterly_balance_sheet
@@ -344,13 +341,11 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
         except: pass
     except: pass
 
-    # 4️⃣ FCF Yield 計算
     try:
         if not np.isnan(data["fcf"]) and not np.isnan(data["market_cap"]) and data["market_cap"] > 0:
             data["fcf_yield"] = (data["fcf"] * 4) / data["market_cap"]
     except: pass
 
-    # 5️⃣ 玩股網 API 備援
     if pd.isna(data['roe']) or pd.isna(data['gross_margins']):
         try:
             wg_url = f"https://www.wantgoo.com/investrue/api/v1/stock/{code}/financial-ratios"
@@ -363,14 +358,12 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     if pd.isna(data['gross_margins']): data['gross_margins'] = safe_float(wg_json[0].get('grossMargin')) / 100.0
         except: pass
 
-    # 6️⃣ 政府資料聚合 (TWSE)
     if code in global_twse:
         tw_pe = global_twse[code].get("pe", np.nan)
         if pd.isna(data["pe"]) and pd.notna(tw_pe): data["pe"] = tw_pe
         data["pb"] = global_twse[code].get("pb", np.nan)
         data["yield"] = global_twse[code].get("yield", np.nan)
 
-    # 7️⃣ 殖利率 Fallback (若官方缺漏則自算)
     if pd.isna(data["yield"]):
         try:
             divs = ticker.dividends
@@ -380,13 +373,11 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     data["yield"] = last_year_div / data['close_price']
         except: pass
 
-    # 8️⃣ 營收 YoY (官方預載 + MOPS 備援)
     if code in global_rev:
         data["rev_growth"] = global_rev[code]
     if pd.isna(data["rev_growth"]):
         data["rev_growth"] = get_revenue_yoy_mops(code)
 
-    # 9️⃣ PEG 與隱含成長
     data["peg"] = calc_peg(data["pe"], data["eps_growth"])
     
     if pd.notna(data["close_price"]) and pd.notna(data["pe"]) and data["pe"] > 0:
@@ -400,6 +391,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
 def batch_scan_stocks(stock_list):
     results = []
     history_map = {}
+    
     twse_data, rev_data, mkt_ret = fetch_global_market_data()
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -415,7 +407,7 @@ def batch_scan_stocks(stock_list):
     df = pd.DataFrame(results)
     return df, history_map
 
-# --- 8. 評分邏輯 (三大水桶) ---
+# --- 8. 評分邏輯 ---
 def calculate_score(df, logic_type="Quant"):
     if df.empty: return df, None
     required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'fcf_yield', 'de_ratio', 'beta', 'sharpe', 'mdd', 'implied_growth', 'peg', 'volatility', 'roe', 'priceToMA60']
@@ -466,7 +458,6 @@ def calculate_score(df, logic_type="Quant"):
     df['Score'], df['Strategy'], df['Quality'] = scores, plans, quality_tags
     return df.sort_values('Score', ascending=False), df_norm
 
-# --- 9. 繪圖函數 ---
 def get_radar_data(df_norm_row):
     cats = {'價值估值': 0, '成長動能': 0, '趨勢強度': 0, '風險控管': 0, '財務體質': 0}
     counts = {'價值估值': 0, '成長動能': 0, '趨勢強度': 0, '風險控管': 0, '財務體質': 0}
@@ -715,7 +706,6 @@ with st.sidebar:
     scan_mode = st.radio("篩選維度", ["市場焦點策略", "產業族群板塊", "台灣 ETF 專區", "自訂代碼輸入"])
     target_stocks = []
     
-    # 【✅ 補回被誤刪的策略選單】
     strategies = {
         "動能爆發 (高夏普)": ["2382.TW", "3231.TW", "6669.TW", "2376.TW", "3017.TW", "3661.TW"],
         "低波動防禦 (低標準差)": ["2412.TW", "3045.TW", "2881.TW", "2892.TW", "1101.TW"],
@@ -742,12 +732,10 @@ with st.sidebar:
         selected_inds = st.multiselect("板塊選擇", ["[ALL] 載入全部板塊"] + sorted(list(industry_map.keys())))
         for k in (industry_map.keys() if "[ALL] 載入全部板塊" in selected_inds else selected_inds): target_stocks.extend(industry_map[k])
     elif scan_mode == "台灣 ETF 專區":
-        # 【✅ 補回被誤刪的 ETF 選單】
         etf_keys = list(etf_strategies.keys())
         selected_etfs = st.multiselect("ETF 分類 (支援複選)", ["[ALL] 載入全部 ETF"] + etf_keys, default=[etf_keys[0]])
         for k in (etf_keys if "[ALL] 載入全部 ETF" in selected_etfs else selected_etfs): target_stocks.extend(etf_strategies[k])
     else: 
-        # 【✅ 補回被誤刪的 策略池選單】
         strat_keys = list(strategies.keys())
         selected_strats = st.multiselect("推薦策略池", ["[ALL] 載入全部策略"] + strat_keys, default=[strat_keys[0]])
         for k in (strat_keys if "[ALL] 載入全部策略" in selected_strats else selected_strats): target_stocks.extend(strategies[k])
