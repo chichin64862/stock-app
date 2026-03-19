@@ -146,7 +146,6 @@ def calc_eps_yoy(fin, bal):
     except: pass
     return np.nan
 
-# 【✅ PEG 修復：移除 eps_growth_pct <= 0 限制，強制顯示所有 PEG】
 def calc_peg(pe, eps_growth_pct):
     try:
         if pd.isna(pe) or pd.isna(eps_growth_pct) or eps_growth_pct == 0: return np.nan
@@ -166,20 +165,20 @@ def get_revenue_yoy_mops(code):
             if len(tables) > 0:
                 df = tables[0]
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
-                if "營業收入" in df.columns:
-                    df = df.sort_values(df.columns[0], ascending=False)
-                    if len(df) >= 2:
-                        rev_now = safe_float(df.iloc[0]["營業收入"])
-                        rev_prev = safe_float(df.iloc[1]["營業收入"])
-                        if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
-                            return (rev_now - rev_prev) / abs(rev_prev)
+                df = df.sort_values(df.columns[0], ascending=False)
+                if len(df) >= 2 and "營業收入" in df.columns:
+                    rev_now = safe_float(df.iloc[0]["營業收入"])
+                    rev_prev = safe_float(df.iloc[1]["營業收入"])
+                    if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
+                        return (rev_now - rev_prev) / abs(rev_prev)
     except: pass
     return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎
+# 💡 資料前置預載引擎 (完美取得公司名稱與板塊)
 # =========================================================================
 
+# 【✅ 修正：完全依賴本地 twstock 以保證抓到全部 1800 多檔台股與 ETF】
 @st.cache_data(ttl=86400)
 def get_tw_stock_list():
     stock_map, industry_map, code_to_industry = {}, {}, {}
@@ -190,7 +189,6 @@ def get_tw_stock_list():
         "2317": "其他電子業", "2881": "金融保險業", "2603": "航運業"
     }
     
-    # 【✅ 板塊修復：確保任何數字都被轉為中文，防止選單出現數字】
     twse_ind_map = {
         "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
         "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
@@ -199,49 +197,61 @@ def get_tw_stock_list():
         "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
         "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
         "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
-        "34": "電子商務業", "80": "管理股票",
-        "1": "水泥工業", "2": "食品工業", "3": "塑膠工業", "4": "紡織纖維", "5": "電機機械",
-        "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
+        "34": "電子商務業", "80": "管理股票"
     }
 
+    # 1. 優先使用 twstock 抓取全台股 (含上市、上櫃、ETF)，絕對不會漏掉台積電等權值股
+    try:
+        import twstock
+        for code, info in twstock.codes.items():
+            if info.type in ['股票', 'ETF']:  # 確保把股票跟 ETF 都抓進來
+                full = f"{code}.TW" if info.market == '上市' else f"{code}.TWO"
+                name = str(info.name).strip()
+                ind_raw = str(info.group).strip() if info.group else ""
+                
+                # 確保產業類別是中文
+                ind = twse_ind_map.get(ind_raw, ind_raw)
+                if not ind or ind.isdigit() or ind.lower() == "none": ind = "其他產業"
+                
+                group = custom_sector_override.get(code, ind)
+                if code.startswith('00'): group = 'ETF'
+                
+                stock_map[full] = f"{full} {name}"
+                if group not in industry_map: industry_map[group] = []
+                industry_map[group].append(full)
+                code_to_industry[code] = group
+    except: pass
+
+    # 2. 政府 API 僅作為備援 (補充新掛牌公司)
     for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
                          ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
         try:
-            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
+            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=5)
             if res.status_code == 200:
                 for item in res.json():
                     code = str(item.get('公司代號', '')).strip()
                     name = str(item.get('公司簡稱', '')).strip()
                     ind_raw = str(item.get('產業別', '其他')).strip()
                     
-                    # 強制數字轉中文，若轉完還是數字則歸為「其他產業」
                     ind = twse_ind_map.get(ind_raw, ind_raw)
-                    if ind.isdigit(): ind = "其他產業"
+                    if not ind or ind.isdigit(): ind = "其他產業"
                     
                     if len(code) == 4 and code.isdigit():
                         full = f"{code}{sfx}"
                         group = custom_sector_override.get(code, ind)
-                        stock_map[full] = f"{full} {name}"
-                        if group not in industry_map: industry_map[group] = []
-                        industry_map[group].append(full)
-                        code_to_industry[code] = group
+                        if code.startswith('00'): group = 'ETF'
+                        
+                        if full not in stock_map:
+                            stock_map[full] = f"{full} {name}"
+                            if group not in industry_map: industry_map[group] = []
+                            industry_map[group].append(full)
+                            code_to_industry[code] = group
         except: pass
 
-    try:
-        import twstock
-        for code, info in twstock.codes.items():
-            if info.type == 'ETF':
-                full = f"{code}.TW" if info.market == '上市' else f"{code}.TWO"
-                if full not in stock_map:
-                    stock_map[full] = f"{full} {info.name}"
-                    if 'ETF' not in industry_map: industry_map['ETF'] = []
-                    industry_map['ETF'].append(full)
-                    code_to_industry[code] = 'ETF'
-    except: pass
-    
     return stock_map, industry_map, code_to_industry
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_global_market_data():
@@ -291,7 +301,7 @@ def get_safe_val(df, keys, col_idx=0):
     return np.nan
 
 # =========================================================================
-# 💡 核心自研數據庫
+# 💡 核心自研數據庫 (多源聚合)
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -395,25 +405,11 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     if pd.isna(data['gross_margins']): data['gross_margins'] = safe_float(wg_json[0].get('grossMargin')) / 100.0
         except: pass
 
-    # 【✅ P/E 修復：如果官方沒給，手動拿 TTM EPS 算出本益比】
     if code in global_twse:
         tw_pe = global_twse[code].get("pe", np.nan)
-        if pd.notna(tw_pe): data["pe"] = tw_pe 
-        
-        tw_pb = global_twse[code].get("pb", np.nan)
-        if pd.notna(tw_pb): data["pb"] = tw_pb
-        
-        tw_yld = global_twse[code].get("yield", np.nan)
-        if pd.notna(tw_yld): data["yield"] = tw_yld
-
-    if pd.isna(data["pe"]):
-        try:
-            if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
-                ni_ttm = fin.loc["Net Income"].iloc[:4].sum()
-                shares = bal.loc["Ordinary Shares Number"].iloc[0]
-                if shares > 0 and ni_ttm != 0 and pd.notna(data["close_price"]):
-                    data["pe"] = data["close_price"] / (ni_ttm / shares)
-        except: pass
+        if pd.isna(data["pe"]) and pd.notna(tw_pe): data["pe"] = tw_pe
+        data["pb"] = global_twse[code].get("pb", np.nan)
+        data["yield"] = global_twse[code].get("yield", np.nan)
 
     if pd.isna(data["yield"]):
         try:
@@ -426,9 +422,8 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
 
     if code in global_rev:
         data["rev_growth"] = global_rev[code]
-    elif pd.isna(data["rev_growth"]) or data["rev_growth"] == 0:
-        mo_rev = get_revenue_yoy_mops(code)
-        if pd.notna(mo_rev): data["rev_growth"] = mo_rev
+    if pd.isna(data["rev_growth"]):
+        data["rev_growth"] = get_revenue_yoy_mops(code)
 
     data["peg"] = calc_peg(data["pe"], data["eps_growth"])
     
@@ -875,10 +870,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 orig_idx = df_norm.index[df_norm['代號'] == code]
                 if len(orig_idx) > 0: st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[orig_idx[0]])), use_container_width=True)
             with c2:
-                sh = row.get('sharpe')
-                mdd = row.get('mdd')
-                rev = row.get('rev_growth')
-                eps = row.get('eps_growth')
+                sh, mdd = safe_num(row.get('sharpe')), safe_num(row.get('mdd'))
+                rev, eps = safe_num(row.get('rev_growth')), safe_num(row.get('eps_growth'))
                 
                 sh_c = "" if pd.isna(sh) or sh == 0 else ("q-up" if sh>1 else ("q-down" if sh<0 else ""))
                 mdd_c = "" if pd.isna(mdd) else ("q-up" if mdd>-0.15 else ("q-down" if mdd<-0.25 else "q-neu"))
@@ -967,7 +960,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         else:
             my_port_df = final_df[final_df['代號'].isin(st.session_state['my_portfolio'])].copy()
             
-            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<0.25 else "🟡 觀察資產"))), axis=1)
+            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<25 else "🟡 觀察資產"))), axis=1)
             my_port_df['操作訊號'] = my_port_df.apply(lambda r: generate_custom_signal(r, "Bull" if "多頭" in regime else "Bear"), axis=1)
             
             st.dataframe(my_port_df[['代號', '名稱', '資產屬性', 'sharpe', 'beta', 'mdd', '操作訊號']].sort_values('sharpe', ascending=False), hide_index=True, use_container_width=True)
