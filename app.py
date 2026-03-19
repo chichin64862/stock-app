@@ -165,18 +165,17 @@ def get_revenue_yoy_mops(code):
             if len(tables) > 0:
                 df = tables[0]
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
-                if "營業收入" in df.columns:
-                    df = df.sort_values(df.columns[0], ascending=False)
-                    if len(df) >= 2:
-                        rev_now = safe_float(df.iloc[0]["營業收入"])
-                        rev_prev = safe_float(df.iloc[1]["營業收入"])
-                        if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
-                            return (rev_now - rev_prev) / abs(rev_prev)
+                df = df.sort_values(df.columns[0], ascending=False)
+                if len(df) >= 2 and "營業收入" in df.columns:
+                    rev_now = safe_float(df.iloc[0]["營業收入"])
+                    rev_prev = safe_float(df.iloc[1]["營業收入"])
+                    if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
+                        return (rev_now - rev_prev) / abs(rev_prev)
     except: pass
     return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎
+# 💡 資料前置預載引擎 (✅ 精準修復：確保 1800+ 檔全數載入且板塊全為中文)
 # =========================================================================
 
 @st.cache_data(ttl=86400)
@@ -193,7 +192,7 @@ def get_tw_stock_list():
         "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
         "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
         "11": "橡膠工業", "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅",
-        "17": "金融保險", "18": "貿易百貨", "19": "綜合", "20": "其他", "21": "化學工業",
+        "17": "金融保險", "18": "貿易百貨", "19": "綜合", "20": "其他產業", "21": "化學工業",
         "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
         "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
         "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
@@ -202,6 +201,21 @@ def get_tw_stock_list():
         "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
     }
 
+    # 1. 優先抓取 PE/PB 表 (保證涵蓋全市場所有交易中的 1800+ 檔股票)
+    for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap14_L", ".TW"), 
+                         ("https://www.tpex.org.tw/openapi/v1/t187ap14_O", ".TWO")]:
+        try:
+            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
+            if res.status_code == 200:
+                for item in res.json():
+                    code = str(item.get('證券代號', '')).strip()
+                    name = str(item.get('證券名稱', '')).strip()
+                    if len(code) == 4 and code.isdigit():
+                        full = f"{code}{sfx}"
+                        stock_map[full] = f"{full} {name}"
+        except: pass
+
+    # 2. 抓取產業分類，確保全部轉為中文
     for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
                          ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
         try:
@@ -210,32 +224,55 @@ def get_tw_stock_list():
                 for item in res.json():
                     code = str(item.get('公司代號', '')).strip()
                     name = str(item.get('公司簡稱', '')).strip()
-                    ind_raw = str(item.get('產業別', '其他')).strip()
+                    ind_raw = str(item.get('產業別', '其他產業')).strip()
                     
+                    # 強制數字轉中文
                     ind = twse_ind_map.get(ind_raw, ind_raw)
                     if not ind or ind.isdigit() or ind.lower() == "none": ind = "其他產業"
                     
                     if len(code) == 4 and code.isdigit():
                         full = f"{code}{sfx}"
+                        stock_map[full] = f"{full} {name}" # 補齊名稱
+                        
                         group = custom_sector_override.get(code, ind)
-                        stock_map[full] = f"{full} {name}"
+                        if code.startswith('00'): group = 'ETF'
+                        
                         if group not in industry_map: industry_map[group] = []
-                        industry_map[group].append(full)
+                        if full not in industry_map[group]: industry_map[group].append(full)
                         code_to_industry[code] = group
         except: pass
 
+    # 3. twstock 最終備援 (避免新上市股沒被政府 API 抓到)
     try:
         import twstock
         for code, info in twstock.codes.items():
-            if info.type == 'ETF':
+            if info.type in ['股票', 'ETF']:
                 full = f"{code}.TW" if info.market == '上市' else f"{code}.TWO"
                 if full not in stock_map:
                     stock_map[full] = f"{full} {info.name}"
-                    if 'ETF' not in industry_map: industry_map['ETF'] = []
-                    industry_map['ETF'].append(full)
-                    code_to_industry[code] = 'ETF'
+                    
+                if code not in code_to_industry:
+                    ind_raw = str(info.group).strip() if info.group else "其他產業"
+                    ind = twse_ind_map.get(ind_raw, ind_raw)
+                    if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
+                    
+                    group = custom_sector_override.get(code, ind)
+                    if code.startswith('00'): group = 'ETF'
+                    
+                    if group not in industry_map: industry_map[group] = []
+                    if full not in industry_map[group]: industry_map[group].append(full)
+                    code_to_industry[code] = group
     except: pass
     
+    # 確保所有被抓到代碼的股票，即使 API 漏給產業別，也會被分到 "未分類" 確保能在選單出現
+    for full in stock_map:
+        code = full.split('.')[0]
+        if code not in code_to_industry:
+            group = 'ETF' if code.startswith('00') else '未分類'
+            if group not in industry_map: industry_map[group] = []
+            industry_map[group].append(full)
+            code_to_industry[code] = group
+
     return stock_map, industry_map, code_to_industry
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
@@ -288,7 +325,7 @@ def get_safe_val(df, keys, col_idx=0):
     return np.nan
 
 # =========================================================================
-# 💡 核心自研數據庫 (完全融合)
+# 💡 核心自研數據庫
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -335,6 +372,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     try:
         info = ticker.info
         data["pe"] = info.get("trailingPE", np.nan)
+        data["peg"] = info.get("pegRatio", np.nan) # Yahoo 備援 PEG
         data["roe"] = info.get("returnOnEquity", np.nan)
         data["gross_margins"] = info.get("grossMargins", np.nan)
         data["fcf"] = info.get("freeCashflow", np.nan)
@@ -394,9 +432,21 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
 
     if code in global_twse:
         tw_pe = global_twse[code].get("pe", np.nan)
-        if pd.isna(data["pe"]) and pd.notna(tw_pe): data["pe"] = tw_pe
+        if pd.notna(tw_pe): data["pe"] = tw_pe # 政府 P/E 覆蓋
         data["pb"] = global_twse[code].get("pb", np.nan)
         data["yield"] = global_twse[code].get("yield", np.nan)
+
+    # 【✅ PE 修復：若政府和 Yahoo 都沒 P/E，從財報 TTM 淨利強制算出來】
+    if pd.isna(data["pe"]) or data["pe"] <= 0:
+        try:
+            if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
+                ni_ttm = fin.loc["Net Income"].iloc[:4].sum()
+                shares = bal.loc["Ordinary Shares Number"].iloc[0]
+                if shares > 0 and pd.notna(data["close_price"]):
+                    eps_ttm = ni_ttm / shares
+                    if eps_ttm != 0:
+                        data["pe"] = data["close_price"] / eps_ttm
+        except: pass
 
     if pd.isna(data["yield"]):
         try:
@@ -409,10 +459,14 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
 
     if code in global_rev:
         data["rev_growth"] = global_rev[code]
-    if pd.isna(data["rev_growth"]):
-        data["rev_growth"] = get_revenue_yoy_mops(code)
+    elif pd.isna(data["rev_growth"]) or data["rev_growth"] == 0:
+        mo_rev = get_revenue_yoy_mops(code)
+        if pd.notna(mo_rev): data["rev_growth"] = mo_rev
 
-    data["peg"] = calc_peg(data["pe"], data["eps_growth"])
+    # 【✅ PEG 覆蓋計算，保證算出】
+    calc_peg_val = calc_peg(data["pe"], data["eps_growth"])
+    if pd.notna(calc_peg_val):
+        data["peg"] = calc_peg_val
     
     if pd.notna(data["close_price"]) and pd.notna(data["pe"]) and data["pe"] > 0:
         data["implied_growth"] = calculate_implied_growth(data["close_price"], data["close_price"] / data["pe"])
@@ -787,7 +841,6 @@ with st.sidebar:
         with st.spinner(f"正在全域聚合 {current_date_str} 盤中最新財報與量化數據 (共 {len(target_stocks)} 檔)..."):
             raw, hist_map = batch_scan_stocks(target_stocks)
             
-            # 【✅ 補回防呆檢查：保證掃描結果存在才寫入】
             if not raw.empty:
                 st.session_state['raw_data'] = sanitize_data(raw)
                 st.session_state['history_storage'] = hist_map
