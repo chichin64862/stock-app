@@ -90,9 +90,14 @@ font_name_global = setup_chinese_font()
 # 💡 工具函數與核心數學引擎
 # =========================================================================
 
+# 【✅ 重大修正：解決千分位逗號導致 NaN 的問題】
 def safe_float(val):
-    try: return float(val)
-    except: return np.nan
+    try:
+        if pd.isna(val) or val is None or str(val).strip() == '': return np.nan
+        # 移除逗號，確保能正確轉換為浮點數
+        return float(str(val).replace(',', '').strip())
+    except:
+        return np.nan
 
 def calc_beta(stock_ret, market_ret):
     aligned = stock_ret.align(market_ret, join='inner')
@@ -127,31 +132,24 @@ def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
         else: low = mid
     return (low + high) / 2
 
-# 【✅ 補回被遺漏的清洗函數】
-def sanitize_data(df):
-    if df.empty: return df
-    if 'yield' in df.columns: 
-        df['yield'] = df['yield'].apply(lambda x: x/100 if pd.notna(x) and x > 20 else x)
-    return df
-
-# 您的 EPS YoY 函數
+# EPS YoY 備援
 def calc_eps_yoy(fin, bal):
     try:
-        eps = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
-        eps = eps.dropna()
-        if len(eps) >= 2:
-            return (eps.iloc[0] - eps.iloc[1]) / abs(eps.iloc[1])
+        if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
+            eps = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
+            eps = eps.dropna()
+            if len(eps) >= 2:
+                return (eps.iloc[0] - eps.iloc[1]) / abs(eps.iloc[1])
     except: pass
     return np.nan
 
-# 您的 PEG 函數
+# PEG 備援
 def calc_peg(pe, eps_growth):
     try:
-        if np.isnan(pe) or np.isnan(eps_growth) or eps_growth <= 0: return np.nan
+        if pd.isna(pe) or pd.isna(eps_growth) or eps_growth <= 0: return np.nan
         return pe / (eps_growth * 100)
     except: return np.nan
 
-# 您的 MOPS 營收備援函數 (加入亂數延遲防鎖)
 def get_revenue_yoy_mops(code):
     try:
         time.sleep(np.random.uniform(0.1, 0.3))
@@ -166,12 +164,13 @@ def get_revenue_yoy_mops(code):
             if len(df) >= 2 and "營業收入" in df.columns:
                 rev_now = safe_float(df.iloc[0]["營業收入"])
                 rev_prev = safe_float(df.iloc[1]["營業收入"])
-                if rev_prev != 0: return (rev_now - rev_prev) / rev_prev
+                if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
+                    return (rev_now - rev_prev) / rev_prev
     except: pass
     return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎
+# 💡 資料前置預載引擎 (完美取得公司名稱與板塊)
 # =========================================================================
 
 @st.cache_data(ttl=86400)
@@ -183,18 +182,39 @@ def get_tw_stock_list():
         "2308": "電子零組件業", "3008": "光電業", "2327": "電子零組件業", "2383": "電子零組件業",
         "2317": "其他電子業", "2881": "金融保險業", "2603": "航運業"
     }
+    
+    # 【✅ 重大修正：從證交所 API 拿取正確中文名稱】
+    for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
+                         ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
+        try:
+            res = requests.get(mkt_url, verify=False, timeout=10)
+            if res.status_code == 200:
+                for item in res.json():
+                    code = str(item.get('公司代號', '')).strip()
+                    name = str(item.get('公司簡稱', '')).strip()
+                    ind = str(item.get('產業別', '其他')).strip()
+                    if len(code) == 4 and code.isdigit():
+                        full = f"{code}{sfx}"
+                        group = custom_sector_override.get(code, ind)
+                        stock_map[full] = f"{full} {name}"
+                        if group not in industry_map: industry_map[group] = []
+                        industry_map[group].append(full)
+                        code_to_industry[code] = group
+        except: pass
+
+    # ETF 補充
     try:
         import twstock
         for code, info in twstock.codes.items():
-            if info.type in ['股票', 'ETF']:
+            if info.type == 'ETF':
                 full = f"{code}.TW" if info.market == '上市' else f"{code}.TWO"
-                stock_map[full] = f"{full} {info.name}"
-                group = custom_sector_override.get(code, info.group if info.group else info.type)
-                if not group: group = "其他"
-                if group not in industry_map: industry_map[group] = []
-                industry_map[group].append(full)
-                code_to_industry[code] = group
+                if full not in stock_map:
+                    stock_map[full] = f"{full} {info.name}"
+                    if 'ETF' not in industry_map: industry_map['ETF'] = []
+                    industry_map['ETF'].append(full)
+                    code_to_industry[code] = 'ETF'
     except: pass
+    
     return stock_map, industry_map, code_to_industry
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
@@ -210,6 +230,7 @@ def fetch_global_market_data():
             res = requests.get(mkt_url, verify=False, timeout=10)
             if res.status_code == 200:
                 for item in res.json():
+                    # safe_float 已可過濾逗號，保證順利取得 PE 與 Yield
                     pe = safe_float(item.get("本益比"))
                     pb = safe_float(item.get("股價淨值比"))
                     yld = safe_float(item.get("殖利率(%)"))
@@ -237,15 +258,8 @@ def fetch_global_market_data():
 
     return twse_data, rev_data, mkt_ret
 
-def get_safe_val(df, keys, col_idx=0):
-    for k in keys:
-        if k in df.index:
-            val = df.loc[k].iloc[col_idx]
-            return float(val) if pd.notna(val) else np.nan
-    return np.nan
-
 # =========================================================================
-# 💡 核心自研數據庫 (多源聚合)
+# 💡 核心自研數據庫 (完全整合您提供的手算反推邏輯)
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -267,7 +281,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     }
     if code.startswith('00'): data['industry'] = 'ETF'
     
-    # 1️⃣ 價格與風險指標
+    # 1️⃣ 價格與風險指標 (這段您說原本就有數據的，保留不動)
     try:
         hist = ticker.history(period="6mo")
         if not hist.empty:
@@ -336,14 +350,27 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
             data["fcf_yield"] = (data["fcf"] * 4) / data["market_cap"]
     except: pass
 
-    # 5️⃣ 政府資料聚合 (TWSE)
+    # 5️⃣ 玩股網 API 備援
+    if pd.isna(data['roe']) or pd.isna(data['gross_margins']):
+        try:
+            wg_url = f"https://www.wantgoo.com/investrue/api/v1/stock/{code}/financial-ratios"
+            wg_headers = {'User-Agent': 'Mozilla/5.0', 'X-Requested-With': 'XMLHttpRequest'}
+            res_wg = requests.get(wg_url, headers=wg_headers, timeout=5)
+            if res_wg.status_code == 200:
+                wg_json = res_wg.json()
+                if isinstance(wg_json, list) and len(wg_json) > 0:
+                    if pd.isna(data['roe']): data['roe'] = safe_float(wg_json[0].get('returnOnEquity')) / 100.0
+                    if pd.isna(data['gross_margins']): data['gross_margins'] = safe_float(wg_json[0].get('grossMargin')) / 100.0
+        except: pass
+
+    # 6️⃣ 政府資料聚合 (TWSE)
     if code in global_twse:
-        tw_pe = global_twse[code]["pe"]
+        tw_pe = global_twse[code].get("pe", np.nan)
         if pd.isna(data["pe"]) and pd.notna(tw_pe): data["pe"] = tw_pe
         data["pb"] = global_twse[code].get("pb", np.nan)
         data["yield"] = global_twse[code].get("yield", np.nan)
 
-    # 6️⃣ 殖利率 Fallback
+    # 7️⃣ 殖利率 Fallback (若官方缺漏則自算)
     if pd.isna(data["yield"]):
         try:
             divs = ticker.dividends
@@ -353,13 +380,13 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     data["yield"] = last_year_div / data['close_price']
         except: pass
 
-    # 7️⃣ 營收 YoY (官方 + MOPS)
+    # 8️⃣ 營收 YoY (官方預載 + MOPS 備援)
     if code in global_rev:
         data["rev_growth"] = global_rev[code]
     if pd.isna(data["rev_growth"]):
         data["rev_growth"] = get_revenue_yoy_mops(code)
 
-    # 8️⃣ PEG 與隱含成長
+    # 9️⃣ PEG 與隱含成長
     data["peg"] = calc_peg(data["pe"], data["eps_growth"])
     
     if pd.notna(data["close_price"]) and pd.notna(data["pe"]) and data["pe"] > 0:
@@ -688,12 +715,24 @@ with st.sidebar:
     scan_mode = st.radio("篩選維度", ["市場焦點策略", "產業族群板塊", "台灣 ETF 專區", "自訂代碼輸入"])
     target_stocks = []
     
+    # 【✅ 補回被誤刪的策略選單】
     strategies = {
         "動能爆發 (高夏普)": ["2382.TW", "3231.TW", "6669.TW", "2376.TW", "3017.TW", "3661.TW"],
-        "低波動防禦 (低標準差)": ["2412.TW", "3045.TW", "2881.TW", "2892.TW", "1101.TW"]
+        "低波動防禦 (低標準差)": ["2412.TW", "3045.TW", "2881.TW", "2892.TW", "1101.TW"],
+        "蘋果與消費電 (Beta循環)": ["2330.TW", "2317.TW", "3008.TW", "4938.TW", "2313.TW"],
+        "電動車與車電 (趨勢Beta)": ["2308.TW", "2317.TW", "6235.TW", "1536.TW", "5425.TW"]
     } if st.session_state['current_logic'] == "Quant" else {
         "台灣50 (護城河權值)": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2412.TW", "1301.TW"],
-        "高股息與穩健 (現金流)": ["2454.TW", "2303.TW", "2357.TW", "1101.TW", "2891.TW"]
+        "高股息與穩健 (現金流)": ["2454.TW", "2303.TW", "2357.TW", "1101.TW", "2891.TW"],
+        "金融保險 (防禦收息)": ["2881.TW", "2882.TW", "2886.TW", "2891.TW", "5880.TW", "2884.TW"],
+        "傳產與航運 (循環價值)": ["2603.TW", "2609.TW", "2002.TW", "1301.TW", "1303.TW", "1605.TW"]
+    }
+        
+    etf_strategies = {
+        "市值型 ETF (大盤連動)": ["0050.TW", "006208.TW", "00692.TW", "00881.TW"],
+        "高股息 ETF (穩定配息)": ["0056.TW", "00878.TW", "00919.TW", "00929.TW", "00713.TW"],
+        "科技與半導體主題": ["00891.TW", "00892.TW", "00881.TW", "00830.TW"],
+        "海外與美股連結": ["00757.TW", "00646.TW", "00830.TW", "00662.TW"]
     }
         
     if scan_mode == "自訂代碼輸入":
@@ -703,10 +742,15 @@ with st.sidebar:
         selected_inds = st.multiselect("板塊選擇", ["[ALL] 載入全部板塊"] + sorted(list(industry_map.keys())))
         for k in (industry_map.keys() if "[ALL] 載入全部板塊" in selected_inds else selected_inds): target_stocks.extend(industry_map[k])
     elif scan_mode == "台灣 ETF 專區":
-        target_stocks.extend(["0050.TW", "0056.TW", "00878.TW", "00881.TW", "00919.TW", "00929.TW"]) 
+        # 【✅ 補回被誤刪的 ETF 選單】
+        etf_keys = list(etf_strategies.keys())
+        selected_etfs = st.multiselect("ETF 分類 (支援複選)", ["[ALL] 載入全部 ETF"] + etf_keys, default=[etf_keys[0]])
+        for k in (etf_keys if "[ALL] 載入全部 ETF" in selected_etfs else selected_etfs): target_stocks.extend(etf_strategies[k])
     else: 
-        selected_strats = st.multiselect("推薦策略池", ["[ALL] 載入全部策略"] + list(strategies.keys()), default=[list(strategies.keys())[0]])
-        for k in (strategies.keys() if "[ALL] 載入全部策略" in selected_strats else selected_strats): target_stocks.extend(strategies[k])
+        # 【✅ 補回被誤刪的 策略池選單】
+        strat_keys = list(strategies.keys())
+        selected_strats = st.multiselect("推薦策略池", ["[ALL] 載入全部策略"] + strat_keys, default=[strat_keys[0]])
+        for k in (strat_keys if "[ALL] 載入全部策略" in selected_strats else selected_strats): target_stocks.extend(strategies[k])
 
     target_stocks = list(dict.fromkeys(target_stocks)) 
 
@@ -722,7 +766,7 @@ with st.sidebar:
 col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
-    st.caption(f"STATUS: ONLINE | ENGINE: **{'量化風控' if st.session_state['current_logic'] == 'Quant' else '價值護城河'}** | ALGO: 多源自研數據引擎滿血版")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{'量化風控' if st.session_state['current_logic'] == 'Quant' else '價值護城河'}** | ALGO: 防呆自研推導引擎滿血版")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
