@@ -437,7 +437,6 @@ def greedy_mpt_optimization(pool_df, returns_df, target_n, metric_col, initial_s
     min_metric = pool_df[metric_col].min()
     if max_metric == min_metric: max_metric = min_metric + 1 
     
-    # 確保安全初始化：若為空集合，先抓取分數最高者
     if not selected_codes and len(candidates) > 0:
         first_code = pool_df.loc[pool_df['代號'].isin(candidates), metric_col].idxmax()
         first_code = pool_df.loc[first_code, '代號']
@@ -606,7 +605,7 @@ AI_PROMPT_TEMPLATE = """
 3. **操作結論**：結合 MDD 與季線乖離，給出客觀的資產配置定位與具體行動建議。
 """
 
-# --- 15. 主程式介面 ---
+# --- 15. 主介面 ---
 with st.sidebar:
     st.title("⚙️ 終端控制面板")
     logic_choice_tw = st.radio("選擇運算引擎", ["📊 量化風控模型 (夏普值/波動率/Beta)", "👴 價值護城河 (高ROE/毛利/現金流)"], label_visibility="collapsed")
@@ -638,20 +637,19 @@ with st.sidebar:
 
     target_stocks = list(dict.fromkeys(target_stocks)) 
 
-    if st.button("🚀 啟動終端運算 (強制擷取最新數據)", type="primary", use_container_width=True):
+    if st.button("🚀 啟提終端運算 (強制擷取最新數據)", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False
         st.session_state['panel_page'] = 1 
         current_date_str = datetime.now().strftime("%Y/%m/%d")
-        with st.spinner(f"正在聚合 {current_date_str} 盤中最新財報與量化數據 (共 {len(target_stocks)} 檔)..."):
+        with st.spinner(f"正在全域聚合 {current_date_str} 盤中最新財報與量化數據 (共 {len(target_stocks)} 檔)..."):
             raw, hist_map = batch_scan_stocks(target_stocks)
-            raw = sanitize_data(raw)
-            st.session_state['raw_data'], st.session_state['history_storage'], st.session_state['scan_finished'] = raw, hist_map, True
+            st.session_state['raw_data'], st.session_state['history_storage'], st.session_state['scan_finished'] = sanitize_data(raw), hist_map, True
             st.rerun()
 
 col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
-    st.caption(f"STATUS: ONLINE | ENGINE: **{'量化風控' if st.session_state['current_logic'] == 'Quant' else '價值護城河'}** | ALGO: 多源聚合滿血版 (無快取)")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{'量化風控' if st.session_state['current_logic'] == 'Quant' else '價值護城河'}** | ALGO: 多源自研數據引擎滿血版")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
@@ -676,8 +674,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         )
         st.markdown("---")
         
-        if df_event.selection.rows:
-            sel_idx = df_event.selection.rows[0]
+        selected_rows = df_event.selection.rows
+        
+        if selected_rows:
+            sel_idx = selected_rows[0]
             sel_row = filtered_df.iloc[sel_idx]
             c_title, c_add = st.columns([3, 1])
             c_title.subheader(f"💡 系統標籤深度解析：{sel_row['名稱']} ({sel_row['代號']})")
@@ -811,62 +811,52 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             for col, title, tgt, count in zip([w_c1, w_c2, w_c3, w_c4], ["🚀 成長型資產", "⚖️ 中性資產", "🛡️ 防禦型資產", "💵 現金部位"], [t_grow, t_neu, t_def, t_cash], [counts.get("🚀 成長型資產",0), counts.get("⚖️ 中性資產",0), counts.get("🛡️ 防禦型資產",0), "-"]):
                 col.markdown(f"<div style='background-color:#06090F; padding:15px; border-radius:4px; border:1px solid #1E293B;'><div style='color:#9CA3AF;'>{title}</div><div style='font-size:1.5rem; font-weight:bold; color:#F8FAFC;'>目標 {tgt}%</div><div style='color:#3B82F6;'>目前自選: {count}</div></div>", unsafe_allow_html=True)
 
-        # =========================================================
-        # 💼 系統嚴選：模型專屬效率前緣配置
-        # =========================================================
-        st.markdown("---")
-        st.subheader("💼 系統嚴選：模型專屬效率前緣配置")
+    # =========================================================
+    # 💼 系統嚴選：模型專屬效率前緣配置
+    # =========================================================
+    st.markdown("---")
+    st.subheader("💼 系統嚴選：模型專屬效率前緣配置")
+    
+    returns_df = pd.concat([h['Close'].pct_change().rename(c) for c, h in hist_storage.items() if not h.empty], axis=1).dropna(how='all').fillna(0) if hist_storage else pd.DataFrame()
+    
+    if st.session_state['current_logic'] == "Quant":
+        pool_df = final_df[(final_df['sharpe'] > 0) & (final_df['mdd'] >= -0.25)].copy()
+        if len(pool_df)==0: pool_df = final_df.head(10).copy()
+        pool_df['戰略定位'] = pool_df.apply(lambda r: "🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else "⚖️ 中性資產"), axis=1)
         
-        df_list = []
-        for c, h_df in hist_storage.items():
-            if h_df is not None and not h_df.empty and 'Close' in h_df.columns:
-                df_list.append(h_df['Close'].pct_change().rename(c))
-                
-        if df_list:
-            returns_df = pd.concat(df_list, axis=1).dropna(how='all').fillna(0)
-            cov_matrix = returns_df.cov() * 252 
-        else:
-            returns_df = pd.DataFrame()
-            cov_matrix = pd.DataFrame()
+        f_codes = greedy_mpt_optimization(pool_df[pool_df['戰略定位']=="🚀 成長型資產"], returns_df, 4, 'sharpe', target_vol_max=0.15)
+        f_codes = greedy_mpt_optimization(pool_df[pool_df['戰略定位']=="🛡️ 防禦型資產"], returns_df, 3, 'sharpe', initial_selected=f_codes)
+        f_codes = greedy_mpt_optimization(pool_df[pool_df['戰略定位']=="⚖️ 中性資產"], returns_df, 3, 'sharpe', initial_selected=f_codes)
+        if len(f_codes)<10: f_codes.extend(greedy_mpt_optimization(pool_df[~pool_df['代號'].isin(f_codes)], returns_df, 10-len(f_codes), 'sharpe', initial_selected=f_codes))
         
-        if st.session_state['current_logic'] == "Quant":
-            pool_df = final_df[(final_df['sharpe'] > 0) & (final_df['mdd'] >= -0.25)].copy()
-            if len(pool_df)==0: pool_df = final_df.head(10).copy()
-            pool_df['戰略定位'] = pool_df.apply(lambda r: "🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else "⚖️ 中性資產"), axis=1)
-            
-            f_codes = greedy_mpt_optimization(pool_df[pool_df['戰略定位']=="🚀 成長型資產"], returns_df, 4, 'sharpe', target_vol_max=0.15)
-            f_codes = greedy_mpt_optimization(pool_df[pool_df['戰略定位']=="🛡️ 防禦型資產"], returns_df, 3, 'sharpe', initial_selected=f_codes)
-            f_codes = greedy_mpt_optimization(pool_df[pool_df['戰略定位']=="⚖️ 中性資產"], returns_df, 3, 'sharpe', initial_selected=f_codes)
-            if len(f_codes)<10: f_codes.extend(greedy_mpt_optimization(pool_df[~pool_df['代號'].isin(f_codes)], returns_df, 10-len(f_codes), 'sharpe', initial_selected=f_codes))
-            
-            port_df = pool_df[pool_df['代號'].isin(f_codes)].copy()
-            port_df['建議權重'] = port_df.apply(lambda r: "12%~15%" if r['戰略定位']=="🚀 成長型資產" and r['sharpe']>2 and r['volatility']<0.3 else ("8%~12%" if r['戰略定位'] in ["🚀 成長型資產","🛡️ 防禦型資產"] else "5%~8%"), axis=1)
-            
-            c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
-            with c1:
-                st.dataframe(port_df[['代號', '名稱', '戰略定位', 'sharpe', 'mdd', '建議權重']], hide_index=True, use_container_width=True)
-            with c2:
-                port_codes = port_df['代號'].tolist()
-                true_vol = 0
-                if not cov_matrix.empty and len(port_codes) > 1:
-                    valid_codes = [c for c in port_codes if c in cov_matrix.columns]
-                    if len(valid_codes) == len(port_codes):
-                        raw_w = np.array([0.135 if r['戰略定位']=="🚀 成長型資產" and r['sharpe']>2 and r['volatility']<0.3 else (0.10 if r['戰略定位'] in ["🚀 成長型資產","🛡️ 防禦型資產"] else 0.065) for _, r in port_df.iterrows()])
-                        weights = raw_w / np.sum(raw_w) if np.sum(raw_w) > 0 else np.ones(len(raw_w))/len(raw_w)
-                        true_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix.loc[valid_codes, valid_codes], weights))) * 100
-                st.markdown(f"<div class='cmd-box'><b>即時 MPT 波動作弊檢驗：</b><br>動態權重真實波動率：<span style='color:#10B981; font-size:1.5rem;'>{true_vol:.1f}%</span></div>", unsafe_allow_html=True)
-            with c3:
-                if not returns_df.empty and len(port_codes) > 1:
-                    v_codes = [c for c in port_codes if c in returns_df.columns]
-                    if len(v_codes) > 1:
-                        corr_mat = returns_df[v_codes].corr()
-                        corr_mat.columns = [c.split('.')[0] for c in v_codes]
-                        corr_mat.index = [c.split('.')[0] for c in v_codes]
-                        st.plotly_chart(px.imshow(corr_mat, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1), use_container_width=True)
-        else:
-            pool_df = final_df[(final_df['roe'] > 15) & (final_df['gross_margins'] > 40) & (final_df['mdd'] >= -0.25)].copy()
-            if len(pool_df)<10: pool_df = final_df[final_df['mdd'] >= -0.25].nlargest(10, 'Score').copy()
-            pool_df['戰略定位'] = pool_df.apply(lambda r: "🚀 成長護城河" if r.get('eps_growth',0)>15 else "💰 穩健價值", axis=1)
-            port_df = pool_df.sort_values(by='Score', ascending=False).head(10)
-            port_df['建議權重'] = f"{100.0/len(port_df):.1f}%" if len(port_df)>0 else "0%"
-            st.dataframe(port_df[['代號', '名稱', '戰略定位', 'roe', 'gross_margins', 'pe', '建議權重']], hide_index=True, use_container_width=True)
+        port_df = pool_df[pool_df['代號'].isin(f_codes)].copy()
+        port_df['建議權重'] = port_df.apply(lambda r: "12%~15%" if r['戰略定位']=="🚀 成長型資產" and r['sharpe']>2 and r['volatility']<0.3 else ("8%~12%" if r['戰略定位'] in ["🚀 成長型資產","🛡️ 防禦型資產"] else "5%~8%"), axis=1)
+        
+        c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
+        with c1:
+            st.dataframe(port_df[['代號', '名稱', '戰略定位', 'sharpe', 'mdd', '建議權重']], hide_index=True, use_container_width=True)
+        with c2:
+            port_codes = port_df['代號'].tolist()
+            true_vol = 0
+            if not cov_matrix.empty and len(port_codes) > 1:
+                valid_codes = [c for c in port_codes if c in cov_matrix.columns]
+                if len(valid_codes) == len(port_codes):
+                    raw_w = np.array([0.135 if r['戰略定位']=="🚀 成長型資產" and r['sharpe']>2 and r['volatility']<0.3 else (0.10 if r['戰略定位'] in ["🚀 成長型資產","🛡️ 防禦型資產"] else 0.065) for _, r in port_df.iterrows()])
+                    weights = raw_w / np.sum(raw_w) if np.sum(raw_w) > 0 else np.ones(len(raw_w))/len(raw_w)
+                    true_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix.loc[valid_codes, valid_codes], weights))) * 100
+            st.markdown(f"<div class='cmd-box'><b>即時 MPT 波動作弊檢驗：</b><br>動態權重真實波動率：<span style='color:#10B981; font-size:1.5rem;'>{true_vol:.1f}%</span></div>", unsafe_allow_html=True)
+        with c3:
+            if not returns_df.empty and len(port_codes) > 1:
+                v_codes = [c for c in port_codes if c in returns_df.columns]
+                if len(v_codes) > 1:
+                    corr_mat = returns_df[v_codes].corr()
+                    corr_mat.columns = [c.split('.')[0] for c in v_codes]
+                    corr_mat.index = [c.split('.')[0] for c in v_codes]
+                    st.plotly_chart(px.imshow(corr_mat, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1), use_container_width=True)
+    else:
+        pool_df = final_df[(final_df['roe'] > 15) & (final_df['gross_margins'] > 40) & (final_df['mdd'] >= -0.25)].copy()
+        if len(pool_df)<10: pool_df = final_df[final_df['mdd'] >= -0.25].nlargest(10, 'Score').copy()
+        pool_df['戰略定位'] = pool_df.apply(lambda r: "🚀 成長護城河" if r.get('eps_growth',0)>15 else "💰 穩健價值", axis=1)
+        port_df = pool_df.sort_values(by='Score', ascending=False).head(10)
+        port_df['建議權重'] = f"{100.0/len(port_df):.1f}%" if len(port_df)>0 else "0%"
+        st.dataframe(port_df[['代號', '名稱', '戰略定位', 'roe', 'gross_margins', 'pe', '建議權重']], hide_index=True, use_container_width=True)
