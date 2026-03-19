@@ -6,6 +6,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import concurrent.futures
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import urllib3
 import io
 import os
@@ -14,7 +16,7 @@ from datetime import datetime
 import urllib.request
 import html
 
-# --- 關閉 SSL 驗證警告 (針對證交所 API) ---
+# --- 關閉 SSL 驗證警告 (針對證交所官方 API) ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # PDF 函式庫
@@ -163,118 +165,134 @@ def setup_chinese_font():
 
 font_name_global = setup_chinese_font()
 
-# --- 6. 核心數據引擎 ---
+# --- 6. 核心數據引擎 (多源聚合與防阻擋) ---
+def create_resilient_session():
+    session = requests.Session()
+    retry = Retry(total=3, read=3, connect=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    })
+    return session
 
-# 【證交所官方連線】強制關閉 Verify 繞過憑證
-@st.cache_data(ttl=86400) 
+# 【內建高質量產業板塊庫，永不漏股】
+@st.cache_data(ttl=86400)
 def get_tw_stock_list():
-    stock_map = {}
-    industry_map = {}
-    code_to_industry = {}
-    
-    try:
-        res_twse = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", timeout=10, verify=False)
-        if res_twse.status_code == 200:
-            for item in res_twse.json():
-                code = str(item.get('公司代號', '')).strip()
-                name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind = str(item.get('產業別', '其他')).strip()
-                
-                if len(code) == 4 and code.isdigit():
-                    full = f"{code}.TW"
-                    stock_map[full] = f"{full} {name}"
-                    if ind not in industry_map: industry_map[ind] = []
-                    if full not in industry_map[ind]: industry_map[ind].append(full)
-                    code_to_industry[code] = ind
-    except Exception as e:
-        pass # 失敗則依靠 twstock 備援
-
-    try:
-        res_tpex = requests.get("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", timeout=10, verify=False)
-        if res_tpex.status_code == 200:
-            for item in res_tpex.json():
-                code = str(item.get('公司代號', '')).strip()
-                name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind = str(item.get('產業別', '其他')).strip()
-                
-                if len(code) == 4 and code.isdigit():
-                    full = f"{code}.TWO"
-                    stock_map[full] = f"{full} {name}"
-                    if ind not in industry_map: industry_map[ind] = []
-                    if full not in industry_map[ind]: industry_map[ind].append(full)
-                    code_to_industry[code] = ind
-    except: pass
-
-    # 備援與 ETF 補齊 (ETF 不在上述上市櫃基本資料內)
     try:
         import twstock
-        for code, info in twstock.codes.items():
+        codes = twstock.codes
+        stock_map = {}
+        industry_map = {}
+        code_to_industry = {}
+        
+        custom_sector_override = {
+            "2330": "半導體業", "2454": "半導體業", "2303": "半導體業", "3711": "半導體業", "3034": "半導體業", "2379": "半導體業",
+            "2382": "電腦及週邊設備業", "3231": "電腦及週邊設備業", "2356": "電腦及週邊設備業", "2376": "電腦及週邊設備業", "6669": "電腦及週邊設備業",
+            "2308": "電子零組件業", "3008": "光電業", "2327": "電子零組件業", "2383": "電子零組件業", "3037": "電子零組件業",
+            "2317": "其他電子業", "2354": "其他電子業",
+            "2881": "金融保險業", "2882": "金融保險業", "2891": "金融保險業",
+            "2603": "航運業", "2609": "航運業", "2615": "航運業",
+        }
+
+        for code, info in codes.items():
             if info.type in ['股票', 'ETF']:
                 suffix = '.TW' if info.market == '上市' else '.TWO'
                 full = f"{code}{suffix}"
+                stock_map[full] = f"{full} {info.name}"
                 
-                if full not in stock_map:
-                    stock_map[full] = f"{full} {info.name}"
-                    group = info.group if info.group else info.type
-                    if not group: group = "其他"
-                    if group not in industry_map: industry_map[group] = []
-                    if full not in industry_map[group]: industry_map[group].append(full)
-                    code_to_industry[code] = group
-    except: pass
-    
-    return stock_map, industry_map, code_to_industry
+                if code in custom_sector_override: group = custom_sector_override[code]
+                else: group = info.group if info.group else info.type
+                if not group: group = "其他"
+                
+                if group not in industry_map: industry_map[group] = []
+                industry_map[group].append(full)
+                code_to_industry[code] = group
+                
+        return stock_map, industry_map, code_to_industry
+    except: return {}, {}, {}
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
 
-# 【解耦 Yahoo Finance】拔除 Custom Session，讓 yfinance 自由獲取 Cookie
-def get_stock_data(symbol):
+# 【第一層】：抓取台灣證券交易所/櫃買中心官方 API (獲取絕對精確的 PE, PB, Yield)
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_twse_official_ratios():
+    twse_data = {}
     try:
-        # 加入微小延遲防禦 429 Rate Limit
-        time.sleep(np.random.uniform(0.02, 0.15))
-        
-        if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
-        
-        # 關鍵修復：不傳入 session，讓 yfinance 自己處理 Headers 與 Cookies
-        ticker = yf.Ticker(symbol)
-        
-        info = {}
-        try: 
-            info = ticker.info 
-        except: 
-            pass
-            
-        hist = pd.DataFrame()
-        try:
-            hist = ticker.history(period="6mo")
-            if not hist.empty and hist['Volume'].iloc[-1] == 0: pass 
-        except: 
-            pass
+        res = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap14_L", timeout=10, verify=False)
+        if res.status_code == 200:
+            for item in res.json():
+                code = str(item.get('證券代號', '')).strip()
+                pe = pd.to_numeric(item.get('本益比', ''), errors='coerce')
+                pb = pd.to_numeric(item.get('股價淨值比', ''), errors='coerce')
+                yld = pd.to_numeric(item.get('殖利率(%)', ''), errors='coerce') / 100.0 if item.get('殖利率(%)') else np.nan
+                twse_data[code] = {'pe': pe if pe > 0 else np.nan, 'pb': pb, 'yield': yld}
+    except: pass
+    try:
+        res2 = requests.get("https://www.tpex.org.tw/openapi/v1/t187ap14_O", timeout=10, verify=False)
+        if res2.status_code == 200:
+            for item in res2.json():
+                code = str(item.get('證券代號', '')).strip()
+                pe = pd.to_numeric(item.get('本益比', ''), errors='coerce')
+                pb = pd.to_numeric(item.get('股價淨值比', ''), errors='coerce')
+                yld = pd.to_numeric(item.get('殖利率(%)', ''), errors='coerce') / 100.0 if item.get('殖利率(%)') else np.nan
+                twse_data[code] = {'pe': pe if pe > 0 else np.nan, 'pb': pb, 'yield': yld}
+    except: pass
+    return twse_data
 
-        def g(k): return info.get(k)
-        
-        price = g('currentPrice') or g('previousClose')
-        if (price is None or pd.isna(price)) and not hist.empty:
-            price = float(hist['Close'].iloc[-1])
+# 【第二層與第三層】：Yahoo Raw API & WantGoo API 聚合器
+def get_robust_fundamentals(code, session, twse_data):
+    fund = {'pe': np.nan, 'pb': np.nan, 'yield': np.nan, 'roe': np.nan, 'rev_growth': np.nan,
+            'eps_growth': np.nan, 'gross_margins': np.nan, 'fcf': np.nan, 'market_cap': np.nan,
+            'debt_to_equity': np.nan, 'beta': np.nan}
             
-        data = {
-            'close_price': price,
-            'pe': g('trailingPE'),
-            'peg': g('pegRatio'),
-            'pb': g('priceToBook'),
-            'rev_growth': g('revenueGrowth'),
-            'eps_growth': g('earningsGrowth'),
-            'trailing_eps': g('trailingEps'), 
-            'gross_margins': g('grossMargins'),
-            'yield': g('dividendYield'),
-            'roe': g('returnOnEquity'),
-            'beta': g('beta'),
-            'market_cap': g('marketCap'),
-            'fcf': g('freeCashflow'),
-            'debt_to_equity': g('debtToEquity'),
-            'history': hist
-        }
-        return data
-    except Exception: return None
+    # 1. 官方資料庫優先 (確保估值指標不漏接)
+    if code in twse_data:
+        fund['pe'] = twse_data[code].get('pe', np.nan)
+        fund['pb'] = twse_data[code].get('pb', np.nan)
+        fund['yield'] = twse_data[code].get('yield', np.nan)
+
+    # 2. Yahoo Finance 底層原生 JSON API (跳過 yfinance 庫的 Cookie 限制)
+    try:
+        yahoo_code = f"{code}.TW" if len(code) == 4 else code
+        url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{yahoo_code}?modules=defaultKeyStatistics,financialData,summaryDetail"
+        res = session.get(url, timeout=4)
+        if res.status_code == 200:
+            data = res.json().get('quoteSummary', {}).get('result', [])[0]
+            if 'financialData' in data:
+                fd = data['financialData']
+                fund['roe'] = fd.get('returnOnEquity', {}).get('raw', np.nan)
+                fund['gross_margins'] = fd.get('grossMargins', {}).get('raw', np.nan)
+                fund['rev_growth'] = fd.get('revenueGrowth', {}).get('raw', np.nan)
+                fund['fcf'] = fd.get('freeCashflow', {}).get('raw', np.nan)
+                fund['debt_to_equity'] = fd.get('debtToEquity', {}).get('raw', np.nan)
+            if 'defaultKeyStatistics' in data:
+                dks = data['defaultKeyStatistics']
+                fund['eps_growth'] = dks.get('earningsQuarterlyGrowth', {}).get('raw', np.nan)
+                fund['beta'] = dks.get('beta', {}).get('raw', np.nan)
+                if pd.isna(fund['pb']): fund['pb'] = dks.get('priceToBook', {}).get('raw', np.nan)
+            if 'summaryDetail' in data:
+                sd = data['summaryDetail']
+                fund['market_cap'] = sd.get('marketCap', {}).get('raw', np.nan)
+                if pd.isna(fund['pe']): fund['pe'] = sd.get('trailingPE', {}).get('raw', np.nan)
+                if pd.isna(fund['yield']): fund['yield'] = sd.get('dividendYield', {}).get('raw', np.nan)
+    except: pass
+
+    # 3. 玩股網 (WantGoo) 終極備援 (若 Yahoo 當機，從此處救援 ROE 與 毛利)
+    if pd.isna(fund['roe']) or pd.isna(fund['gross_margins']):
+        try:
+            url_wg = f"https://www.wantgoo.com/investrue/api/v1/stock/{code}/financial-ratios"
+            res_wg = session.get(url_wg, headers={'X-Requested-With': 'XMLHttpRequest'}, timeout=3)
+            if res_wg.status_code == 200:
+                wg_data = res_wg.json()
+                if isinstance(wg_data, list) and len(wg_data) > 0:
+                    latest = wg_data[0]
+                    if pd.isna(fund['roe']): fund['roe'] = latest.get('returnOnEquity', np.nan) / 100.0
+                    if pd.isna(fund['gross_margins']): fund['gross_margins'] = latest.get('grossMargin', np.nan) / 100.0
+        except: pass
+
+    return fund
 
 def sanitize_data(df):
     if df.empty: return df
@@ -296,96 +314,88 @@ def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
         else: low = mid
     return (low + high) / 2
 
-# --- 7. 批量掃描 ---
-@st.cache_data(ttl=1800, show_spinner=False) # 縮短快取時間，強迫更新
+# --- 7. 批量掃描 (核心聚合器) ---
+@st.cache_data(ttl=300, show_spinner=False) # 5分鐘快取，確保拿到 2026 最新資料
 def batch_scan_stocks(stock_list):
     results = []
     history_map = {} 
     RISK_FREE_RATE = 0.015 
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        # 解耦後，直接傳入 symbol
-        future_to_stock = {executor.submit(get_stock_data, s.split(' ')[0]): s for s in stock_list}
+    global_session = create_resilient_session()
+    twse_official_data = fetch_twse_official_ratios()
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        # 使用多執行緒擷取
+        future_to_stock = {}
+        for s in stock_list:
+            code_base = s.split(' ')[0]
+            future_to_stock[executor.submit(get_robust_fundamentals, code_base.split('.')[0], global_session, twse_official_data)] = s
         
         for future in concurrent.futures.as_completed(future_to_stock):
             stock_str = future_to_stock[future]
+            code = stock_str.split(' ')[0].split('.')[0]
+            name = code 
+            if len(stock_str.split(' ')) > 1: name = stock_str.split(' ')[1]
+
+            fund_data = future.result()
+            
+            # 使用 yfinance 僅抓取歷史 K 線來算波動率、夏普、MDD
+            price = np.nan; volatility = np.nan; sharpe = np.nan; mdd = np.nan; ma_bias = np.nan
             try:
-                code = stock_str.split(' ')[0].split('.')[0]
-                name = code 
-                if len(stock_str.split(' ')) > 1: name = stock_str.split(' ')[1]
-
-                y_data = future.result()
-                if y_data is None: continue
-
-                price = np.nan; pe = np.nan; pb = np.nan; dy = np.nan
-                rev_growth = np.nan; eps_growth = np.nan; margins = np.nan
-                fcf_yield = np.nan; de_ratio = np.nan; beta_val = np.nan
-                peg = np.nan; roe = np.nan; volatility = np.nan; sharpe = np.nan; implied_g = np.nan
-                mdd = np.nan; chips = 0; ma_bias = 0
-
-                if y_data:
-                    hist = y_data.get('history')
-                    if hist is not None and not hist.empty:
-                        history_map[code] = hist 
-                        closes = hist['Close']
-                        if len(closes) > 10:
-                            price = float(closes.iloc[-1])
-                            volatility = closes.pct_change().std() * (252**0.5)
-                            ma60 = closes.rolling(60).mean().iloc[-1]
-                            if not pd.isna(ma60): ma_bias = (price / ma60) - 1
+                # 不餵入客製化 session 給 yfinance 歷史，避免破壞其內部防護
+                ticker = yf.Ticker(stock_str.split(' ')[0])
+                hist = ticker.history(period="6mo")
+                if not hist.empty:
+                    history_map[code] = hist 
+                    closes = hist['Close']
+                    if len(closes) > 10:
+                        price = float(closes.iloc[-1])
+                        volatility = closes.pct_change().std() * (252**0.5)
+                        ma60 = closes.rolling(60).mean().iloc[-1]
+                        if not pd.isna(ma60): ma_bias = (price / ma60) - 1
+                        
+                        ret_6m = (closes.iloc[-1] / closes.iloc[0]) - 1
+                        ann_ret = ret_6m * 2 
+                        if volatility > 0 and not pd.isna(volatility):
+                            sharpe = (ann_ret - RISK_FREE_RATE) / volatility
                             
-                            ret_6m = (closes.iloc[-1] / closes.iloc[0]) - 1
-                            ann_ret = ret_6m * 2 
-                            if volatility > 0 and not pd.isna(volatility):
-                                sharpe = (ann_ret - RISK_FREE_RATE) / volatility
-                                
-                            roll_max = closes.cummax()
-                            drawdown = closes / roll_max - 1.0
-                            mdd = drawdown.min()
-                    
-                    if pd.isna(price): price = y_data.get('close_price')
-                    def get_val(key):
-                        v = y_data.get(key)
-                        return float(v) if v is not None else np.nan
+                        roll_max = closes.cummax()
+                        drawdown = closes / roll_max - 1.0
+                        mdd = drawdown.min()
+            except: pass
 
-                    pe = get_val('pe'); pb = get_val('pb'); roe = get_val('roe')
-                    raw_dy = get_val('yield')
-                    if not pd.isna(raw_dy): dy = raw_dy * 100 
-                    raw_rev = get_val('rev_growth')
-                    if not pd.isna(raw_rev): rev_growth = raw_rev * 100
-                    raw_eps = get_val('eps_growth')
-                    if not pd.isna(raw_eps): eps_growth = raw_eps * 100
-                    raw_margin = get_val('gross_margins')
-                    if not pd.isna(raw_margin): margins = raw_margin * 100
-                    peg = get_val('peg')
-                    beta_val = get_val('beta')
-                    de_ratio = get_val('debt_to_equity')
-                    m_cap = get_val('market_cap')
-                    fcf = get_val('fcf')
-                    if not pd.isna(m_cap) and not pd.isna(fcf) and m_cap > 0:
-                        fcf_yield = (fcf / m_cap) * 100
-                    t_eps = get_val('trailing_eps')
-                    if pd.isna(t_eps) and not pd.isna(pe) and pe > 0 and not pd.isna(price):
-                        t_eps = price / pe
-                    if not pd.isna(price) and not pd.isna(t_eps):
-                        implied_g = calculate_implied_growth(price, t_eps)
+            # 聚合運算：PEG 與 FCF Yield
+            fcf_yield = np.nan
+            if not pd.isna(fund_data['fcf']) and not pd.isna(fund_data['market_cap']) and fund_data['market_cap'] > 0:
+                fcf_yield = (fund_data['fcf'] / fund_data['market_cap']) * 100
+                
+            peg = np.nan
+            if not pd.isna(fund_data['pe']) and not pd.isna(fund_data['eps_growth']) and fund_data['eps_growth'] > 0:
+                peg = fund_data['pe'] / (fund_data['eps_growth'] * 100)
+                
+            # 估算 EPS 用於 DCF
+            t_eps = np.nan
+            if not pd.isna(price) and not pd.isna(fund_data['pe']) and fund_data['pe'] > 0:
+                t_eps = price / fund_data['pe']
+            implied_g = calculate_implied_growth(price, t_eps)
 
-                industry = code_to_industry_map.get(code, '未分類')
-                if code.startswith('00'): industry = 'ETF'
+            industry = code_to_industry_map.get(code, '未分類')
+            if code.startswith('00'): industry = 'ETF'
 
-                if not pd.isna(price):
-                    results.append({
-                        '代號': code, '名稱': name, 'close_price': price,
-                        'pe': pe, 'pb': pb, 'yield': dy, 'roe': roe,
-                        'rev_growth': rev_growth, 'eps_growth': eps_growth, 'gross_margins': margins,
-                        'fcf_yield': fcf_yield, 'de_ratio': de_ratio, 'beta': beta_val,
-                        'sharpe': sharpe, 'mdd': mdd, 'implied_growth': implied_g,
-                        'peg': peg, 'chips': chips,
-                        'volatility': volatility, 'priceToMA60': ma_bias,
-                        'industry': industry,
-                        'full_symbol': stock_str
-                    })
-            except: continue
+            if not pd.isna(price):
+                results.append({
+                    '代號': code, '名稱': name, 'close_price': price,
+                    'pe': fund_data['pe'], 'pb': fund_data['pb'], 
+                    'yield': fund_data['yield'] * 100 if not pd.isna(fund_data['yield']) else np.nan, 
+                    'roe': fund_data['roe'], 
+                    'rev_growth': fund_data['rev_growth'] * 100 if not pd.isna(fund_data['rev_growth']) else np.nan, 
+                    'eps_growth': fund_data['eps_growth'] * 100 if not pd.isna(fund_data['eps_growth']) else np.nan, 
+                    'gross_margins': fund_data['gross_margins'] * 100 if not pd.isna(fund_data['gross_margins']) else np.nan,
+                    'fcf_yield': fcf_yield, 'de_ratio': fund_data['debt_to_equity'], 'beta': fund_data['beta'],
+                    'sharpe': sharpe, 'mdd': mdd, 'implied_growth': implied_g,
+                    'peg': peg, 'chips': 0, 'volatility': volatility, 'priceToMA60': ma_bias,
+                    'industry': industry, 'full_symbol': stock_str
+                })
     
     df = pd.DataFrame(results)
     cols = ['代號', '名稱', 'close_price', 'pe', 'pb', 'yield', 'roe', 'rev_growth', 'eps_growth', 'gross_margins', 'fcf_yield', 'de_ratio', 'beta', 'sharpe', 'mdd', 'implied_growth', 'peg', 'chips', 'volatility', 'priceToMA60', 'industry']
@@ -577,8 +587,8 @@ def call_ai(prompt):
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
     try:
-        # AI call does not need the custom yfinance session
-        r = requests.post(url, headers=headers, json=data, timeout=60)
+        session = create_resilient_session()
+        r = session.post(url, headers=headers, json=data, timeout=60)
         if r.status_code == 200: return r.json()['candidates'][0]['content']['parts'][0]['text']
         else: return f"分析服務暫時無回應 (代碼: {r.status_code})"
     except Exception as e: return "分析服務連線逾時，請稍後再試。"
@@ -837,7 +847,7 @@ with st.sidebar:
     if st.button("🚀 啟動終端運算", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False
         st.session_state['panel_page'] = 1 
-        with st.spinner(f"正在擷取並運算 {len(target_stocks)} 檔標的數據..."):
+        with st.spinner(f"正在聚合最新財報與量化數據 (共 {len(target_stocks)} 檔)..."):
             raw, hist_map = batch_scan_stocks(target_stocks)
             raw = sanitize_data(raw)
             st.session_state['raw_data'] = raw
@@ -850,7 +860,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("📊 台股量化與價值分析終端")
     logic_badge = "量化風控引擎" if st.session_state['current_logic'] == "Quant" else "價值護城河引擎"
-    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 財報資料滿血還原版")
+    st.caption(f"STATUS: ONLINE | ENGINE: **{logic_badge}** | ALGO: 多源數據聚合與財報滿血版")
 
 if st.session_state['scan_finished'] and st.session_state['raw_data'] is not None:
     df = st.session_state['raw_data']
