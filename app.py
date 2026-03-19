@@ -87,7 +87,7 @@ def setup_chinese_font():
 font_name_global = setup_chinese_font()
 
 # =========================================================================
-# 💡 工具函數與核心數學引擎 (基於您的安全推導邏輯)
+# 💡 工具函數與核心數學引擎
 # =========================================================================
 
 def safe_float(val):
@@ -127,6 +127,13 @@ def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
         else: low = mid
     return (low + high) / 2
 
+# 【✅ 補回被遺漏的清洗函數】
+def sanitize_data(df):
+    if df.empty: return df
+    if 'yield' in df.columns: 
+        df['yield'] = df['yield'].apply(lambda x: x/100 if pd.notna(x) and x > 20 else x)
+    return df
+
 # 您的 EPS YoY 函數
 def calc_eps_yoy(fin, bal):
     try:
@@ -151,7 +158,6 @@ def get_revenue_yoy_mops(code):
         url = "https://mops.twse.com.tw/mops/web/ajax_t05st10_ifrs"
         payload = {"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": "sii", "co_id": code}
         res = requests.post(url, data=payload, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-        # 用 io.StringIO 避免 Pandas 警告
         tables = pd.read_html(io.StringIO(res.text))
         if len(tables) > 0:
             df = tables[0]
@@ -165,7 +171,7 @@ def get_revenue_yoy_mops(code):
     return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎 (防 API 迴圈轟炸)
+# 💡 資料前置預載引擎
 # =========================================================================
 
 @st.cache_data(ttl=86400)
@@ -193,14 +199,12 @@ def get_tw_stock_list():
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
 
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_global_market_data():
     twse_data = {}
     rev_data = {}
     mkt_ret = pd.Series(dtype=float)
     
-    # 1. 抓取上市/上櫃 PE, PB, Yield
     for mkt_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap14_L", "https://www.tpex.org.tw/openapi/v1/t187ap14_O"]:
         try:
             res = requests.get(mkt_url, verify=False, timeout=10)
@@ -216,7 +220,6 @@ def fetch_global_market_data():
                     }
         except: pass
 
-    # 2. 抓取上市/上櫃 營收 YoY
     for rev_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap05_L", "https://www.tpex.org.tw/openapi/v1/t187ap05_O"]:
         try:
             res_rev = requests.get(rev_url, verify=False, timeout=10)
@@ -227,7 +230,6 @@ def fetch_global_market_data():
                         rev_data[str(item.get("公司代號"))] = yoy / 100.0
         except: pass
 
-    # 3. 抓取大盤報酬率
     try:
         market = yf.Ticker("^TWII").history(period="6mo")
         if not market.empty: mkt_ret = market['Close'].pct_change().dropna()
@@ -235,9 +237,15 @@ def fetch_global_market_data():
 
     return twse_data, rev_data, mkt_ret
 
+def get_safe_val(df, keys, col_idx=0):
+    for k in keys:
+        if k in df.index:
+            val = df.loc[k].iloc[col_idx]
+            return float(val) if pd.notna(val) else np.nan
+    return np.nan
 
 # =========================================================================
-# 💡 核心自研數據庫 (完全整合您提供的手算反推邏輯)
+# 💡 核心自研數據庫 (多源聚合)
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -277,7 +285,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
             if not mkt_ret.empty: data["beta"] = calc_beta(returns, mkt_ret)
     except: pass
 
-    # 2️⃣ Yahoo info（第一層 fallback）
+    # 2️⃣ Yahoo info fallback
     try:
         info = ticker.info
         data["pe"] = info.get("trailingPE", np.nan)
@@ -288,23 +296,20 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
         if pd.isna(data["beta"]): data["beta"] = info.get("beta", np.nan)
     except: pass
 
-    # 3️⃣ 財報自行計算 fallback（第二層，採用您的算法）
+    # 3️⃣ 財報自行計算 fallback
     try:
-        fin = ticker.quarterly_financials # 使用季報更準確
+        fin = ticker.quarterly_financials
         bal = ticker.quarterly_balance_sheet
         cf = ticker.quarterly_cashflow
 
-        # ROE fallback
         if np.isnan(data["roe"]):
-            try: data["roe"] = float(fin.loc["Net Income"].iloc[0] * 4 / bal.loc["Total Stockholder Equity"].iloc[0]) # 年化估算
+            try: data["roe"] = float(fin.loc["Net Income"].iloc[0] * 4 / bal.loc["Total Stockholder Equity"].iloc[0])
             except: pass
 
-        # 毛利率 fallback
         if np.isnan(data["gross_margins"]):
             try: data["gross_margins"] = float(fin.loc["Gross Profit"].iloc[0] / fin.loc["Total Revenue"].iloc[0])
             except: pass
 
-        # FCF fallback
         if np.isnan(data["fcf"]):
             try:
                 op = cf.loc["Total Cash From Operating Activities"].iloc[0] if "Total Cash From Operating Activities" in cf.index else cf.loc["Operating Cash Flow"].iloc[0]
@@ -312,10 +317,8 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                 data["fcf"] = float(op + capex)
             except: pass
 
-        # EPS YoY 自己算
         data["eps_growth"] = calc_eps_yoy(fin, bal)
         
-        # 市值 fallback (自己用股本推算)
         if pd.isna(data["market_cap"]):
             try:
                 shares = bal.loc["Ordinary Shares Number"].iloc[0]
@@ -323,27 +326,24 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     data["market_cap"] = data["close_price"] * shares
             except: pass
             
-        # Debt to Equity
         try: data["de_ratio"] = float(bal.loc["Total Debt"].iloc[0] / bal.loc["Total Stockholder Equity"].iloc[0])
         except: pass
     except: pass
 
-    # 4️⃣ FCF Yield 計算 (完全保證)
+    # 4️⃣ FCF Yield 計算
     try:
         if not np.isnan(data["fcf"]) and not np.isnan(data["market_cap"]) and data["market_cap"] > 0:
-            data["fcf_yield"] = (data["fcf"] * 4) / data["market_cap"] # 季轉年化
+            data["fcf_yield"] = (data["fcf"] * 4) / data["market_cap"]
     except: pass
 
     # 5️⃣ 政府資料聚合 (TWSE)
     if code in global_twse:
-        tw_pe = global_twse[code].get("pe", np.nan)
+        tw_pe = global_twse[code]["pe"]
         if pd.isna(data["pe"]) and pd.notna(tw_pe): data["pe"] = tw_pe
         data["pb"] = global_twse[code].get("pb", np.nan)
-        
-        # 殖利率使用官方優先
         data["yield"] = global_twse[code].get("yield", np.nan)
 
-    # 6️⃣ 您寫的殖利率 Fallback（用股利自己算，最穩）
+    # 6️⃣ 殖利率 Fallback
     if pd.isna(data["yield"]):
         try:
             divs = ticker.dividends
@@ -353,7 +353,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     data["yield"] = last_year_div / data['close_price']
         except: pass
 
-    # 7️⃣ 營收 YoY (官方預載 + MOPS 備援)
+    # 7️⃣ 營收 YoY (官方 + MOPS)
     if code in global_rev:
         data["rev_growth"] = global_rev[code]
     if pd.isna(data["rev_growth"]):
@@ -365,7 +365,6 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     if pd.notna(data["close_price"]) and pd.notna(data["pe"]) and data["pe"] > 0:
         data["implied_growth"] = calculate_implied_growth(data["close_price"], data["close_price"] / data["pe"])
         
-    # --- 最終 UI 渲染百分比轉換 ---
     for key in ['roe', 'gross_margins', 'eps_growth', 'rev_growth', 'fcf_yield', 'yield', 'de_ratio']:
         if pd.notna(data[key]): data[key] *= 100
 
@@ -374,13 +373,10 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
 def batch_scan_stocks(stock_list):
     results = []
     history_map = {}
-    
-    # 預載全市場資料
     twse_data, rev_data, mkt_ret = fetch_global_market_data()
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         future_to_stock = {executor.submit(get_stock_full_optimized, s, twse_data, rev_data, mkt_ret): s for s in stock_list}
-        
         for future in concurrent.futures.as_completed(future_to_stock):
             try:
                 data = future.result()
@@ -392,7 +388,7 @@ def batch_scan_stocks(stock_list):
     df = pd.DataFrame(results)
     return df, history_map
 
-# --- 8. 評分邏輯 (三大水桶：成長/防禦/中性) ---
+# --- 8. 評分邏輯 (三大水桶) ---
 def calculate_score(df, logic_type="Quant"):
     if df.empty: return df, None
     required_cols = ['pe', 'pb', 'yield', 'rev_growth', 'eps_growth', 'gross_margins', 'fcf_yield', 'de_ratio', 'beta', 'sharpe', 'mdd', 'implied_growth', 'peg', 'volatility', 'roe', 'priceToMA60']
@@ -493,7 +489,6 @@ def get_tag_explanation(row, logic_type):
     mdd = row.get('mdd', 0)
     
     if tag == "回撤過大 (剔除)": return f"**為什麼被系統剔除？**<br>此標的過去半年內的最大回撤 (MDD) 高達 **{mdd*100:.1f}%**。依據嚴格的量化風控紀律，任何跌破 25% 容忍防線的資產，無論其基本面或夏普值多麼亮眼，都可能造成投資組合的永久性資本損傷，因此被系統強制剔除。"
-    
     if logic_type == "Quant":
         if tag == "成長型資產": return f"**為什麼被系統評定為「🚀 成長型資產」？**<br>此標的近期年化夏普值高達 **{sharpe:.2f}** 且 Beta 大於 1。依據林哲群教授《紀律長贏》觀念，其報酬率累積速度遠大於風險的增加，屬於位於效率前緣的高回報攻擊動能。"
         elif tag == "防禦型資產": return f"**為什麼被系統評定為「🛡️ 防禦型資產」？**<br>此標的近期年化夏普值高達 **{sharpe:.2f}**，且 Beta 值小於 1。具備低於大盤的波動特性與高性價比報酬，是優化投資組合下檔風險的防禦基石。"
