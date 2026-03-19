@@ -146,9 +146,10 @@ def calc_eps_yoy(fin, bal):
     except: pass
     return np.nan
 
+# 【✅ PEG 修復：移除 eps_growth_pct <= 0 限制，強制顯示所有 PEG】
 def calc_peg(pe, eps_growth_pct):
     try:
-        if pd.isna(pe) or pd.isna(eps_growth_pct) or eps_growth_pct <= 0: return np.nan
+        if pd.isna(pe) or pd.isna(eps_growth_pct) or eps_growth_pct == 0: return np.nan
         return pe / eps_growth_pct
     except: return np.nan
 
@@ -176,7 +177,7 @@ def get_revenue_yoy_mops(code):
     return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎 (完美取得公司名稱與板塊)
+# 💡 資料前置預載引擎
 # =========================================================================
 
 @st.cache_data(ttl=86400)
@@ -189,7 +190,7 @@ def get_tw_stock_list():
         "2317": "其他電子業", "2881": "金融保險業", "2603": "航運業"
     }
     
-    # 【✅ 修正：加入政府 API 代碼轉中文對照表】
+    # 【✅ 板塊修復：確保任何數字都被轉為中文，防止選單出現數字】
     twse_ind_map = {
         "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
         "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
@@ -198,7 +199,9 @@ def get_tw_stock_list():
         "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
         "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
         "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
-        "34": "電子商務業", "80": "管理股票"
+        "34": "電子商務業", "80": "管理股票",
+        "1": "水泥工業", "2": "食品工業", "3": "塑膠工業", "4": "紡織纖維", "5": "電機機械",
+        "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
     }
 
     for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
@@ -210,7 +213,10 @@ def get_tw_stock_list():
                     code = str(item.get('公司代號', '')).strip()
                     name = str(item.get('公司簡稱', '')).strip()
                     ind_raw = str(item.get('產業別', '其他')).strip()
-                    ind = twse_ind_map.get(ind_raw, ind_raw)  # 數字轉中文
+                    
+                    # 強制數字轉中文，若轉完還是數字則歸為「其他產業」
+                    ind = twse_ind_map.get(ind_raw, ind_raw)
+                    if ind.isdigit(): ind = "其他產業"
                     
                     if len(code) == 4 and code.isdigit():
                         full = f"{code}{sfx}"
@@ -285,7 +291,7 @@ def get_safe_val(df, keys, col_idx=0):
     return np.nan
 
 # =========================================================================
-# 💡 核心自研數據庫 (多源聚合)
+# 💡 核心自研數據庫
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -389,6 +395,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     if pd.isna(data['gross_margins']): data['gross_margins'] = safe_float(wg_json[0].get('grossMargin')) / 100.0
         except: pass
 
+    # 【✅ P/E 修復：如果官方沒給，手動拿 TTM EPS 算出本益比】
     if code in global_twse:
         tw_pe = global_twse[code].get("pe", np.nan)
         if pd.notna(tw_pe): data["pe"] = tw_pe 
@@ -398,6 +405,15 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
         
         tw_yld = global_twse[code].get("yield", np.nan)
         if pd.notna(tw_yld): data["yield"] = tw_yld
+
+    if pd.isna(data["pe"]):
+        try:
+            if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
+                ni_ttm = fin.loc["Net Income"].iloc[:4].sum()
+                shares = bal.loc["Ordinary Shares Number"].iloc[0]
+                if shares > 0 and ni_ttm != 0 and pd.notna(data["close_price"]):
+                    data["pe"] = data["close_price"] / (ni_ttm / shares)
+        except: pass
 
     if pd.isna(data["yield"]):
         try:
@@ -951,7 +967,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         else:
             my_port_df = final_df[final_df['代號'].isin(st.session_state['my_portfolio'])].copy()
             
-            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<25 else "🟡 觀察資產"))), axis=1)
+            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<0.25 else "🟡 觀察資產"))), axis=1)
             my_port_df['操作訊號'] = my_port_df.apply(lambda r: generate_custom_signal(r, "Bull" if "多頭" in regime else "Bear"), axis=1)
             
             st.dataframe(my_port_df[['代號', '名稱', '資產屬性', 'sharpe', 'beta', 'mdd', '操作訊號']].sort_values('sharpe', ascending=False), hide_index=True, use_container_width=True)
@@ -966,7 +982,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 col.markdown(f"<div style='background-color:#06090F; padding:15px; border-radius:4px; border:1px solid #1E293B;'><div style='color:#9CA3AF;'>{title}</div><div style='font-size:1.5rem; font-weight:bold; color:#F8FAFC;'>目標 {tgt}%</div><div style='color:#3B82F6;'>目前自選: {count}</div></div>", unsafe_allow_html=True)
 
         # =========================================================
-        # 💼 系統嚴選：模型專屬配置 (依總經多空動態調整)
+        # 💼 系統嚴選：模型專屬效率前緣配置
         # =========================================================
         st.markdown("---")
         st.subheader("💼 系統嚴選：模型專屬配置 (依總經多空動態調整)")
