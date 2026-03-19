@@ -87,7 +87,7 @@ def setup_chinese_font():
 font_name_global = setup_chinese_font()
 
 # =========================================================================
-# 💡 工具函數與核心數學引擎
+# 💡 工具函數與核心數學引擎 (基於您的安全推導邏輯)
 # =========================================================================
 
 def safe_float(val):
@@ -127,14 +127,45 @@ def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
         else: low = mid
     return (low + high) / 2
 
-def sanitize_data(df):
-    if df.empty: return df
-    if 'yield' in df.columns: 
-        df['yield'] = df['yield'].apply(lambda x: x/100 if pd.notna(x) and x > 20 else x)
-    return df
+# 您的 EPS YoY 函數
+def calc_eps_yoy(fin, bal):
+    try:
+        eps = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
+        eps = eps.dropna()
+        if len(eps) >= 2:
+            return (eps.iloc[0] - eps.iloc[1]) / abs(eps.iloc[1])
+    except: pass
+    return np.nan
+
+# 您的 PEG 函數
+def calc_peg(pe, eps_growth):
+    try:
+        if np.isnan(pe) or np.isnan(eps_growth) or eps_growth <= 0: return np.nan
+        return pe / (eps_growth * 100)
+    except: return np.nan
+
+# 您的 MOPS 營收備援函數 (加入亂數延遲防鎖)
+def get_revenue_yoy_mops(code):
+    try:
+        time.sleep(np.random.uniform(0.1, 0.3))
+        url = "https://mops.twse.com.tw/mops/web/ajax_t05st10_ifrs"
+        payload = {"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": "sii", "co_id": code}
+        res = requests.post(url, data=payload, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        # 用 io.StringIO 避免 Pandas 警告
+        tables = pd.read_html(io.StringIO(res.text))
+        if len(tables) > 0:
+            df = tables[0]
+            df.columns = df.columns.droplevel(0)
+            df = df.sort_values(df.columns[0], ascending=False)
+            if len(df) >= 2 and "營業收入" in df.columns:
+                rev_now = safe_float(df.iloc[0]["營業收入"])
+                rev_prev = safe_float(df.iloc[1]["營業收入"])
+                if rev_prev != 0: return (rev_now - rev_prev) / rev_prev
+    except: pass
+    return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎 (解決迴圈轟炸的 N+1 問題)
+# 💡 資料前置預載引擎 (防 API 迴圈轟炸)
 # =========================================================================
 
 @st.cache_data(ttl=86400)
@@ -196,7 +227,7 @@ def fetch_global_market_data():
                         rev_data[str(item.get("公司代號"))] = yoy / 100.0
         except: pass
 
-    # 3. 抓取大盤報酬率 (計算 Beta)
+    # 3. 抓取大盤報酬率
     try:
         market = yf.Ticker("^TWII").history(period="6mo")
         if not market.empty: mkt_ret = market['Close'].pct_change().dropna()
@@ -206,7 +237,7 @@ def fetch_global_market_data():
 
 
 # =========================================================================
-# 💡 核心自研數據庫 (完全採用您撰寫的 Fallback 邏輯)
+# 💡 核心自研數據庫 (完全整合您提供的手算反推邏輯)
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -218,7 +249,6 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     
     ticker = yf.Ticker(symbol)
     
-    # 初始化資料儲存
     data = {
         '代號': code, '名稱': name, 'close_price': np.nan, 'pe': np.nan, 'pb': np.nan, 'yield': np.nan,
         'roe': np.nan, 'gross_margins': np.nan, 'eps_growth': np.nan, 'rev_growth': np.nan, 
@@ -229,9 +259,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     }
     if code.startswith('00'): data['industry'] = 'ETF'
     
-    # =========================
     # 1️⃣ 價格與風險指標
-    # =========================
     try:
         hist = ticker.history(period="6mo")
         if not hist.empty:
@@ -249,9 +277,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
             if not mkt_ret.empty: data["beta"] = calc_beta(returns, mkt_ret)
     except: pass
 
-    # =========================
     # 2️⃣ Yahoo info（第一層 fallback）
-    # =========================
     try:
         info = ticker.info
         data["pe"] = info.get("trailingPE", np.nan)
@@ -260,20 +286,17 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
         data["fcf"] = info.get("freeCashflow", np.nan)
         data["market_cap"] = info.get("marketCap", np.nan)
         if pd.isna(data["beta"]): data["beta"] = info.get("beta", np.nan)
-    except:
-        pass
+    except: pass
 
-    # =========================
-    # 3️⃣ 財報 fallback（第二層，採用您的精準算法）
-    # =========================
+    # 3️⃣ 財報自行計算 fallback（第二層，採用您的算法）
     try:
-        fin = ticker.financials
-        bal = ticker.balance_sheet
-        cf = ticker.cashflow
+        fin = ticker.quarterly_financials # 使用季報更準確
+        bal = ticker.quarterly_balance_sheet
+        cf = ticker.quarterly_cashflow
 
         # ROE fallback
         if np.isnan(data["roe"]):
-            try: data["roe"] = float(fin.loc["Net Income"].iloc[0] / bal.loc["Total Stockholder Equity"].iloc[0])
+            try: data["roe"] = float(fin.loc["Net Income"].iloc[0] * 4 / bal.loc["Total Stockholder Equity"].iloc[0]) # 年化估算
             except: pass
 
         # 毛利率 fallback
@@ -284,73 +307,75 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
         # FCF fallback
         if np.isnan(data["fcf"]):
             try:
-                op = cf.loc["Total Cash From Operating Activities"].iloc[0]
-                capex = cf.loc["Capital Expenditures"].iloc[0]
+                op = cf.loc["Total Cash From Operating Activities"].iloc[0] if "Total Cash From Operating Activities" in cf.index else cf.loc["Operating Cash Flow"].iloc[0]
+                capex = cf.loc["Capital Expenditures"].iloc[0] if "Capital Expenditures" in cf.index else cf.loc["Capital Expenditure"].iloc[0]
                 data["fcf"] = float(op + capex)
             except: pass
 
-        # EPS YoY（自己算）
-        try:
-            eps = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
-            eps = eps.dropna()
-            if len(eps) >= 2:
-                data["eps_growth"] = float((eps.iloc[0] - eps.iloc[1]) / abs(eps.iloc[1]))
-        except: pass
+        # EPS YoY 自己算
+        data["eps_growth"] = calc_eps_yoy(fin, bal)
         
+        # 市值 fallback (自己用股本推算)
+        if pd.isna(data["market_cap"]):
+            try:
+                shares = bal.loc["Ordinary Shares Number"].iloc[0]
+                if pd.notna(data["close_price"]) and data["close_price"] > 0:
+                    data["market_cap"] = data["close_price"] * shares
+            except: pass
+            
         # Debt to Equity
         try: data["de_ratio"] = float(bal.loc["Total Debt"].iloc[0] / bal.loc["Total Stockholder Equity"].iloc[0])
         except: pass
     except: pass
 
-    # =========================
-    # 4️⃣ FCF Yield 計算
-    # =========================
+    # 4️⃣ FCF Yield 計算 (完全保證)
     try:
         if not np.isnan(data["fcf"]) and not np.isnan(data["market_cap"]) and data["market_cap"] > 0:
-            data["fcf_yield"] = data["fcf"] / data["market_cap"]
+            data["fcf_yield"] = (data["fcf"] * 4) / data["market_cap"] # 季轉年化
     except: pass
 
-    # =========================
     # 5️⃣ 政府資料聚合 (TWSE)
-    # =========================
     if code in global_twse:
-        tw_pe = global_twse[code]["pe"]
+        tw_pe = global_twse[code].get("pe", np.nan)
         if pd.isna(data["pe"]) and pd.notna(tw_pe): data["pe"] = tw_pe
         data["pb"] = global_twse[code].get("pb", np.nan)
+        
+        # 殖利率使用官方優先
         data["yield"] = global_twse[code].get("yield", np.nan)
 
+    # 6️⃣ 您寫的殖利率 Fallback（用股利自己算，最穩）
+    if pd.isna(data["yield"]):
+        try:
+            divs = ticker.dividends
+            if not divs.empty:
+                last_year_div = divs[divs.index > (pd.Timestamp.now(tz=divs.index.tz) - pd.Timedelta(days=365))].sum()
+                if pd.notna(data['close_price']) and data['close_price'] > 0:
+                    data["yield"] = last_year_div / data['close_price']
+        except: pass
+
+    # 7️⃣ 營收 YoY (官方預載 + MOPS 備援)
     if code in global_rev:
         data["rev_growth"] = global_rev[code]
+    if pd.isna(data["rev_growth"]):
+        data["rev_growth"] = get_revenue_yoy_mops(code)
 
-    # =========================
-    # 6️⃣ PEG 與其他衍生估值
-    # =========================
-    try:
-        if pd.notna(data["pe"]) and pd.notna(data["eps_growth"]) and data["eps_growth"] > 0:
-            data["peg"] = data["pe"] / (data["eps_growth"] * 100)
-    except: pass
+    # 8️⃣ PEG 與隱含成長
+    data["peg"] = calc_peg(data["pe"], data["eps_growth"])
     
     if pd.notna(data["close_price"]) and pd.notna(data["pe"]) and data["pe"] > 0:
         data["implied_growth"] = calculate_implied_growth(data["close_price"], data["close_price"] / data["pe"])
         
-    # --- UI 渲染格式轉換 ---
-    # (將小數轉為百分比 %，配合後方 UI 的呈現格式)
-    if pd.notna(data['roe']): data['roe'] *= 100
-    if pd.notna(data['gross_margins']): data['gross_margins'] *= 100
-    if pd.notna(data['fcf_yield']): data['fcf_yield'] *= 100
-    if pd.notna(data['eps_growth']): data['eps_growth'] *= 100
-    if pd.notna(data['rev_growth']): data['rev_growth'] *= 100
-    if pd.notna(data['yield']): data['yield'] *= 100
-    if pd.notna(data['de_ratio']): data['de_ratio'] *= 100
+    # --- 最終 UI 渲染百分比轉換 ---
+    for key in ['roe', 'gross_margins', 'eps_growth', 'rev_growth', 'fcf_yield', 'yield', 'de_ratio']:
+        if pd.notna(data[key]): data[key] *= 100
 
     return data
-
 
 def batch_scan_stocks(stock_list):
     results = []
     history_map = {}
     
-    # 預載政府資料
+    # 預載全市場資料
     twse_data, rev_data, mkt_ret = fetch_global_market_data()
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -604,7 +629,7 @@ def create_pdf(stock_data):
 
     metrics_data = [
         ['綜合評分 (Score)', f"{stock_data.get('Score', 'N/A')}", '收盤價 (Price)', f"{stock_data.get('close_price', 'N/A')}"],
-        ['夏普值 (Sharpe)', safe_str(stock_data.get('sharpe')), '波動率 (Volatility)', safe_str(stock_data.get('volatility')*100 if not pd.isna(stock_data.get('volatility')) else np.nan, "{:.1f}%")],
+        ['夏普值 (Sharpe)', safe_str(stock_data.get('sharpe')), '波動率 (Volatility)', safe_str(stock_data.get('volatility'), "{:.1f}%")],
         ['Beta (風險係數)', safe_str(stock_data.get('beta'), "{:.2f}"), '最大回撤 (MDD)', safe_str(stock_data.get('mdd')*100 if not pd.isna(stock_data.get('mdd')) else np.nan, "{:.1f}%")],
         ['ROE (權益報酬)', safe_str(stock_data.get('roe'), "{:.1f}%"), '毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.1f}%")],
         ['營收 YoY (Rev Grw)', safe_str(stock_data.get('rev_growth'), "{:.1f}%"), 'EPS YoY (EPS Grw)', safe_str(stock_data.get('eps_growth'), "{:.1f}%")],
@@ -773,7 +798,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 rev, eps = safe_num(row.get('rev_growth')), safe_num(row.get('eps_growth'))
                 st.markdown(f"""<div class='quote-board'>
 <div class='quote-item'><span class='q-label'>夏普值 (Sharpe)</span><span class='q-val {"q-up" if sh>1 else ("q-down" if sh<0 else "")}'>{sh:.2f}</span></div>
-<div class='quote-item'><span class='q-label'>波動率 (Volatility)</span><span class='q-val'>{safe_num(row.get('volatility'))*100:.1f}%</span></div>
+<div class='quote-item'><span class='q-label'>波動率 (Volatility)</span><span class='q-val'>{safe_num(row.get('volatility')):.1f}%</span></div>
 <div class='quote-item'><span class='q-label'>Beta (風險係數)</span><span class='q-val'>{safe_num(row.get('beta')):.2f}</span></div>
 <div class='quote-item'><span class='q-label'>最大回撤 (MDD)</span><span class='q-val {"q-up" if mdd>-0.15 else ("q-down" if mdd<-0.25 else "q-neu")}'>{mdd*100:.1f}%</span></div>
 <div class='quote-item'><span class='q-label'>ROE (權益報酬)</span><span class='q-val'>{"N/A" if pd.isna(row.get('roe')) else f"{safe_num(row.get('roe')):.1f}%"}</span></div>
@@ -798,7 +823,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                             .replace("[LOGIC_DESC]", "評估最大回撤防禦極限" if st.session_state['current_logic'] == "Quant" else "優先考量ROE現金流") \
                             .replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])) \
                             .replace("[CURRENT_DATE]", datetime.now().strftime('%Y年%m月%d日')) \
-                            .replace("[SHARPE]", str(sh)).replace("[VOL]", str(safe_num(row.get('volatility'))*100)) \
+                            .replace("[SHARPE]", str(sh)).replace("[VOL]", str(safe_num(row.get('volatility')))) \
                             .replace("[BETA]", str(safe_num(row.get('beta')))).replace("[MDD]", str(mdd*100)) \
                             .replace("[ROE]", str(safe_num(row.get('roe')))).replace("[GM]", str(safe_num(row.get('gross_margins')))) \
                             .replace("[FCF_Y]", str(safe_num(row.get('fcf_yield')))).replace("[DE]", str(safe_num(row.get('de_ratio')))) \
@@ -812,7 +837,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                             .replace("[LOGIC_DESC]", "評估最大回撤防禦極限" if st.session_state['current_logic'] == "Quant" else "優先考量ROE現金流") \
                             .replace("[STOCK]", row['名稱']).replace("[SECTOR]", str(row['industry'])) \
                             .replace("[CURRENT_DATE]", datetime.now().strftime('%Y年%m月%d日')) \
-                            .replace("[SHARPE]", str(sh)).replace("[VOL]", str(safe_num(row.get('volatility'))*100)) \
+                            .replace("[SHARPE]", str(sh)).replace("[VOL]", str(safe_num(row.get('volatility')))) \
                             .replace("[BETA]", str(safe_num(row.get('beta')))).replace("[MDD]", str(mdd*100)) \
                             .replace("[ROE]", str(safe_num(row.get('roe')))).replace("[GM]", str(safe_num(row.get('gross_margins')))) \
                             .replace("[FCF_Y]", str(safe_num(row.get('fcf_yield')))).replace("[DE]", str(safe_num(row.get('de_ratio')))) \
@@ -853,7 +878,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             regime = st.radio("🌍 切換總經市場情境", ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], horizontal=True)
             my_port_df = final_df[final_df['代號'].isin(st.session_state['my_portfolio'])].copy()
             
-            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<0.25 else "🟡 觀察資產"))), axis=1)
+            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<25 else "🟡 觀察資產"))), axis=1)
             my_port_df['操作訊號'] = my_port_df.apply(lambda r: generate_custom_signal(r, "Bull" if "多頭" in regime else "Bear"), axis=1)
             
             st.dataframe(my_port_df[['代號', '名稱', '資產屬性', 'sharpe', 'beta', 'mdd', '操作訊號']].sort_values('sharpe', ascending=False), hide_index=True, use_container_width=True)
@@ -896,7 +921,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             if len(f_codes)<10: f_codes.extend(greedy_mpt_optimization(pool_df[~pool_df['代號'].isin(f_codes)], returns_df, 10-len(f_codes), 'sharpe', initial_selected=f_codes))
             
             port_df = pool_df[pool_df['代號'].isin(f_codes)].copy()
-            port_df['建議權重'] = port_df.apply(lambda r: "12%~15%" if r['戰略定位']=="🚀 成長型資產" and r['sharpe']>2 and r['volatility']<0.3 else ("8%~12%" if r['戰略定位'] in ["🚀 成長型資產","🛡️ 防禦型資產"] else "5%~8%"), axis=1)
+            port_df['建議權重'] = port_df.apply(lambda r: "12%~15%" if r['戰略定位']=="🚀 成長型資產" and r['sharpe']>2 and r['volatility']<30 else ("8%~12%" if r['戰略定位'] in ["🚀 成長型資產","🛡️ 防禦型資產"] else "5%~8%"), axis=1)
             
             c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
             with c1:
@@ -907,7 +932,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 if not cov_matrix.empty and len(port_codes) > 1:
                     valid_codes = [c for c in port_codes if c in cov_matrix.columns]
                     if len(valid_codes) == len(port_codes):
-                        raw_w = np.array([0.135 if r['戰略定位']=="🚀 成長型資產" and r['sharpe']>2 and r['volatility']<0.3 else (0.10 if r['戰略定位'] in ["🚀 成長型資產","🛡️ 防禦型資產"] else 0.065) for _, r in port_df.iterrows()])
+                        raw_w = np.array([0.135 if r['戰略定位']=="🚀 成長型資產" and r['sharpe']>2 and r['volatility']<30 else (0.10 if r['戰略定位'] in ["🚀 成長型資產","🛡️ 防禦型資產"] else 0.065) for _, r in port_df.iterrows()])
                         weights = raw_w / np.sum(raw_w) if np.sum(raw_w) > 0 else np.ones(len(raw_w))/len(raw_w)
                         true_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix.loc[valid_codes, valid_codes], weights))) * 100
                 st.markdown(f"<div class='cmd-box'><b>即時 MPT 波動作弊檢驗：</b><br>動態權重真實波動率：<span style='color:#10B981; font-size:1.5rem;'>{true_vol:.1f}%</span></div>", unsafe_allow_html=True)
