@@ -68,6 +68,7 @@ if 'history_storage' not in st.session_state: st.session_state['history_storage'
 if 'ai_results' not in st.session_state: st.session_state['ai_results'] = {}
 if 'current_logic' not in st.session_state: st.session_state['current_logic'] = "Quant" 
 if 'panel_page' not in st.session_state: st.session_state['panel_page'] = 1 
+if 'list_page' not in st.session_state: st.session_state['list_page'] = 1 # ✅ 新增：清單分頁狀態
 if 'my_portfolio' not in st.session_state: st.session_state['my_portfolio'] = []
 
 try: api_key = st.secrets["GEMINI_API_KEY"]
@@ -175,7 +176,7 @@ def get_revenue_yoy_mops(code):
     return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎 (✅ 精準修復：確保 1800+ 檔全數載入且板塊全為中文)
+# 💡 資料前置預載引擎
 # =========================================================================
 
 @st.cache_data(ttl=86400)
@@ -201,21 +202,6 @@ def get_tw_stock_list():
         "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
     }
 
-    # 1. 優先抓取 PE/PB 表 (保證涵蓋全市場所有交易中的 1800+ 檔股票)
-    for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap14_L", ".TW"), 
-                         ("https://www.tpex.org.tw/openapi/v1/t187ap14_O", ".TWO")]:
-        try:
-            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
-            if res.status_code == 200:
-                for item in res.json():
-                    code = str(item.get('證券代號', '')).strip()
-                    name = str(item.get('證券名稱', '')).strip()
-                    if len(code) == 4 and code.isdigit():
-                        full = f"{code}{sfx}"
-                        stock_map[full] = f"{full} {name}"
-        except: pass
-
-    # 2. 抓取產業分類，確保全部轉為中文
     for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
                          ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
         try:
@@ -224,55 +210,32 @@ def get_tw_stock_list():
                 for item in res.json():
                     code = str(item.get('公司代號', '')).strip()
                     name = str(item.get('公司簡稱', '')).strip()
-                    ind_raw = str(item.get('產業別', '其他產業')).strip()
+                    ind_raw = str(item.get('產業別', '其他')).strip()
                     
-                    # 強制數字轉中文
                     ind = twse_ind_map.get(ind_raw, ind_raw)
                     if not ind or ind.isdigit() or ind.lower() == "none": ind = "其他產業"
                     
                     if len(code) == 4 and code.isdigit():
                         full = f"{code}{sfx}"
-                        stock_map[full] = f"{full} {name}" # 補齊名稱
-                        
                         group = custom_sector_override.get(code, ind)
-                        if code.startswith('00'): group = 'ETF'
-                        
+                        stock_map[full] = f"{full} {name}"
                         if group not in industry_map: industry_map[group] = []
-                        if full not in industry_map[group]: industry_map[group].append(full)
+                        industry_map[group].append(full)
                         code_to_industry[code] = group
         except: pass
 
-    # 3. twstock 最終備援 (避免新上市股沒被政府 API 抓到)
     try:
         import twstock
         for code, info in twstock.codes.items():
-            if info.type in ['股票', 'ETF']:
+            if info.type == 'ETF':
                 full = f"{code}.TW" if info.market == '上市' else f"{code}.TWO"
                 if full not in stock_map:
                     stock_map[full] = f"{full} {info.name}"
-                    
-                if code not in code_to_industry:
-                    ind_raw = str(info.group).strip() if info.group else "其他產業"
-                    ind = twse_ind_map.get(ind_raw, ind_raw)
-                    if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
-                    
-                    group = custom_sector_override.get(code, ind)
-                    if code.startswith('00'): group = 'ETF'
-                    
-                    if group not in industry_map: industry_map[group] = []
-                    if full not in industry_map[group]: industry_map[group].append(full)
-                    code_to_industry[code] = group
+                    if 'ETF' not in industry_map: industry_map['ETF'] = []
+                    industry_map['ETF'].append(full)
+                    code_to_industry[code] = 'ETF'
     except: pass
     
-    # 確保所有被抓到代碼的股票，即使 API 漏給產業別，也會被分到 "未分類" 確保能在選單出現
-    for full in stock_map:
-        code = full.split('.')[0]
-        if code not in code_to_industry:
-            group = 'ETF' if code.startswith('00') else '未分類'
-            if group not in industry_map: industry_map[group] = []
-            industry_map[group].append(full)
-            code_to_industry[code] = group
-
     return stock_map, industry_map, code_to_industry
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
@@ -372,7 +335,6 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     try:
         info = ticker.info
         data["pe"] = info.get("trailingPE", np.nan)
-        data["peg"] = info.get("pegRatio", np.nan) # Yahoo 備援 PEG
         data["roe"] = info.get("returnOnEquity", np.nan)
         data["gross_margins"] = info.get("grossMargins", np.nan)
         data["fcf"] = info.get("freeCashflow", np.nan)
@@ -432,11 +394,14 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
 
     if code in global_twse:
         tw_pe = global_twse[code].get("pe", np.nan)
-        if pd.notna(tw_pe): data["pe"] = tw_pe # 政府 P/E 覆蓋
-        data["pb"] = global_twse[code].get("pb", np.nan)
-        data["yield"] = global_twse[code].get("yield", np.nan)
+        if pd.notna(tw_pe): data["pe"] = tw_pe 
+        
+        tw_pb = global_twse[code].get("pb", np.nan)
+        if pd.notna(tw_pb): data["pb"] = tw_pb
+        
+        tw_yld = global_twse[code].get("yield", np.nan)
+        if pd.notna(tw_yld): data["yield"] = tw_yld
 
-    # 【✅ PE 修復：若政府和 Yahoo 都沒 P/E，從財報 TTM 淨利強制算出來】
     if pd.isna(data["pe"]) or data["pe"] <= 0:
         try:
             if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
@@ -463,10 +428,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
         mo_rev = get_revenue_yoy_mops(code)
         if pd.notna(mo_rev): data["rev_growth"] = mo_rev
 
-    # 【✅ PEG 覆蓋計算，保證算出】
-    calc_peg_val = calc_peg(data["pe"], data["eps_growth"])
-    if pd.notna(calc_peg_val):
-        data["peg"] = calc_peg_val
+    data["peg"] = calc_peg(data["pe"], data["eps_growth"])
     
     if pd.notna(data["close_price"]) and pd.notna(data["pe"]) and data["pe"] > 0:
         data["implied_growth"] = calculate_implied_growth(data["close_price"], data["close_price"] / data["pe"])
@@ -837,6 +799,8 @@ with st.sidebar:
     if st.button("🚀 啟動終端運算 (強制擷取最新數據)", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False
         st.session_state['panel_page'] = 1 
+        # 重設清單分頁到第一頁
+        st.session_state['list_page'] = 1
         current_date_str = datetime.now().strftime("%Y/%m/%d")
         with st.spinner(f"正在全域聚合 {current_date_str} 盤中最新財報與量化數據 (共 {len(target_stocks)} 檔)..."):
             raw, hist_map = batch_scan_stocks(target_stocks)
@@ -867,22 +831,41 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         selected_filter = st.radio("🎯 快速分類篩選：", ["[ALL] 顯示全部標的"] + tags, horizontal=True)
         filtered_df = final_df if selected_filter == "[ALL] 顯示全部標的" else final_df[final_df['Quality'] == selected_filter]
         
+        # --- 分頁邏輯 ---
+        ROWS_PER_PAGE = 50
+        total_list_pages = max(1, (len(filtered_df) - 1) // ROWS_PER_PAGE + 1)
+        if st.session_state['list_page'] > total_list_pages:
+            st.session_state['list_page'] = total_list_pages
+
+        list_start_idx = (st.session_state['list_page'] - 1) * ROWS_PER_PAGE
+        list_end_idx = list_start_idx + ROWS_PER_PAGE
+        paged_filtered_df = filtered_df.iloc[list_start_idx:list_end_idx]
+
         df_event = st.dataframe(
-            filtered_df[['代號', '名稱', 'industry', 'Score', 'Quality', 'Strategy', 'sharpe', 'mdd', 'roe', 'implied_growth']],
+            paged_filtered_df[['代號', '名稱', 'industry', 'Score', 'Quality', 'Strategy', 'sharpe', 'mdd', 'roe', 'implied_growth']],
             column_config={
                 "Score": st.column_config.ProgressColumn("綜合評分", min_value=0, max_value=100, format="%.1f"),
                 "sharpe": st.column_config.NumberColumn("夏普值", format="%.2f"),
                 "mdd": st.column_config.NumberColumn("最大回撤", format="%.1f%%"),
                 "roe": st.column_config.NumberColumn("ROE", format="%.1f"),
             },
-            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row" 
+            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row"
         )
+
+        c_lp1, c_lp2, c_lp3 = st.columns([1, 2, 1])
+        if c_lp1.button("⬅️ 上一頁 (清單)", use_container_width=True, disabled=st.session_state['list_page']==1):
+            st.session_state['list_page'] -= 1
+            st.rerun()
+        c_lp2.markdown(f"<div style='text-align:center;color:#9CA3AF;'>清單第 <b>{st.session_state['list_page']}</b> 頁 / 共 <b>{total_list_pages}</b> 頁 (總計 {len(filtered_df)} 檔)</div>", unsafe_allow_html=True)
+        if c_lp3.button("下一頁 ➡️ (清單)", use_container_width=True, disabled=st.session_state['list_page']==total_list_pages):
+            st.session_state['list_page'] += 1
+            st.rerun()
         st.markdown("---")
-        
+
         selected_rows = df_event.selection.rows
-        
+
         if selected_rows:
-            sel_idx = selected_rows[0]
+            sel_idx = list_start_idx + selected_rows[0]
             sel_row = filtered_df.iloc[sel_idx]
             c_title, c_add = st.columns([3, 1])
             c_title.subheader(f"💡 系統標籤深度解析：{sel_row['名稱']} ({sel_row['代號']})")
