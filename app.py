@@ -165,20 +165,20 @@ def get_revenue_yoy_mops(code):
             if len(tables) > 0:
                 df = tables[0]
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
-                df = df.sort_values(df.columns[0], ascending=False)
-                if len(df) >= 2 and "營業收入" in df.columns:
-                    rev_now = safe_float(df.iloc[0]["營業收入"])
-                    rev_prev = safe_float(df.iloc[1]["營業收入"])
-                    if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
-                        return (rev_now - rev_prev) / abs(rev_prev)
+                if "營業收入" in df.columns:
+                    df = df.sort_values(df.columns[0], ascending=False)
+                    if len(df) >= 2:
+                        rev_now = safe_float(df.iloc[0]["營業收入"])
+                        rev_prev = safe_float(df.iloc[1]["營業收入"])
+                        if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
+                            return (rev_now - rev_prev) / abs(rev_prev)
     except: pass
     return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎 (完美取得公司名稱與板塊)
+# 💡 資料前置預載引擎
 # =========================================================================
 
-# 【✅ 修正：完全依賴本地 twstock 以保證抓到全部 1800 多檔台股與 ETF】
 @st.cache_data(ttl=86400)
 def get_tw_stock_list():
     stock_map, industry_map, code_to_industry = {}, {}, {}
@@ -197,36 +197,15 @@ def get_tw_stock_list():
         "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
         "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
         "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
-        "34": "電子商務業", "80": "管理股票"
+        "34": "電子商務業", "80": "管理股票",
+        "1": "水泥工業", "2": "食品工業", "3": "塑膠工業", "4": "紡織纖維", "5": "電機機械",
+        "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
     }
 
-    # 1. 優先使用 twstock 抓取全台股 (含上市、上櫃、ETF)，絕對不會漏掉台積電等權值股
-    try:
-        import twstock
-        for code, info in twstock.codes.items():
-            if info.type in ['股票', 'ETF']:  # 確保把股票跟 ETF 都抓進來
-                full = f"{code}.TW" if info.market == '上市' else f"{code}.TWO"
-                name = str(info.name).strip()
-                ind_raw = str(info.group).strip() if info.group else ""
-                
-                # 確保產業類別是中文
-                ind = twse_ind_map.get(ind_raw, ind_raw)
-                if not ind or ind.isdigit() or ind.lower() == "none": ind = "其他產業"
-                
-                group = custom_sector_override.get(code, ind)
-                if code.startswith('00'): group = 'ETF'
-                
-                stock_map[full] = f"{full} {name}"
-                if group not in industry_map: industry_map[group] = []
-                industry_map[group].append(full)
-                code_to_industry[code] = group
-    except: pass
-
-    # 2. 政府 API 僅作為備援 (補充新掛牌公司)
     for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
                          ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
         try:
-            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=5)
+            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
             if res.status_code == 200:
                 for item in res.json():
                     code = str(item.get('公司代號', '')).strip()
@@ -234,24 +213,32 @@ def get_tw_stock_list():
                     ind_raw = str(item.get('產業別', '其他')).strip()
                     
                     ind = twse_ind_map.get(ind_raw, ind_raw)
-                    if not ind or ind.isdigit(): ind = "其他產業"
+                    if not ind or ind.isdigit() or ind.lower() == "none": ind = "其他產業"
                     
                     if len(code) == 4 and code.isdigit():
                         full = f"{code}{sfx}"
                         group = custom_sector_override.get(code, ind)
-                        if code.startswith('00'): group = 'ETF'
-                        
-                        if full not in stock_map:
-                            stock_map[full] = f"{full} {name}"
-                            if group not in industry_map: industry_map[group] = []
-                            industry_map[group].append(full)
-                            code_to_industry[code] = group
+                        stock_map[full] = f"{full} {name}"
+                        if group not in industry_map: industry_map[group] = []
+                        industry_map[group].append(full)
+                        code_to_industry[code] = group
         except: pass
 
+    try:
+        import twstock
+        for code, info in twstock.codes.items():
+            if info.type == 'ETF':
+                full = f"{code}.TW" if info.market == '上市' else f"{code}.TWO"
+                if full not in stock_map:
+                    stock_map[full] = f"{full} {info.name}"
+                    if 'ETF' not in industry_map: industry_map['ETF'] = []
+                    industry_map['ETF'].append(full)
+                    code_to_industry[code] = 'ETF'
+    except: pass
+    
     return stock_map, industry_map, code_to_industry
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
-
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_global_market_data():
@@ -301,7 +288,7 @@ def get_safe_val(df, keys, col_idx=0):
     return np.nan
 
 # =========================================================================
-# 💡 核心自研數據庫 (多源聚合)
+# 💡 核心自研數據庫 (完全融合)
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -799,7 +786,14 @@ with st.sidebar:
         current_date_str = datetime.now().strftime("%Y/%m/%d")
         with st.spinner(f"正在全域聚合 {current_date_str} 盤中最新財報與量化數據 (共 {len(target_stocks)} 檔)..."):
             raw, hist_map = batch_scan_stocks(target_stocks)
-            st.session_state['raw_data'], st.session_state['history_storage'], st.session_state['scan_finished'] = sanitize_data(raw), hist_map, True
+            
+            # 【✅ 補回防呆檢查：保證掃描結果存在才寫入】
+            if not raw.empty:
+                st.session_state['raw_data'] = sanitize_data(raw)
+                st.session_state['history_storage'] = hist_map
+                st.session_state['scan_finished'] = True
+            else:
+                st.error("❌ 掃描失敗：請檢查網路連線或該標的代碼是否正確。")
             st.rerun()
 
 col1, col2 = st.columns([3, 1])
@@ -870,8 +864,10 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 orig_idx = df_norm.index[df_norm['代號'] == code]
                 if len(orig_idx) > 0: st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[orig_idx[0]])), use_container_width=True)
             with c2:
-                sh, mdd = safe_num(row.get('sharpe')), safe_num(row.get('mdd'))
-                rev, eps = safe_num(row.get('rev_growth')), safe_num(row.get('eps_growth'))
+                sh = row.get('sharpe')
+                mdd = row.get('mdd')
+                rev = row.get('rev_growth')
+                eps = row.get('eps_growth')
                 
                 sh_c = "" if pd.isna(sh) or sh == 0 else ("q-up" if sh>1 else ("q-down" if sh<0 else ""))
                 mdd_c = "" if pd.isna(mdd) else ("q-up" if mdd>-0.15 else ("q-down" if mdd<-0.25 else "q-neu"))
