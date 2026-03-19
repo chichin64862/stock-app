@@ -146,29 +146,33 @@ def calc_eps_yoy(fin, bal):
     except: pass
     return np.nan
 
-# 【✅ 修復：解開負數限制，讓負成長公司的 PEG 也能正常算出】
 def calc_peg(pe, eps_growth_pct):
     try:
-        if pd.isna(pe) or pd.isna(eps_growth_pct) or eps_growth_pct == 0: return np.nan
+        if pd.isna(pe) or pd.isna(eps_growth_pct) or eps_growth_pct <= 0: return np.nan
         return pe / eps_growth_pct
     except: return np.nan
 
+# 【✅ 營收修復 1：加入 Header 並動態測試上市/上櫃代碼】
 def get_revenue_yoy_mops(code):
     try:
-        time.sleep(np.random.uniform(0.1, 0.3))
+        time.sleep(np.random.uniform(0.05, 0.15))
         url = "https://mops.twse.com.tw/mops/web/ajax_t05st10_ifrs"
-        payload = {"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": "sii", "co_id": code}
-        res = requests.post(url, data=payload, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-        tables = pd.read_html(io.StringIO(res.text))
-        if len(tables) > 0:
-            df = tables[0]
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
-            df = df.sort_values(df.columns[0], ascending=False)
-            if len(df) >= 2 and "營業收入" in df.columns:
-                rev_now = safe_float(df.iloc[0]["營業收入"])
-                rev_prev = safe_float(df.iloc[1]["營業收入"])
-                if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
-                    return (rev_now - rev_prev) / rev_prev
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        for typek in ["sii", "otc"]:
+            payload = {"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": typek, "co_id": code}
+            res = requests.post(url, data=payload, headers=headers, timeout=5)
+            if "查無資料" in res.text: continue
+            tables = pd.read_html(io.StringIO(res.text))
+            if len(tables) > 0:
+                df = tables[0]
+                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
+                if "營業收入" in df.columns:
+                    df = df.sort_values(df.columns[0], ascending=False)
+                    if len(df) >= 2:
+                        rev_now = safe_float(df.iloc[0]["營業收入"])
+                        rev_prev = safe_float(df.iloc[1]["營業收入"])
+                        if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
+                            return (rev_now - rev_prev) / abs(rev_prev)
     except: pass
     return np.nan
 
@@ -176,7 +180,6 @@ def get_revenue_yoy_mops(code):
 # 💡 資料前置預載引擎
 # =========================================================================
 
-# 【✅ 完美修復：退回 twstock 字典，保證板塊與公司名稱100%為中文】
 @st.cache_data(ttl=86400)
 def get_tw_stock_list():
     stock_map, industry_map, code_to_industry = {}, {}, {}
@@ -186,18 +189,38 @@ def get_tw_stock_list():
         "2308": "電子零組件業", "3008": "光電業", "2327": "電子零組件業", "2383": "電子零組件業",
         "2317": "其他電子業", "2881": "金融保險業", "2603": "航運業"
     }
+    
+    for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
+                         ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
+        try:
+            # 加入 Header 避免被擋
+            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
+            if res.status_code == 200:
+                for item in res.json():
+                    code = str(item.get('公司代號', '')).strip()
+                    name = str(item.get('公司簡稱', '')).strip()
+                    ind = str(item.get('產業別', '其他')).strip()
+                    if len(code) == 4 and code.isdigit():
+                        full = f"{code}{sfx}"
+                        group = custom_sector_override.get(code, ind)
+                        stock_map[full] = f"{full} {name}"
+                        if group not in industry_map: industry_map[group] = []
+                        industry_map[group].append(full)
+                        code_to_industry[code] = group
+        except: pass
+
     try:
         import twstock
         for code, info in twstock.codes.items():
-            if info.type in ['股票', 'ETF']:
+            if info.type == 'ETF':
                 full = f"{code}.TW" if info.market == '上市' else f"{code}.TWO"
-                stock_map[full] = f"{full} {info.name}"
-                group = custom_sector_override.get(code, info.group if info.group else info.type)
-                if not group: group = "其他"
-                if group not in industry_map: industry_map[group] = []
-                industry_map[group].append(full)
-                code_to_industry[code] = group
+                if full not in stock_map:
+                    stock_map[full] = f"{full} {info.name}"
+                    if 'ETF' not in industry_map: industry_map['ETF'] = []
+                    industry_map['ETF'].append(full)
+                    code_to_industry[code] = 'ETF'
     except: pass
+    
     return stock_map, industry_map, code_to_industry
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
@@ -210,7 +233,7 @@ def fetch_global_market_data():
     
     for mkt_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap14_L", "https://www.tpex.org.tw/openapi/v1/t187ap14_O"]:
         try:
-            res = requests.get(mkt_url, verify=False, timeout=10)
+            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
             if res.status_code == 200:
                 for item in res.json():
                     pe = safe_float(item.get("本益比"))
@@ -223,14 +246,17 @@ def fetch_global_market_data():
                     }
         except: pass
 
+    # 【✅ 營收修復 2：加入 Header 並相容多種 JSON 鍵值命名】
     for rev_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap05_L", "https://www.tpex.org.tw/openapi/v1/t187ap05_O"]:
         try:
-            res_rev = requests.get(rev_url, verify=False, timeout=10)
+            res_rev = requests.get(rev_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
             if res_rev.status_code == 200:
                 for item in res_rev.json():
-                    yoy = safe_float(item.get("去年同月增減(%)"))
-                    if pd.notna(yoy):
-                        rev_data[str(item.get("公司代號"))] = yoy / 100.0
+                    yoy_str = item.get("去年同月增減(%)", item.get("營業收入-去年同月增減(%)"))
+                    yoy = safe_float(yoy_str)
+                    code_str = str(item.get("公司代號", "")).strip()
+                    if pd.notna(yoy) and code_str:
+                        rev_data[code_str] = yoy / 100.0
         except: pass
 
     try:
@@ -240,8 +266,15 @@ def fetch_global_market_data():
 
     return twse_data, rev_data, mkt_ret
 
+def get_safe_val(df, keys, col_idx=0):
+    for k in keys:
+        if k in df.index:
+            val = df.loc[k].iloc[col_idx]
+            return float(val) if pd.notna(val) else np.nan
+    return np.nan
+
 # =========================================================================
-# 💡 核心自研數據庫
+# 💡 核心自研數據庫 (完全融合)
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -345,16 +378,11 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     if pd.isna(data['gross_margins']): data['gross_margins'] = safe_float(wg_json[0].get('grossMargin')) / 100.0
         except: pass
 
-    # 【✅ 修復：強制覆蓋 Yahoo 錯誤資料】
     if code in global_twse:
         tw_pe = global_twse[code].get("pe", np.nan)
-        if pd.notna(tw_pe): data["pe"] = tw_pe 
-        
-        tw_pb = global_twse[code].get("pb", np.nan)
-        if pd.notna(tw_pb): data["pb"] = tw_pb
-        
-        tw_yld = global_twse[code].get("yield", np.nan)
-        if pd.notna(tw_yld): data["yield"] = tw_yld
+        if pd.isna(data["pe"]) and pd.notna(tw_pe): data["pe"] = tw_pe
+        data["pb"] = global_twse[code].get("pb", np.nan)
+        data["yield"] = global_twse[code].get("yield", np.nan)
 
     if pd.isna(data["yield"]):
         try:
@@ -365,12 +393,24 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     data["yield"] = last_year_div / data['close_price']
         except: pass
 
-    # 營收 YoY 強制覆蓋
+    # 【✅ 營收修復 3：三重防護，官方->MOPS->YF季報推算】
     if code in global_rev:
         data["rev_growth"] = global_rev[code]
-    elif pd.isna(data["rev_growth"]) or data["rev_growth"] == 0:
+        
+    if pd.isna(data["rev_growth"]) or data["rev_growth"] == 0:
         mo_rev = get_revenue_yoy_mops(code)
         if pd.notna(mo_rev): data["rev_growth"] = mo_rev
+        
+    if pd.isna(data["rev_growth"]) or data["rev_growth"] == 0:
+        try:
+            for k in ["Total Revenue", "Operating Revenue"]:
+                if k in fin.index and fin.shape[1] >= 5:
+                    r_now = safe_float(fin.loc[k].iloc[0])
+                    r_prev = safe_float(fin.loc[k].iloc[4])
+                    if pd.notna(r_now) and pd.notna(r_prev) and r_prev != 0:
+                        data["rev_growth"] = (r_now - r_prev) / abs(r_prev)
+                        break
+        except: pass
 
     data["peg"] = calc_peg(data["pe"], data["eps_growth"])
     
@@ -909,7 +949,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         else:
             my_port_df = final_df[final_df['代號'].isin(st.session_state['my_portfolio'])].copy()
             
-            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<0.25 else "🟡 觀察資產"))), axis=1)
+            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<25 else "🟡 觀察資產"))), axis=1)
             my_port_df['操作訊號'] = my_port_df.apply(lambda r: generate_custom_signal(r, "Bull" if "多頭" in regime else "Bear"), axis=1)
             
             st.dataframe(my_port_df[['代號', '名稱', '資產屬性', 'sharpe', 'beta', 'mdd', '操作訊號']].sort_values('sharpe', ascending=False), hide_index=True, use_container_width=True)
@@ -924,7 +964,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 col.markdown(f"<div style='background-color:#06090F; padding:15px; border-radius:4px; border:1px solid #1E293B;'><div style='color:#9CA3AF;'>{title}</div><div style='font-size:1.5rem; font-weight:bold; color:#F8FAFC;'>目標 {tgt}%</div><div style='color:#3B82F6;'>目前自選: {count}</div></div>", unsafe_allow_html=True)
 
         # =========================================================
-        # 💼 系統嚴選：模型專屬配置 (依總經多空動態調整)
+        # 💼 系統嚴選：模型專屬效率前緣配置
         # =========================================================
         st.markdown("---")
         st.subheader("💼 系統嚴選：模型專屬配置 (依總經多空動態調整)")
@@ -942,7 +982,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             cov_matrix = pd.DataFrame()
         
         if st.session_state['current_logic'] == "Quant":
-            # 【✅ 完美保留：多頭/空頭 動態選股數量與權重邏輯】
             pool_df = final_df[(final_df['sharpe'] > 0) & (final_df['mdd'] >= -0.25)].copy()
             if len(pool_df)==0: pool_df = final_df.head(10).copy()
             pool_df['戰略定位'] = pool_df.apply(lambda r: "🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else "⚖️ 中性資產"), axis=1)
@@ -970,7 +1009,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             with c1:
                 st.dataframe(port_df[['代號', '名稱', '戰略定位', 'sharpe', 'mdd', '建議權重']], hide_index=True, use_container_width=True)
             with c2:
-                # 【✅ 完美修復：還原消失的 MPT 完整檢驗面板】
                 port_codes = port_df['代號'].tolist()
                 true_vol = 0
                 avg_sharpe = port_df['sharpe'].mean()
@@ -1009,7 +1047,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 </div>
                 """, unsafe_allow_html=True)
             with c3:
-                # 【✅ 完美修復：強制轉為字串標籤，修正熱力圖座標軸異常】
                 if not returns_df.empty and len(port_codes) > 1:
                     v_codes = [c for c in port_codes if c in returns_df.columns]
                     if len(v_codes) > 1:
