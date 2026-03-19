@@ -152,7 +152,6 @@ def calc_peg(pe, eps_growth_pct):
         return pe / eps_growth_pct
     except: return np.nan
 
-# 【✅ 營收修復 1：加入 Header 並動態測試上市/上櫃代碼】
 def get_revenue_yoy_mops(code):
     try:
         time.sleep(np.random.uniform(0.05, 0.15))
@@ -177,7 +176,7 @@ def get_revenue_yoy_mops(code):
     return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎
+# 💡 資料前置預載引擎 (完美取得公司名稱與板塊)
 # =========================================================================
 
 @st.cache_data(ttl=86400)
@@ -190,16 +189,29 @@ def get_tw_stock_list():
         "2317": "其他電子業", "2881": "金融保險業", "2603": "航運業"
     }
     
+    # 【✅ 修正：加入政府 API 代碼轉中文對照表】
+    twse_ind_map = {
+        "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
+        "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
+        "11": "橡膠工業", "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅",
+        "17": "金融保險", "18": "貿易百貨", "19": "綜合", "20": "其他", "21": "化學工業",
+        "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
+        "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
+        "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
+        "34": "電子商務業", "80": "管理股票"
+    }
+
     for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
                          ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
         try:
-            # 加入 Header 避免被擋
             res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
             if res.status_code == 200:
                 for item in res.json():
                     code = str(item.get('公司代號', '')).strip()
                     name = str(item.get('公司簡稱', '')).strip()
-                    ind = str(item.get('產業別', '其他')).strip()
+                    ind_raw = str(item.get('產業別', '其他')).strip()
+                    ind = twse_ind_map.get(ind_raw, ind_raw)  # 數字轉中文
+                    
                     if len(code) == 4 and code.isdigit():
                         full = f"{code}{sfx}"
                         group = custom_sector_override.get(code, ind)
@@ -246,7 +258,6 @@ def fetch_global_market_data():
                     }
         except: pass
 
-    # 【✅ 營收修復 2：加入 Header 並相容多種 JSON 鍵值命名】
     for rev_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap05_L", "https://www.tpex.org.tw/openapi/v1/t187ap05_O"]:
         try:
             res_rev = requests.get(rev_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
@@ -274,7 +285,7 @@ def get_safe_val(df, keys, col_idx=0):
     return np.nan
 
 # =========================================================================
-# 💡 核心自研數據庫 (完全融合)
+# 💡 核心自研數據庫 (多源聚合)
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -380,9 +391,13 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
 
     if code in global_twse:
         tw_pe = global_twse[code].get("pe", np.nan)
-        if pd.isna(data["pe"]) and pd.notna(tw_pe): data["pe"] = tw_pe
-        data["pb"] = global_twse[code].get("pb", np.nan)
-        data["yield"] = global_twse[code].get("yield", np.nan)
+        if pd.notna(tw_pe): data["pe"] = tw_pe 
+        
+        tw_pb = global_twse[code].get("pb", np.nan)
+        if pd.notna(tw_pb): data["pb"] = tw_pb
+        
+        tw_yld = global_twse[code].get("yield", np.nan)
+        if pd.notna(tw_yld): data["yield"] = tw_yld
 
     if pd.isna(data["yield"]):
         try:
@@ -393,24 +408,11 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     data["yield"] = last_year_div / data['close_price']
         except: pass
 
-    # 【✅ 營收修復 3：三重防護，官方->MOPS->YF季報推算】
     if code in global_rev:
         data["rev_growth"] = global_rev[code]
-        
-    if pd.isna(data["rev_growth"]) or data["rev_growth"] == 0:
+    elif pd.isna(data["rev_growth"]) or data["rev_growth"] == 0:
         mo_rev = get_revenue_yoy_mops(code)
         if pd.notna(mo_rev): data["rev_growth"] = mo_rev
-        
-    if pd.isna(data["rev_growth"]) or data["rev_growth"] == 0:
-        try:
-            for k in ["Total Revenue", "Operating Revenue"]:
-                if k in fin.index and fin.shape[1] >= 5:
-                    r_now = safe_float(fin.loc[k].iloc[0])
-                    r_prev = safe_float(fin.loc[k].iloc[4])
-                    if pd.notna(r_now) and pd.notna(r_prev) and r_prev != 0:
-                        data["rev_growth"] = (r_now - r_prev) / abs(r_prev)
-                        break
-        except: pass
 
     data["peg"] = calc_peg(data["pe"], data["eps_growth"])
     
@@ -964,7 +966,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 col.markdown(f"<div style='background-color:#06090F; padding:15px; border-radius:4px; border:1px solid #1E293B;'><div style='color:#9CA3AF;'>{title}</div><div style='font-size:1.5rem; font-weight:bold; color:#F8FAFC;'>目標 {tgt}%</div><div style='color:#3B82F6;'>目前自選: {count}</div></div>", unsafe_allow_html=True)
 
         # =========================================================
-        # 💼 系統嚴選：模型專屬效率前緣配置
+        # 💼 系統嚴選：模型專屬配置 (依總經多空動態調整)
         # =========================================================
         st.markdown("---")
         st.subheader("💼 系統嚴選：模型專屬配置 (依總經多空動態調整)")
