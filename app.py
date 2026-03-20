@@ -101,7 +101,6 @@ def setup_chinese_font():
 
 font_name_global = setup_chinese_font()
 
-# 【✅ 精準修復 1：高強度防封鎖連線池】
 @st.cache_resource
 def get_yf_session():
     session = requests.Session()
@@ -339,7 +338,6 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     symbol = stock_str.split(' ')[0]
     if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
     
-    # 【✅ 精準修復 2：掛上 robust session 避免 API 連線阻擋】
     ticker = yf.Ticker(symbol, session=get_yf_session())
     
     data = {
@@ -372,7 +370,6 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     try:
         info = ticker.info
         
-        # 【✅ 精準修復 3：極速備援，若 history 取不到，強制補上現價，防止被踢出清單】
         if pd.isna(data['close_price']):
             cp = info.get("currentPrice", info.get("previousClose"))
             if cp is not None: data['close_price'] = float(cp)
@@ -822,35 +819,29 @@ with st.sidebar:
         "金融保險 (防禦收息)": ["2881.TW", "2882.TW", "2886.TW", "2891.TW", "5880.TW", "2884.TW"],
         "傳產與航運 (循環價值)": ["2603.TW", "2609.TW", "2002.TW", "1301.TW", "1303.TW", "1605.TW"]
     }
-    
-    # 【✅ 精準修復 4：更穩定的多重選取防呆寫法】
+        
+    etf_strategies = {
+        "市值型 ETF (大盤連動)": ["0050.TW", "006208.TW", "00692.TW", "00881.TW"],
+        "高股息 ETF (穩定配息)": ["0056.TW", "00878.TW", "00919.TW", "00929.TW", "00713.TW"],
+        "科技與半導體主題": ["00891.TW", "00892.TW", "00881.TW", "00830.TW"],
+        "海外與美股連結": ["00757.TW", "00646.TW", "00830.TW", "00662.TW"]
+    }
+        
+    # 【✅ 完全補回遺漏的 ETF 分類字典，保證不會再發生 NameError】
     if scan_mode == "自訂代碼輸入":
         target_stocks = st.multiselect("搜尋上市櫃標的", list(stock_map.values()), default=["2330.TW 台積電", "2454.TW 聯發科"])
         if manual := st.text_input("快速輸入代號 (如 2317)"): target_stocks.append(f"{manual}.TW")
     elif scan_mode == "產業族群板塊":
-        ind_keys = sorted(list(industry_map.keys()))
-        selected_inds = st.multiselect("板塊選擇", ["[ALL] 載入全部板塊"] + ind_keys)
-        if "[ALL] 載入全部板塊" in selected_inds:
-            for k in ind_keys: 
-                target_stocks.extend(industry_map[k])
-        else:
-            for k in selected_inds: 
-                if k in industry_map:
-                    target_stocks.extend(industry_map[k])
+        selected_inds = st.multiselect("板塊選擇", ["[ALL] 載入全部板塊"] + sorted(list(industry_map.keys())))
+        for k in (industry_map.keys() if "[ALL] 載入全部板塊" in selected_inds else selected_inds): target_stocks.extend(industry_map[k])
     elif scan_mode == "台灣 ETF 專區":
         etf_keys = list(etf_strategies.keys())
         selected_etfs = st.multiselect("ETF 分類 (支援複選)", ["[ALL] 載入全部 ETF"] + etf_keys, default=[etf_keys[0]])
-        if "[ALL] 載入全部 ETF" in selected_etfs:
-            for k in etf_keys: target_stocks.extend(etf_strategies[k])
-        else:
-            for k in selected_etfs: target_stocks.extend(etf_strategies[k])
+        for k in (etf_keys if "[ALL] 載入全部 ETF" in selected_etfs else selected_etfs): target_stocks.extend(etf_strategies[k])
     else: 
         strat_keys = list(strategies.keys())
         selected_strats = st.multiselect("推薦策略池", ["[ALL] 載入全部策略"] + strat_keys, default=[strat_keys[0]])
-        if "[ALL] 載入全部策略" in selected_strats:
-            for k in strat_keys: target_stocks.extend(strategies[k])
-        else:
-            for k in selected_strats: target_stocks.extend(strategies[k])
+        for k in (strat_keys if "[ALL] 載入全部策略" in selected_strats else selected_strats): target_stocks.extend(strategies[k])
 
     target_stocks = list(dict.fromkeys(target_stocks)) 
 
