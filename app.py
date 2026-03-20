@@ -176,7 +176,7 @@ def get_revenue_yoy_mops(code):
     return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎 (✅ 退回 2000+ 檔穩定的優先載入邏輯)
+# 💡 資料前置預載引擎
 # =========================================================================
 
 @st.cache_data(ttl=86400)
@@ -202,7 +202,6 @@ def get_tw_stock_list():
         "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
     }
 
-    # 1. 優先使用 twstock 抓取全台股 (含上市、上櫃、ETF)，保證抓滿 2000+ 檔
     try:
         import twstock
         for code, info in twstock.codes.items():
@@ -211,7 +210,6 @@ def get_tw_stock_list():
                 name = str(info.name).strip()
                 ind_raw = str(info.group).strip() if info.group else ""
                 
-                # 確保產業類別是中文
                 ind = twse_ind_map.get(ind_raw, ind_raw)
                 if not ind or ind.isdigit() or ind.lower() == "none": ind = "其他產業"
                 
@@ -224,7 +222,6 @@ def get_tw_stock_list():
                 code_to_industry[code] = group
     except: pass
 
-    # 2. 政府 API 僅作為備援 (補充新掛牌公司)
     for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
                          ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
         try:
@@ -910,7 +907,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             c1, c2, c3 = st.columns([1, 1.8, 1.5])
             with c1:
                 orig_idx = df_norm.index[df_norm['代號'] == code]
-                if len(orig_idx) > 0: st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[orig_idx[0]])), use_container_width=True)
+                if len(orig_idx) > 0: st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[orig_idx[0]])), use_container_width=True, key=f"radar_{code}")
             with c2:
                 sh = row.get('sharpe')
                 mdd = row.get('mdd')
@@ -978,7 +975,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
 
             with c3:
                 h_df = hist_storage.get(code)
-                if h_df is not None and not h_df.empty: st.plotly_chart(plot_trend_dashboard(row['名稱'], h_df, row.get('priceToMA60', 0)), use_container_width=True)
+                if h_df is not None and not h_df.empty: st.plotly_chart(plot_trend_dashboard(row['名稱'], h_df, row.get('priceToMA60', 0)), use_container_width=True, key=f"trend_{code}")
                 else: st.warning("無 K 線數據")
                 
             if code in st.session_state['ai_results']:
