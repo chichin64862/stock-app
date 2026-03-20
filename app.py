@@ -13,8 +13,6 @@ import time
 from datetime import datetime
 import urllib.request
 import html
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # 關閉 SSL 驗證警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -76,40 +74,40 @@ if 'my_portfolio' not in st.session_state: st.session_state['my_portfolio'] = []
 try: api_key = st.secrets["GEMINI_API_KEY"]
 except Exception: api_key = None
 
+# 【✅ 完全取代為您提供的舊版字型載入程式碼】
 @st.cache_resource
 def setup_chinese_font():
-    font_path = "TaipeiSansTCBeta-Regular.ttf"
-    
+    font_path = "NotoSansTC-Regular.ttf"
     if os.path.exists(font_path) and os.path.getsize(font_path) < 1000000:
         try: os.remove(font_path)
         except: pass
-        
     if not os.path.exists(font_path):
+        urls = [
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
+            "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+        ]
+        for url in urls:
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=30) as response, open(font_path, 'wb') as out_file:
+                    out_file.write(response.read())
+                if os.path.getsize(font_path) > 1000000: break
+            except Exception: continue
+    try:
+        if os.path.exists(font_path) and os.path.getsize(font_path) > 1000000:
+            pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+            return 'ChineseFont'
+    except Exception: pass
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        return 'STSong-Light'
+    except:
         try:
-            url = "https://raw.githubusercontent.com/tki-open/Taipei-Sans-TC/master/TaipeiSansTCBeta-Regular.ttf"
-            r = requests.get(url, allow_redirects=True, timeout=60)
-            if r.status_code == 200:
-                with open(font_path, 'wb') as f:
-                    f.write(r.content)
-        except: pass
-        
-    try: 
-        pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
-        return 'ChineseFont'
-    except: 
-        return 'Helvetica'
+            pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
+            return 'MSung-Light'
+        except: return 'Helvetica'
 
 font_name_global = setup_chinese_font()
-
-@st.cache_resource
-def get_yf_session():
-    session = requests.Session()
-    retry = Retry(total=3, backoff_factor=0.3, status_forcelist=[429, 500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-    return session
 
 # =========================================================================
 # 💡 工具函數與核心數學引擎
@@ -338,7 +336,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     symbol = stock_str.split(' ')[0]
     if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
     
-    ticker = yf.Ticker(symbol, session=get_yf_session())
+    ticker = yf.Ticker(symbol)
     
     data = {
         '代號': code, '名稱': name, 'close_price': np.nan, 'pe': np.nan, 'pb': np.nan, 'yield': np.nan,
@@ -369,11 +367,6 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
 
     try:
         info = ticker.info
-        
-        if pd.isna(data['close_price']):
-            cp = info.get("currentPrice", info.get("previousClose"))
-            if cp is not None: data['close_price'] = float(cp)
-            
         data["pe"] = info.get("trailingPE", np.nan)
         data["roe"] = info.get("returnOnEquity", np.nan)
         data["gross_margins"] = info.get("grossMargins", np.nan)
@@ -710,19 +703,10 @@ def call_ai(prompt):
         else: return f"分析服務暫時無回應 (代碼: {r.status_code})"
     except Exception as e: return "分析服務連線逾時，請稍後再試。"
 
+# 【✅ 完全取代為您提供的舊版 PDF 產出程式碼】
 def create_pdf(stock_data):
     buffer = io.BytesIO()
-    
-    safe_name = html.escape(str(stock_data.get('名稱', '')))
-    safe_code = html.escape(str(stock_data.get('代號', '')))
-    doc = SimpleDocTemplate(
-        buffer, 
-        pagesize=A4, 
-        title=f"{safe_code} {safe_name} 分析報告",
-        author="AlphaCore 終端",
-        rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40
-    )
-    
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
     font_name = font_name_global 
     styles = getSampleStyleSheet()
@@ -735,6 +719,8 @@ def create_pdf(stock_data):
     story.append(Paragraph(f"產出時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
     
+    safe_name = html.escape(str(stock_data.get('名稱', '')))
+    safe_code = html.escape(str(stock_data.get('代號', '')))
     story.append(Paragraph(f"分析標的: {safe_name} ({safe_code})", h2_style))
     story.append(Spacer(1, 10))
     
@@ -746,7 +732,7 @@ def create_pdf(stock_data):
         ['綜合評分 (Score)', f"{stock_data.get('Score', 'N/A')}", '收盤價 (Price)', f"{stock_data.get('close_price', 'N/A')}"],
         ['夏普值 (Sharpe)', safe_str(stock_data.get('sharpe')), '波動率 (Volatility)', safe_str(stock_data.get('volatility')*100 if not pd.isna(stock_data.get('volatility')) else np.nan, "{:.1f}%")],
         ['Beta (風險係數)', safe_str(stock_data.get('beta'), "{:.2f}"), '最大回撤 (MDD)', safe_str(stock_data.get('mdd')*100 if not pd.isna(stock_data.get('mdd')) else np.nan, "{:.1f}%")],
-        ['ROE (權益報酬)', safe_str(stock_data.get('roe'), "{:.1f}%"), '毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.1f}%")],
+        ['ROE (權益報酬)', safe_str(stock_data.get('roe')*100 if not pd.isna(stock_data.get('roe')) else np.nan, "{:.1f}%"), '毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.1f}%")],
         ['營收 YoY (Rev Grw)', safe_str(stock_data.get('rev_growth'), "{:.1f}%"), 'EPS YoY (EPS Grw)', safe_str(stock_data.get('eps_growth'), "{:.1f}%")],
         ['本益比 (P/E)', safe_str(stock_data.get('pe')), 'PEG 估值', safe_str(stock_data.get('peg'))],
         ['殖利率 (Yield)', safe_str(stock_data.get('yield'), "{:.2f}%"), 'FCF 收益率 (FCF Yld)', safe_str(stock_data.get('fcf_yield'), "{:.2f}%")],
@@ -775,7 +761,7 @@ def create_pdf(stock_data):
                 story.append(Paragraph(safe_line, normal_style))
                 story.append(Spacer(1, 5))
     try: doc.build(story)
-    except: pass
+    except Exception as e: print(e)
     buffer.seek(0)
     return buffer
 
@@ -827,7 +813,6 @@ with st.sidebar:
         "海外與美股連結": ["00757.TW", "00646.TW", "00830.TW", "00662.TW"]
     }
         
-    # 【✅ 完全補回遺漏的 ETF 分類字典，保證不會再發生 NameError】
     if scan_mode == "自訂代碼輸入":
         target_stocks = st.multiselect("搜尋上市櫃標的", list(stock_map.values()), default=["2330.TW 台積電", "2454.TW 聯發科"])
         if manual := st.text_input("快速輸入代號 (如 2317)"): target_stocks.append(f"{manual}.TW")
