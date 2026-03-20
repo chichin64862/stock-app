@@ -74,25 +74,30 @@ if 'my_portfolio' not in st.session_state: st.session_state['my_portfolio'] = []
 try: api_key = st.secrets["GEMINI_API_KEY"]
 except Exception: api_key = None
 
-# 【✅ 精準修復 1：提高檔案大小驗證至 5MB，確保字體打包嵌入 PDF，解決 Adobe 亂碼】
+# 【✅ 精準修復 1：完全退回您確認過的 TTF 實體打包邏輯，根除 Adobe 警告】
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
-    if not os.path.exists(font_path) or os.path.getsize(font_path) < 5000000:
-        try:
-            req = urllib.request.Request("https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf", headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=60) as response, open(font_path, 'wb') as out_file:
-                out_file.write(response.read())
+    
+    # 若檔案存在但小於 1MB (下載失敗的空殼)，強制刪除
+    if os.path.exists(font_path) and os.path.getsize(font_path) < 1000000:
+        try: os.remove(font_path)
         except: pass
+        
+    if not os.path.exists(font_path):
+        try:
+            url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+            r = requests.get(url, allow_redirects=True, timeout=60)
+            if r.status_code == 200:
+                with open(font_path, 'wb') as f:
+                    f.write(r.content)
+        except: pass
+        
     try: 
         pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
         return 'ChineseFont'
     except: 
-        try:
-            pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
-            return 'MSung-Light'
-        except:
-            return 'Helvetica'
+        return 'Helvetica' # 絕對不使用會造成 Adobe 當機的 CID 字型
 
 font_name_global = setup_chinese_font()
 
@@ -185,7 +190,7 @@ def get_revenue_yoy_mops(code):
     return np.nan
 
 # =========================================================================
-# 💡 資料前置預載引擎
+# 💡 資料前置預載引擎 
 # =========================================================================
 
 @st.cache_data(ttl=86400)
@@ -308,7 +313,7 @@ def get_safe_val(df, keys, col_idx=0):
     return np.nan
 
 # =========================================================================
-# 💡 核心自研數據庫
+# 💡 核心自研數據庫 (多源聚合)
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -663,7 +668,6 @@ def generate_custom_signal(row, regime):
         return "⚖️ 持有觀望"
 
 # --- 10. AI 與 PDF 輸出模組 ---
-# 【✅ 完全退回：使用 Chrome 可直接讀取的 PDF 屬性，包含 Title 寫法】
 def get_valid_model(key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
@@ -694,7 +698,7 @@ def call_ai(prompt):
 def create_pdf(stock_data):
     buffer = io.BytesIO()
     
-    # ✅ 加入 Title 防止 Chrome 顯示 anonymous
+    # 【✅ 精準修復 2：加上 title 解決 Chrome 顯示 anonymous 問題】
     safe_name = html.escape(str(stock_data.get('名稱', '')))
     safe_code = html.escape(str(stock_data.get('代號', '')))
     doc = SimpleDocTemplate(
@@ -990,7 +994,8 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     
                     pdf_payload = row.to_dict()
                     pdf_payload['ai_analysis'] = st.session_state['ai_results'][code]
-                    c_btn2.download_button("📥 輸出 PDF 報告", create_pdf(pdf_payload), f"{code} {row['名稱']}_Report.pdf", key=f"dl_{code}")
+                    # 【✅ 修復 3：加上 mime=application/pdf 確保瀏覽器能正確渲染或下載】
+                    c_btn2.download_button("📥 輸出 PDF 報告", data=create_pdf(pdf_payload), file_name=f"{code} {row['名稱']}_Report.pdf", mime="application/pdf", key=f"dl_{code}")
 
             with c3:
                 h_df = hist_storage.get(code)
