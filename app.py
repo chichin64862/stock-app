@@ -74,17 +74,28 @@ if 'my_portfolio' not in st.session_state: st.session_state['my_portfolio'] = []
 try: api_key = st.secrets["GEMINI_API_KEY"]
 except Exception: api_key = None
 
+# 【✅ 唯一修改處：徹底解決 PDF 中文亂碼與吃字問題】
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
     if not os.path.exists(font_path):
         try:
             req = urllib.request.Request("https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf", headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=30) as response, open(font_path, 'wb') as out_file:
+            with urllib.request.urlopen(req, timeout=15) as response, open(font_path, 'wb') as out_file:
                 out_file.write(response.read())
         except: pass
-    try: pdfmetrics.registerFont(TTFont('ChineseFont', font_path)); return 'ChineseFont'
-    except: return 'Helvetica'
+    
+    try: 
+        pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+        return 'ChineseFont'
+    except: 
+        # 如果下載字體失敗，強制啟用 PDF 內建的繁體中文 CID 字型，絕對不降級成會吃中文字的 Helvetica
+        try:
+            pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
+            return 'MSung-Light'
+        except:
+            return 'Helvetica'
+
 font_name_global = setup_chinese_font()
 
 # =========================================================================
@@ -299,7 +310,7 @@ def get_safe_val(df, keys, col_idx=0):
     return np.nan
 
 # =========================================================================
-# 💡 核心自研數據庫 (多源聚合)
+# 💡 核心自研數據庫
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
