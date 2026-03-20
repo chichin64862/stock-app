@@ -74,24 +74,16 @@ if 'my_portfolio' not in st.session_state: st.session_state['my_portfolio'] = []
 try: api_key = st.secrets["GEMINI_API_KEY"]
 except Exception: api_key = None
 
-# 【✅ 精準修復：強制刪除壞檔並重新下載完整字庫】
+# 【✅ 精準修復 1：提高檔案大小驗證至 5MB，確保字體打包嵌入 PDF，解決 Adobe 亂碼】
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
-    font_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
-    
-    if os.path.exists(font_path) and os.path.getsize(font_path) < 1000000:
-        try: os.remove(font_path)
-        except: pass
-
-    if not os.path.exists(font_path):
+    if not os.path.exists(font_path) or os.path.getsize(font_path) < 5000000:
         try:
-            r = requests.get(font_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=30)
-            if r.status_code == 200:
-                with open(font_path, 'wb') as f:
-                    f.write(r.content)
+            req = urllib.request.Request("https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf", headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=60) as response, open(font_path, 'wb') as out_file:
+                out_file.write(response.read())
         except: pass
-        
     try: 
         pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
         return 'ChineseFont'
@@ -316,7 +308,7 @@ def get_safe_val(df, keys, col_idx=0):
     return np.nan
 
 # =========================================================================
-# 💡 核心自研數據庫 (多源聚合)
+# 💡 核心自研數據庫
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -671,6 +663,7 @@ def generate_custom_signal(row, regime):
         return "⚖️ 持有觀望"
 
 # --- 10. AI 與 PDF 輸出模組 ---
+# 【✅ 完全退回：使用 Chrome 可直接讀取的 PDF 屬性，包含 Title 寫法】
 def get_valid_model(key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
@@ -698,24 +691,32 @@ def call_ai(prompt):
         else: return f"分析服務暫時無回應 (代碼: {r.status_code})"
     except Exception as e: return "分析服務連線逾時，請稍後再試。"
 
-# 【✅ 完美修復：加入 wordWrap='CJK'，徹底解決中文排版崩潰導致的空檔案問題】
 def create_pdf(stock_data):
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
+    
+    # ✅ 加入 Title 防止 Chrome 顯示 anonymous
+    safe_name = html.escape(str(stock_data.get('名稱', '')))
+    safe_code = html.escape(str(stock_data.get('代號', '')))
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=A4, 
+        title=f"{safe_code} {safe_name} 分析報告",
+        author="AlphaCore 終端",
+        rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40
+    )
+    
     story = []
     font_name = font_name_global 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, alignment=1, spaceAfter=20, wordWrap='CJK')
-    h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue, wordWrap='CJK')
-    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14, wordWrap='CJK')
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, alignment=1, spaceAfter=20)
+    h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue)
+    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
     
     logic_name = "量化風控模型" if st.session_state['current_logic'] == "Quant" else "價值護城河模型"
     story.append(Paragraph(f"台股量化與價值分析終端 - 綜合洞察報告 [{logic_name}]", title_style))
     story.append(Paragraph(f"產出時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
     
-    safe_name = html.escape(str(stock_data.get('名稱', '')))
-    safe_code = html.escape(str(stock_data.get('代號', '')))
     story.append(Paragraph(f"分析標的: {safe_name} ({safe_code})", h2_style))
     story.append(Spacer(1, 10))
     
