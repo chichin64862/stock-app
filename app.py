@@ -68,36 +68,22 @@ if 'history_storage' not in st.session_state: st.session_state['history_storage'
 if 'ai_results' not in st.session_state: st.session_state['ai_results'] = {}
 if 'current_logic' not in st.session_state: st.session_state['current_logic'] = "Quant" 
 if 'panel_page' not in st.session_state: st.session_state['panel_page'] = 1 
-if 'list_page' not in st.session_state: st.session_state['list_page'] = 1 
 if 'my_portfolio' not in st.session_state: st.session_state['my_portfolio'] = []
 
 try: api_key = st.secrets["GEMINI_API_KEY"]
 except Exception: api_key = None
 
-# 【✅ 終極修復：替換為不吃字、非變數字型(Variable Font)的標準開源繁體字體，根除黑色方塊與 Adobe 警告】
 @st.cache_resource
 def setup_chinese_font():
-    font_path = "TaipeiSansTCBeta-Regular.ttf"
-    
-    if os.path.exists(font_path) and os.path.getsize(font_path) < 1000000:
-        try: os.remove(font_path)
-        except: pass
-        
+    font_path = "NotoSansTC-Regular.ttf"
     if not os.path.exists(font_path):
         try:
-            url = "https://raw.githubusercontent.com/tki-open/Taipei-Sans-TC/master/TaipeiSansTCBeta-Regular.ttf"
-            r = requests.get(url, allow_redirects=True, timeout=60)
-            if r.status_code == 200:
-                with open(font_path, 'wb') as f:
-                    f.write(r.content)
+            req = urllib.request.Request("https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf", headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=30) as response, open(font_path, 'wb') as out_file:
+                out_file.write(response.read())
         except: pass
-        
-    try: 
-        pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
-        return 'ChineseFont'
-    except: 
-        return 'Helvetica'
-
+    try: pdfmetrics.registerFont(TTFont('ChineseFont', font_path)); return 'ChineseFont'
+    except: return 'Helvetica'
 font_name_global = setup_chinese_font()
 
 # =========================================================================
@@ -160,6 +146,7 @@ def calc_eps_yoy(fin, bal):
     except: pass
     return np.nan
 
+# 【✅ PEG 修復：移除 eps_growth_pct <= 0 限制，強制顯示所有 PEG】
 def calc_peg(pe, eps_growth_pct):
     try:
         if pd.isna(pe) or pd.isna(eps_growth_pct) or eps_growth_pct == 0: return np.nan
@@ -179,12 +166,13 @@ def get_revenue_yoy_mops(code):
             if len(tables) > 0:
                 df = tables[0]
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
-                df = df.sort_values(df.columns[0], ascending=False)
-                if len(df) >= 2 and "營業收入" in df.columns:
-                    rev_now = safe_float(df.iloc[0]["營業收入"])
-                    rev_prev = safe_float(df.iloc[1]["營業收入"])
-                    if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
-                        return (rev_now - rev_prev) / abs(rev_prev)
+                if "營業收入" in df.columns:
+                    df = df.sort_values(df.columns[0], ascending=False)
+                    if len(df) >= 2:
+                        rev_now = safe_float(df.iloc[0]["營業收入"])
+                        rev_prev = safe_float(df.iloc[1]["營業收入"])
+                        if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
+                            return (rev_now - rev_prev) / abs(rev_prev)
     except: pass
     return np.nan
 
@@ -202,11 +190,12 @@ def get_tw_stock_list():
         "2317": "其他電子業", "2881": "金融保險業", "2603": "航運業"
     }
     
+    # 【✅ 板塊修復：確保任何數字都被轉為中文，防止選單出現數字】
     twse_ind_map = {
         "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
         "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
         "11": "橡膠工業", "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅",
-        "17": "金融保險", "18": "貿易百貨", "19": "綜合", "20": "其他產業", "21": "化學工業",
+        "17": "金融保險", "18": "貿易百貨", "19": "綜合", "20": "其他", "21": "化學工業",
         "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
         "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
         "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
@@ -215,51 +204,41 @@ def get_tw_stock_list():
         "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
     }
 
-    try:
-        import twstock
-        for code, info in twstock.codes.items():
-            if info.type in ['股票', 'ETF']:  
-                full = f"{code}.TW" if info.market == '上市' else f"{code}.TWO"
-                name = str(info.name).strip()
-                ind_raw = str(info.group).strip() if info.group else ""
-                
-                ind = twse_ind_map.get(ind_raw, ind_raw)
-                if not ind or ind.isdigit() or ind.lower() == "none": ind = "其他產業"
-                
-                group = custom_sector_override.get(code, ind)
-                if code.startswith('00'): group = 'ETF'
-                
-                stock_map[full] = f"{full} {name}"
-                if group not in industry_map: industry_map[group] = []
-                industry_map[group].append(full)
-                code_to_industry[code] = group
-    except: pass
-
     for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
                          ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
         try:
-            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=5)
+            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
             if res.status_code == 200:
                 for item in res.json():
                     code = str(item.get('公司代號', '')).strip()
                     name = str(item.get('公司簡稱', '')).strip()
                     ind_raw = str(item.get('產業別', '其他')).strip()
                     
+                    # 強制數字轉中文，若轉完還是數字則歸為「其他產業」
                     ind = twse_ind_map.get(ind_raw, ind_raw)
-                    if not ind or ind.isdigit(): ind = "其他產業"
+                    if ind.isdigit(): ind = "其他產業"
                     
                     if len(code) == 4 and code.isdigit():
                         full = f"{code}{sfx}"
                         group = custom_sector_override.get(code, ind)
-                        if code.startswith('00'): group = 'ETF'
-                        
-                        if full not in stock_map:
-                            stock_map[full] = f"{full} {name}"
-                            if group not in industry_map: industry_map[group] = []
-                            industry_map[group].append(full)
-                            code_to_industry[code] = group
+                        stock_map[full] = f"{full} {name}"
+                        if group not in industry_map: industry_map[group] = []
+                        industry_map[group].append(full)
+                        code_to_industry[code] = group
         except: pass
 
+    try:
+        import twstock
+        for code, info in twstock.codes.items():
+            if info.type == 'ETF':
+                full = f"{code}.TW" if info.market == '上市' else f"{code}.TWO"
+                if full not in stock_map:
+                    stock_map[full] = f"{full} {info.name}"
+                    if 'ETF' not in industry_map: industry_map['ETF'] = []
+                    industry_map['ETF'].append(full)
+                    code_to_industry[code] = 'ETF'
+    except: pass
+    
     return stock_map, industry_map, code_to_industry
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
@@ -312,7 +291,7 @@ def get_safe_val(df, keys, col_idx=0):
     return np.nan
 
 # =========================================================================
-# 💡 核心自研數據庫 (多源聚合)
+# 💡 核心自研數據庫
 # =========================================================================
 
 def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
@@ -416,6 +395,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                     if pd.isna(data['gross_margins']): data['gross_margins'] = safe_float(wg_json[0].get('grossMargin')) / 100.0
         except: pass
 
+    # 【✅ P/E 修復：如果官方沒給，手動拿 TTM EPS 算出本益比】
     if code in global_twse:
         tw_pe = global_twse[code].get("pe", np.nan)
         if pd.notna(tw_pe): data["pe"] = tw_pe 
@@ -426,15 +406,13 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
         tw_yld = global_twse[code].get("yield", np.nan)
         if pd.notna(tw_yld): data["yield"] = tw_yld
 
-    if pd.isna(data["pe"]) or data["pe"] <= 0:
+    if pd.isna(data["pe"]):
         try:
             if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
                 ni_ttm = fin.loc["Net Income"].iloc[:4].sum()
                 shares = bal.loc["Ordinary Shares Number"].iloc[0]
-                if shares > 0 and pd.notna(data["close_price"]):
-                    eps_ttm = ni_ttm / shares
-                    if eps_ttm != 0:
-                        data["pe"] = data["close_price"] / eps_ttm
+                if shares > 0 and ni_ttm != 0 and pd.notna(data["close_price"]):
+                    data["pe"] = data["close_price"] / (ni_ttm / shares)
         except: pass
 
     if pd.isna(data["yield"]):
@@ -696,17 +674,7 @@ def call_ai(prompt):
 
 def create_pdf(stock_data):
     buffer = io.BytesIO()
-    
-    safe_name = html.escape(str(stock_data.get('名稱', '')))
-    safe_code = html.escape(str(stock_data.get('代號', '')))
-    doc = SimpleDocTemplate(
-        buffer, 
-        pagesize=A4, 
-        title=f"{safe_code} {safe_name} 分析報告",
-        author="AlphaCore 終端",
-        rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40
-    )
-    
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
     font_name = font_name_global 
     styles = getSampleStyleSheet()
@@ -719,6 +687,8 @@ def create_pdf(stock_data):
     story.append(Paragraph(f"產出時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
     
+    safe_name = html.escape(str(stock_data.get('名稱', '')))
+    safe_code = html.escape(str(stock_data.get('代號', '')))
     story.append(Paragraph(f"分析標的: {safe_name} ({safe_code})", h2_style))
     story.append(Spacer(1, 10))
     
@@ -831,17 +801,10 @@ with st.sidebar:
     if st.button("🚀 啟動終端運算 (強制擷取最新數據)", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False
         st.session_state['panel_page'] = 1 
-        st.session_state['list_page'] = 1 
         current_date_str = datetime.now().strftime("%Y/%m/%d")
         with st.spinner(f"正在全域聚合 {current_date_str} 盤中最新財報與量化數據 (共 {len(target_stocks)} 檔)..."):
             raw, hist_map = batch_scan_stocks(target_stocks)
-            
-            if not raw.empty:
-                st.session_state['raw_data'] = sanitize_data(raw)
-                st.session_state['history_storage'] = hist_map
-                st.session_state['scan_finished'] = True
-            else:
-                st.error("❌ 掃描失敗：請檢查網路連線或該標的代碼是否正確。")
+            st.session_state['raw_data'], st.session_state['history_storage'], st.session_state['scan_finished'] = sanitize_data(raw), hist_map, True
             st.rerun()
 
 col1, col2 = st.columns([3, 1])
@@ -862,40 +825,22 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         selected_filter = st.radio("🎯 快速分類篩選：", ["[ALL] 顯示全部標的"] + tags, horizontal=True)
         filtered_df = final_df if selected_filter == "[ALL] 顯示全部標的" else final_df[final_df['Quality'] == selected_filter]
         
-        ROWS_PER_PAGE = 50
-        total_list_pages = max(1, (len(filtered_df) - 1) // ROWS_PER_PAGE + 1)
-        if st.session_state['list_page'] > total_list_pages:
-            st.session_state['list_page'] = total_list_pages
-
-        list_start_idx = (st.session_state['list_page'] - 1) * ROWS_PER_PAGE
-        list_end_idx = list_start_idx + ROWS_PER_PAGE
-        paged_filtered_df = filtered_df.iloc[list_start_idx:list_end_idx]
-
         df_event = st.dataframe(
-            paged_filtered_df[['代號', '名稱', 'industry', 'Score', 'Quality', 'Strategy', 'sharpe', 'mdd', 'roe', 'implied_growth']],
+            filtered_df[['代號', '名稱', 'industry', 'Score', 'Quality', 'Strategy', 'sharpe', 'mdd', 'roe', 'implied_growth']],
             column_config={
                 "Score": st.column_config.ProgressColumn("綜合評分", min_value=0, max_value=100, format="%.1f"),
                 "sharpe": st.column_config.NumberColumn("夏普值", format="%.2f"),
                 "mdd": st.column_config.NumberColumn("最大回撤", format="%.1f%%"),
                 "roe": st.column_config.NumberColumn("ROE", format="%.1f"),
             },
-            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row"
+            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row" 
         )
-
-        c_lp1, c_lp2, c_lp3 = st.columns([1, 2, 1])
-        if c_lp1.button("⬅️ 上一頁 (清單)", use_container_width=True, disabled=st.session_state['list_page']==1):
-            st.session_state['list_page'] -= 1
-            st.rerun()
-        c_lp2.markdown(f"<div style='text-align:center;color:#9CA3AF;'>清單第 <b>{st.session_state['list_page']}</b> 頁 / 共 <b>{total_list_pages}</b> 頁 (總計 {len(filtered_df)} 檔)</div>", unsafe_allow_html=True)
-        if c_lp3.button("下一頁 ➡️ (清單)", use_container_width=True, disabled=st.session_state['list_page']==total_list_pages):
-            st.session_state['list_page'] += 1
-            st.rerun()
         st.markdown("---")
-
+        
         selected_rows = df_event.selection.rows
         
         if selected_rows:
-            sel_idx = list_start_idx + selected_rows[0]
+            sel_idx = selected_rows[0]
             sel_row = filtered_df.iloc[sel_idx]
             c_title, c_add = st.columns([3, 1])
             c_title.subheader(f"💡 系統標籤深度解析：{sel_row['名稱']} ({sel_row['代號']})")
@@ -928,7 +873,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             c1, c2, c3 = st.columns([1, 1.8, 1.5])
             with c1:
                 orig_idx = df_norm.index[df_norm['代號'] == code]
-                if len(orig_idx) > 0: st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[orig_idx[0]])), use_container_width=True, key=f"radar_{code}")
+                if len(orig_idx) > 0: st.plotly_chart(plot_radar_chart_ui(row['名稱'], get_radar_data(df_norm.loc[orig_idx[0]])), use_container_width=True)
             with c2:
                 sh = row.get('sharpe')
                 mdd = row.get('mdd')
@@ -992,11 +937,11 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     
                     pdf_payload = row.to_dict()
                     pdf_payload['ai_analysis'] = st.session_state['ai_results'][code]
-                    c_btn2.download_button("📥 輸出 PDF 報告", data=create_pdf(pdf_payload), file_name=f"{code} {row['名稱']}_Report.pdf", mime="application/pdf", key=f"dl_{code}")
+                    c_btn2.download_button("📥 輸出 PDF 報告", create_pdf(pdf_payload), f"{code} {row['名稱']}_Report.pdf", key=f"dl_{code}")
 
             with c3:
                 h_df = hist_storage.get(code)
-                if h_df is not None and not h_df.empty: st.plotly_chart(plot_trend_dashboard(row['名稱'], h_df, row.get('priceToMA60', 0)), use_container_width=True, key=f"trend_{code}")
+                if h_df is not None and not h_df.empty: st.plotly_chart(plot_trend_dashboard(row['名稱'], h_df, row.get('priceToMA60', 0)), use_container_width=True)
                 else: st.warning("無 K 線數據")
                 
             if code in st.session_state['ai_results']:
@@ -1022,7 +967,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         else:
             my_port_df = final_df[final_df['代號'].isin(st.session_state['my_portfolio'])].copy()
             
-            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<25 else "🟡 觀察資產"))), axis=1)
+            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<0.25 else "🟡 觀察資產"))), axis=1)
             my_port_df['操作訊號'] = my_port_df.apply(lambda r: generate_custom_signal(r, "Bull" if "多頭" in regime else "Bear"), axis=1)
             
             st.dataframe(my_port_df[['代號', '名稱', '資產屬性', 'sharpe', 'beta', 'mdd', '操作訊號']].sort_values('sharpe', ascending=False), hide_index=True, use_container_width=True)
