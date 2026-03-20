@@ -74,19 +74,24 @@ if 'my_portfolio' not in st.session_state: st.session_state['my_portfolio'] = []
 try: api_key = st.secrets["GEMINI_API_KEY"]
 except Exception: api_key = None
 
-# 【✅ 唯一修改處：加入檔案容量檢查，徹底解決 PDF 空白/亂碼問題】
+# 【✅ 精準修復：強制刪除壞檔並重新下載完整字庫】
 @st.cache_resource
 def setup_chinese_font():
     font_path = "NotoSansTC-Regular.ttf"
-    # 檢查字體檔案是否存在，且檔案大小是否正常 (避免下載失敗產生 0 byte 空檔案導致 PDF 空白)
-    if not os.path.exists(font_path) or os.path.getsize(font_path) < 100000:
+    font_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+    
+    if os.path.exists(font_path) and os.path.getsize(font_path) < 1000000:
+        try: os.remove(font_path)
+        except: pass
+
+    if not os.path.exists(font_path):
         try:
-            r = requests.get("https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf", timeout=30)
+            r = requests.get(font_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=30)
             if r.status_code == 200:
                 with open(font_path, 'wb') as f:
                     f.write(r.content)
         except: pass
-    
+        
     try: 
         pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
         return 'ChineseFont'
@@ -586,7 +591,7 @@ def get_tag_explanation(row, logic_type):
     if tag == "回撤過大 (剔除)": return f"**為什麼被系統剔除？**<br>此標的過去半年內的最大回撤 (MDD) 高達 **{mdd*100:.1f}%**。依據嚴格的量化風控紀律，任何跌破 25% 容忍防線的資產，無論其基本面或夏普值多麼亮眼，都可能造成投資組合的永久性資本損傷，因此被系統強制剔除。"
     if logic_type == "Quant":
         if tag == "成長型資產": return f"**為什麼被系統評定為「🚀 成長型資產」？**<br>此標的近期年化夏普值高達 **{sharpe:.2f}** 且 Beta 大於 1。依據林哲群教授《紀律長贏》觀念，其報酬率累積速度遠大於風險的增加，屬於位於效率前緣的高回報攻擊動能。"
-        elif tag == "防禦型資產": return f"**為什麼被系統評定為「🛡️ 防禦型 নিষ্ঠ」？**<br>此標的近期年化夏普值高達 **{sharpe:.2f}**，且 Beta 值小於 1。具備低於大盤的波動特性與高性價比報酬，是優化投資組合下檔風險的防禦基石。"
+        elif tag == "防禦型資產": return f"**為什麼被系統評定為「🛡️ 防禦型資產」？**<br>此標的近期年化夏普值高達 **{sharpe:.2f}**，且 Beta 值小於 1。具備低於大盤的波動特性與高性價比報酬，是優化投資組合下檔風險的防禦基石。"
         elif tag == "中性資產": return f"**為什麼被系統評定為「⚖️ 中性資產」？**<br>此標的夏普值大於 0 且波動率低於 25%。屬於走勢平穩、與大盤關聯較弱的穩定器，能有效稀釋整體 MPT 投資組合的共變異數波動。"
         elif tag == "風險報酬不對等": return f"**為什麼被系統評定為「⚠️ 風險報酬不對等」？**<br>此標的夏普值為 **{sharpe:.2f}**（小於 0）。投資此類資產並未帶來與風險相匹配的回報，不符合長期紀律投資精神。"
         else: return "**標籤說明**<br>該標的各項量化指標落在市場均值區間，風險與報酬呈現中性，未觸發極端強勢或弱勢的演算法警示。"
@@ -693,15 +698,16 @@ def call_ai(prompt):
         else: return f"分析服務暫時無回應 (代碼: {r.status_code})"
     except Exception as e: return "分析服務連線逾時，請稍後再試。"
 
+# 【✅ 完美修復：加入 wordWrap='CJK'，徹底解決中文排版崩潰導致的空檔案問題】
 def create_pdf(stock_data):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
     font_name = font_name_global 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, alignment=1, spaceAfter=20)
-    h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue)
-    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=20, alignment=1, spaceAfter=20, wordWrap='CJK')
+    h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue, wordWrap='CJK')
+    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14, wordWrap='CJK')
     
     logic_name = "量化風控模型" if st.session_state['current_logic'] == "Quant" else "價值護城河模型"
     story.append(Paragraph(f"台股量化與價值分析終端 - 綜合洞察報告 [{logic_name}]", title_style))
@@ -913,7 +919,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             st.markdown(f"""<div class='stock-card'>
 <div class='card-header'>
 <div><span class='header-title'>{row['名稱']} ({code})</span><span class='header-price'>${row['close_price']}</span></div>
-<div><span class='tag tag-logic'>{'量化風控' if st.session_state['current_logic'] == 'Quant' else '价值護城河'}</span><span class='tag tag-sector'>{row['industry']}</span>{tag_html}</div>
+<div><span class='tag tag-logic'>{'量化風控' if st.session_state['current_logic'] == 'Quant' else '價值護城河'}</span><span class='tag tag-sector'>{row['industry']}</span>{tag_html}</div>
 </div>""", unsafe_allow_html=True)
             
             c1, c2, c3 = st.columns([1, 1.8, 1.5])
