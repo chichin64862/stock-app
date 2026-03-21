@@ -13,8 +13,6 @@ import time
 from datetime import datetime
 import urllib.request
 import html
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # --- 關閉 SSL 驗證警告 (針對證交所 API) ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -124,7 +122,6 @@ if 'history_storage' not in st.session_state: st.session_state['history_storage'
 if 'ai_results' not in st.session_state: st.session_state['ai_results'] = {}
 if 'current_logic' not in st.session_state: st.session_state['current_logic'] = "Quant" 
 if 'panel_page' not in st.session_state: st.session_state['panel_page'] = 1 
-if 'list_page' not in st.session_state: st.session_state['list_page'] = 1 
 if 'my_portfolio' not in st.session_state: st.session_state['my_portfolio'] = []
 
 # --- 4. API Key ---
@@ -134,137 +131,48 @@ except Exception: st.error("系統偵測不到 API Key，AI 洞察功能將受�
 # --- 5. 字型下載與註冊 ---
 @st.cache_resource
 def setup_chinese_font():
-    font_path = "TaipeiSansTCBeta-Regular.ttf"
-    
+    font_path = "NotoSansTC-Regular.ttf"
     if os.path.exists(font_path) and os.path.getsize(font_path) < 1000000:
         try: os.remove(font_path)
         except: pass
-        
     if not os.path.exists(font_path):
+        urls = [
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
+            "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+        ]
+        for url in urls:
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=30) as response, open(font_path, 'wb') as out_file:
+                    out_file.write(response.read())
+                if os.path.getsize(font_path) > 1000000: break
+            except Exception: continue
+    try:
+        if os.path.exists(font_path) and os.path.getsize(font_path) > 1000000:
+            pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+            return 'ChineseFont'
+    except Exception: pass
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        return 'STSong-Light'
+    except:
         try:
-            url = "https://raw.githubusercontent.com/tki-open/Taipei-Sans-TC/master/TaipeiSansTCBeta-Regular.ttf"
-            r = requests.get(url, allow_redirects=True, timeout=60)
-            if r.status_code == 200:
-                with open(font_path, 'wb') as f:
-                    f.write(r.content)
-        except: pass
-        
-    try: 
-        pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
-        return 'ChineseFont'
-    except: 
-        return 'Helvetica'
+            pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
+            return 'MSung-Light'
+        except: return 'Helvetica'
 
 font_name_global = setup_chinese_font()
 
-@st.cache_resource
-def get_yf_session():
-    session = requests.Session()
-    retry = Retry(total=3, backoff_factor=0.3, status_forcelist=[429, 500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-    return session
+# --- 6. 核心數據引擎 ---
 
-# =========================================================================
-# 💡 工具函數與核心數學引擎
-# =========================================================================
-
-def safe_float(val):
-    try:
-        if pd.isna(val) or val is None or str(val).strip() == '': return np.nan
-        return float(str(val).replace(',', '').strip())
-    except:
-        return np.nan
-
-def calc_beta(stock_ret, market_ret):
-    aligned = stock_ret.align(market_ret, join='inner')
-    if len(aligned[0]) < 10: return np.nan
-    var = np.var(aligned[1])
-    if var == 0: return np.nan
-    cov = np.cov(aligned[0], aligned[1])[0][1]
-    return cov / var
-
-def calc_mdd(price_series):
-    if price_series.empty: return np.nan
-    cum_max = price_series.cummax()
-    drawdown = (price_series - cum_max) / cum_max
-    return drawdown.min()
-
-def calc_sharpe(returns, rf=0.015):
-    if returns.empty: return np.nan
-    excess = returns - (rf / 252)
-    return np.sqrt(252) * excess.mean() / excess.std()
-
-def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
-    if pd.isna(price) or pd.isna(eps) or eps <= 0 or price <= 0: return np.nan
-    low, high = -0.99, 3.0 
-    for _ in range(50): 
-        mid = (low + high) / 2
-        pv = sum([eps * ((1 + mid) ** t) / ((1 + r) ** t) for t in range(1, years + 1)])
-        tv = (eps * ((1 + mid) ** years) * (1 + terminal_g)) / (r - terminal_g)
-        calc_price = pv + tv / ((1 + r) ** years)
-        diff = calc_price - price
-        if abs(diff) < 0.01: return mid
-        if diff > 0: high = mid
-        else: low = mid
-    return (low + high) / 2
-
-def sanitize_data(df):
-    if df.empty: return df
-    if 'yield' in df.columns: 
-        df['yield'] = df['yield'].apply(lambda x: x/100 if pd.notna(x) and x > 20 else x)
-    return df
-
-def calc_eps_yoy(fin, bal):
-    try:
-        if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
-            eps = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
-            eps = eps.dropna()
-            if len(eps) >= 2:
-                return ((eps.iloc[0] - eps.iloc[1]) / abs(eps.iloc[1])) * 100
-    except: pass
-    return np.nan
-
-def calc_peg(pe, eps_growth_pct):
-    try:
-        if pd.isna(pe) or pd.isna(eps_growth_pct) or eps_growth_pct == 0: return np.nan
-        return pe / eps_growth_pct
-    except: return np.nan
-
-def get_revenue_yoy_mops(code):
-    try:
-        time.sleep(np.random.uniform(0.05, 0.15))
-        url = "https://mops.twse.com.tw/mops/web/ajax_t05st10_ifrs"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        for typek in ["sii", "otc", "rotc"]:
-            payload = {"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": typek, "co_id": code}
-            res = requests.post(url, data=payload, headers=headers, timeout=5)
-            if "查無資料" in res.text: continue
-            tables = pd.read_html(io.StringIO(res.text))
-            if len(tables) > 0:
-                df = tables[0]
-                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
-                df = df.sort_values(df.columns[0], ascending=False)
-                if len(df) >= 2 and "營業收入" in df.columns:
-                    rev_now = safe_float(df.iloc[0]["營業收入"])
-                    rev_prev = safe_float(df.iloc[1]["營業收入"])
-                    if rev_prev != 0 and pd.notna(rev_now) and pd.notna(rev_prev): 
-                        return (rev_now - rev_prev) / abs(rev_prev)
-    except: pass
-    return np.nan
-
-# =========================================================================
-# 💡 資料前置預載引擎
-# =========================================================================
-
+# 【證交所官方連線】強制關閉 Verify 繞過憑證
 @st.cache_data(ttl=86400) 
 def get_tw_stock_list():
     stock_map = {}
     industry_map = {}
     code_to_industry = {}
     
+    # ✅ 加入產業數字轉中文對照表
     twse_ind_map = {
         "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
         "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
@@ -286,6 +194,7 @@ def get_tw_stock_list():
                 name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
                 ind_raw = str(item.get('產業別', '其他')).strip()
                 
+                # ✅ 將數字板塊翻譯成中文
                 ind = twse_ind_map.get(ind_raw, ind_raw)
                 if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
                 
@@ -296,7 +205,7 @@ def get_tw_stock_list():
                     if full not in industry_map[ind]: industry_map[ind].append(full)
                     code_to_industry[code] = ind
     except Exception as e:
-        pass 
+        pass # 失敗則依靠 twstock 備援
 
     try:
         res_tpex = requests.get("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", timeout=10, verify=False)
@@ -306,6 +215,7 @@ def get_tw_stock_list():
                 name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
                 ind_raw = str(item.get('產業別', '其他')).strip()
                 
+                # ✅ 將數字板塊翻譯成中文
                 ind = twse_ind_map.get(ind_raw, ind_raw)
                 if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
                 
@@ -317,30 +227,11 @@ def get_tw_stock_list():
                     code_to_industry[code] = ind
     except: pass
 
-    # 加入興櫃
-    try:
-        res_rotc = requests.get("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_R", timeout=10, verify=False)
-        if res_rotc.status_code == 200:
-            for item in res_rotc.json():
-                code = str(item.get('公司代號', '')).strip()
-                name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind_raw = str(item.get('產業別', '其他')).strip()
-                
-                ind = twse_ind_map.get(ind_raw, ind_raw)
-                if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
-                
-                if len(code) == 4 and code.isdigit():
-                    full = f"{code}.TWO"
-                    stock_map[full] = f"{full} {name}"
-                    if ind not in industry_map: industry_map[ind] = []
-                    if full not in industry_map[ind]: industry_map[ind].append(full)
-                    code_to_industry[code] = ind
-    except: pass
-
+    # 備援與 ETF 補齊 (ETF 不在上述上市櫃基本資料內)
     try:
         import twstock
         for code, info in twstock.codes.items():
-            if info.type in ['股票', 'ETF']:  
+            if info.type in ['股票', 'ETF']:
                 suffix = '.TW' if info.market == '上市' else '.TWO'
                 full = f"{code}{suffix}"
                 
@@ -348,6 +239,7 @@ def get_tw_stock_list():
                     stock_map[full] = f"{full} {info.name}"
                     group = info.group if info.group else info.type
                     
+                    # ✅ 備援庫的數字板塊也翻譯成中文
                     group = twse_ind_map.get(group, group)
                     if not group or group.isdigit() or group.lower() == "none": group = "其他產業"
                     
@@ -360,67 +252,15 @@ def get_tw_stock_list():
 
 stock_map, industry_map, code_to_industry_map = get_tw_stock_list()
 
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_global_market_data():
-    twse_data = {}
-    rev_data = {}
-    mkt_ret = pd.Series(dtype=float)
-    
-    for mkt_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap14_L", 
-                    "https://www.tpex.org.tw/openapi/v1/t187ap14_O",
-                    "https://www.tpex.org.tw/openapi/v1/t187ap14_R"]:
-        try:
-            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
-            if res.status_code == 200:
-                for item in res.json():
-                    pe = safe_float(item.get("本益比"))
-                    pb = safe_float(item.get("股價淨值比"))
-                    yld = safe_float(item.get("殖利率(%)"))
-                    twse_data[str(item.get("證券代號"))] = {
-                        "pe": pe if pd.notna(pe) and pe > 0 else np.nan,
-                        "pb": pb if pd.notna(pb) else np.nan,
-                        "yield": yld / 100.0 if pd.notna(yld) else np.nan
-                    }
-        except: pass
-
-    for rev_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap05_L", 
-                    "https://www.tpex.org.tw/openapi/v1/t187ap05_O",
-                    "https://www.tpex.org.tw/openapi/v1/t187ap05_R"]:
-        try:
-            res_rev = requests.get(rev_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
-            if res_rev.status_code == 200:
-                for item in res_rev.json():
-                    yoy_str = item.get("去年同月增減(%)", item.get("營業收入-去年同月增減(%)"))
-                    yoy = safe_float(yoy_str)
-                    code_str = str(item.get("公司代號", "")).strip()
-                    if pd.notna(yoy) and code_str:
-                        rev_data[code_str] = yoy / 100.0
-        except: pass
-
-    try:
-        market = yf.Ticker("^TWII").history(period="6mo")
-        if not market.empty: mkt_ret = market['Close'].pct_change().dropna()
-    except: pass
-
-    return twse_data, rev_data, mkt_ret
-
-def get_safe_val(df, keys, col_idx=0):
-    for k in keys:
-        if k in df.index:
-            val = df.loc[k].iloc[col_idx]
-            return float(val) if pd.notna(val) else np.nan
-    return np.nan
-
-# =========================================================================
-# 💡 核心自研數據庫 (多源聚合)
-# =========================================================================
-
+# 【解耦 Yahoo Finance】拔除 Custom Session，讓 yfinance 自由獲取 Cookie
 def get_stock_data(symbol):
     try:
+        # 加入微小延遲防禦 429 Rate Limit
         time.sleep(np.random.uniform(0.02, 0.15))
         
         if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
         
+        # 關鍵修復：不傳入 session，讓 yfinance 自己處理 Headers 與 Cookies
         ticker = yf.Ticker(symbol)
         
         info = {}
@@ -438,6 +278,20 @@ def get_stock_data(symbol):
 
         def g(k): return info.get(k)
         
+        # ✅ 精準修復：EPS YoY 備援計算 (避免 Yahoo 不給 YoY)
+        eps_growth_val = g('earningsGrowth')
+        if eps_growth_val is None:
+            try:
+                fin = ticker.quarterly_financials
+                bal = ticker.quarterly_balance_sheet
+                if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
+                    eps_series = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
+                    eps_series = eps_series.dropna()
+                    if len(eps_series) >= 5:
+                        # 真正的 YoY：(最新季 - 去年同期) / 去年同期
+                        eps_growth_val = (eps_series.iloc[0] - eps_series.iloc[4]) / abs(eps_series.iloc[4])
+            except: pass
+        
         price = g('currentPrice') or g('previousClose')
         if (price is None or pd.isna(price)) and not hist.empty:
             price = float(hist['Close'].iloc[-1])
@@ -448,7 +302,7 @@ def get_stock_data(symbol):
             'peg': g('pegRatio'),
             'pb': g('priceToBook'),
             'rev_growth': g('revenueGrowth'),
-            'eps_growth': g('earningsGrowth'),
+            'eps_growth': eps_growth_val, # 套用備援過的 YoY
             'trailing_eps': g('trailingEps'), 
             'gross_margins': g('grossMargins'),
             'yield': g('dividendYield'),
@@ -462,13 +316,35 @@ def get_stock_data(symbol):
         return data
     except Exception: return None
 
-@st.cache_data(ttl=1800, show_spinner=False)
+def sanitize_data(df):
+    if df.empty: return df
+    if 'yield' in df.columns: df['yield'] = df['yield'].apply(lambda x: x/100 if x > 20 else x)
+    return df
+
+def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
+    if pd.isna(price) or pd.isna(eps) or eps <= 0 or price <= 0: return np.nan
+    low, high = -0.99, 3.0 
+    tolerance = 0.01 
+    for _ in range(100): 
+        mid = (low + high) / 2
+        pv = sum([eps * ((1 + mid) ** t) / ((1 + r) ** t) for t in range(1, years + 1)])
+        tv = (eps * ((1 + mid) ** years) * (1 + terminal_g)) / (r - terminal_g)
+        calc_price = pv + tv / ((1 + r) ** years)
+        diff = calc_price - price
+        if abs(diff) < tolerance: return mid
+        if diff > 0: high = mid
+        else: low = mid
+    return (low + high) / 2
+
+# --- 7. 批量掃描 ---
+@st.cache_data(ttl=1800, show_spinner=False) # 縮短快取時間，強迫更新
 def batch_scan_stocks(stock_list):
     results = []
     history_map = {} 
     RISK_FREE_RATE = 0.015 
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        # 解耦後，直接傳入 symbol
         future_to_stock = {executor.submit(get_stock_data, s.split(' ')[0]): s for s in stock_list}
         
         for future in concurrent.futures.as_completed(future_to_stock):
@@ -523,8 +399,9 @@ def batch_scan_stocks(stock_list):
                     if not pd.isna(raw_margin): margins = raw_margin * 100
                     
                     peg = get_val('peg')
-                    if pd.isna(peg) and pd.notna(pe) and pd.notna(eps_growth) and eps_growth != 0:
-                        peg = pe / (eps_growth / 100.0)
+                    # ✅ 精準修復：如果 Yahoo 沒給 PEG，手動算出 PEG
+                    if pd.isna(peg) and not pd.isna(pe) and not pd.isna(eps_growth) and eps_growth != 0:
+                        peg = pe / eps_growth
                         
                     beta_val = get_val('beta')
                     de_ratio = get_val('debt_to_equity')
@@ -1267,12 +1144,11 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         st.markdown("---")
         st.subheader("🛠️ 戰略指揮中心：自選組合監控與多空情境推演")
         
-        # ✅ 精準歸位：確保按鈕在這裡，且在「自選為空」的判斷式之外，才能順利連動下方的模型配置
-        regime = st.radio("🌍 切換總經市場情境", ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], horizontal=True)
-
         if not st.session_state['my_portfolio']:
             st.info("💡 目前您的自選戰略組合為空。請在上方「終端檢索清單」點選標的，並將其【➕ 加入自選戰略組合】以啟用監控與推演功能。")
         else:
+            regime = st.radio("🌍 切換總經市場情境 (Market Regime Engine)", ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], horizontal=True)
+            
             my_port_codes = list(st.session_state['my_portfolio'])
             my_port_df = final_df[final_df['代號'].isin(my_port_codes)].copy()
             
@@ -1371,7 +1247,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 b = r.get('beta', 1.0)
                 v = r.get('volatility', 1.0)
                 if pd.isna(b): b = 1.0
-                if s > 1.0 and b >= 1.0: return "🚀 成長型資Asset"
+                if s > 1.0 and b >= 1.0: return "🚀 成長型資產"
                 elif s > 1.0 and b < 1.0: return "🛡️ 防禦型資產"
                 elif s > 0 and v < 0.25: return "⚖️ 中性資產"
                 else: return "🟡 其他觀察"
