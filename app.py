@@ -78,26 +78,35 @@ except Exception: api_key = None
 
 @st.cache_resource
 def setup_chinese_font():
-    font_path = "TaipeiSansTCBeta-Regular.ttf"
-    
+    font_path = "NotoSansTC-Regular.ttf"
     if os.path.exists(font_path) and os.path.getsize(font_path) < 1000000:
         try: os.remove(font_path)
         except: pass
-        
     if not os.path.exists(font_path):
+        urls = [
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
+            "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+        ]
+        for url in urls:
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=30) as response, open(font_path, 'wb') as out_file:
+                    out_file.write(response.read())
+                if os.path.getsize(font_path) > 1000000: break
+            except Exception: continue
+    try:
+        if os.path.exists(font_path) and os.path.getsize(font_path) > 1000000:
+            pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+            return 'ChineseFont'
+    except Exception: pass
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        return 'STSong-Light'
+    except:
         try:
-            url = "https://raw.githubusercontent.com/tki-open/Taipei-Sans-TC/master/TaipeiSansTCBeta-Regular.ttf"
-            r = requests.get(url, allow_redirects=True, timeout=60)
-            if r.status_code == 200:
-                with open(font_path, 'wb') as f:
-                    f.write(r.content)
-        except: pass
-        
-    try: 
-        pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
-        return 'ChineseFont'
-    except: 
-        return 'Helvetica'
+            pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
+            return 'MSung-Light'
+        except: return 'Helvetica'
 
 font_name_global = setup_chinese_font()
 
@@ -161,13 +170,15 @@ def sanitize_data(df):
         df['yield'] = df['yield'].apply(lambda x: x/100 if pd.notna(x) and x > 20 else x)
     return df
 
+# ✅ EPS YoY 正確計算邏輯：最新季 (iloc[0]) 比較 去年同季 (iloc[4])
 def calc_eps_yoy(fin, bal):
     try:
         if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
             eps = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
             eps = eps.dropna()
-            if len(eps) >= 2:
-                return ((eps.iloc[0] - eps.iloc[1]) / abs(eps.iloc[1])) * 100
+            # 確保有5個季度的資料才能算真正的年增率(YoY)
+            if len(eps) >= 5 and eps.iloc[4] != 0:
+                return ((eps.iloc[0] - eps.iloc[4]) / abs(eps.iloc[4])) * 100
     except: pass
     return np.nan
 
@@ -182,7 +193,7 @@ def get_revenue_yoy_mops(code):
         time.sleep(np.random.uniform(0.05, 0.15))
         url = "https://mops.twse.com.tw/mops/web/ajax_t05st10_ifrs"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        for typek in ["sii", "otc"]:
+        for typek in ["sii", "otc", "rotc"]:
             payload = {"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": typek, "co_id": code}
             res = requests.post(url, data=payload, headers=headers, timeout=5)
             if "查無資料" in res.text: continue
@@ -246,8 +257,10 @@ def get_tw_stock_list():
                 code_to_industry[code] = group
     except: pass
 
+    # ✅ 包含興櫃 (t187ap03_R) 保證抓到 3935 山太士
     for mkt_url, sfx in [("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", ".TW"), 
-                         ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO")]:
+                         ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", ".TWO"),
+                         ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_R", ".TWO")]:
         try:
             res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=5)
             if res.status_code == 200:
@@ -281,7 +294,10 @@ def fetch_global_market_data():
     rev_data = {}
     mkt_ret = pd.Series(dtype=float)
     
-    for mkt_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap14_L", "https://www.tpex.org.tw/openapi/v1/t187ap14_O"]:
+    # 包含興櫃資料
+    for mkt_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap14_L", 
+                    "https://www.tpex.org.tw/openapi/v1/t187ap14_O",
+                    "https://www.tpex.org.tw/openapi/v1/t187ap14_R"]:
         try:
             res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
             if res.status_code == 200:
@@ -296,7 +312,9 @@ def fetch_global_market_data():
                     }
         except: pass
 
-    for rev_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap05_L", "https://www.tpex.org.tw/openapi/v1/t187ap05_O"]:
+    for rev_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap05_L", 
+                    "https://www.tpex.org.tw/openapi/v1/t187ap05_O",
+                    "https://www.tpex.org.tw/openapi/v1/t187ap05_R"]:
         try:
             res_rev = requests.get(rev_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
             if res_rev.status_code == 200:
@@ -338,6 +356,7 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     symbol = stock_str.split(' ')[0]
     if not symbol.endswith('.TW') and not symbol.endswith('.TWO'): symbol += '.TW'
     
+    # 確保使用防呆 Session，突破 429 Rate Limit
     ticker = yf.Ticker(symbol, session=get_yf_session())
     
     data = {
@@ -369,7 +388,6 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
 
     try:
         info = ticker.info
-        
         if pd.isna(data['close_price']):
             cp = info.get("currentPrice", info.get("previousClose"))
             if cp is not None: data['close_price'] = float(cp)
@@ -402,7 +420,10 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
                 data["fcf"] = float(op + capex)
             except: pass
 
-        data["eps_growth"] = calc_eps_yoy(fin, bal)
+        # 捨棄 Yahoo 的 earningsGrowth，強制用反推算出的真實 YoY
+        eps_g = calc_eps_yoy(fin, bal)
+        if not pd.isna(eps_g):
+            data["eps_growth"] = eps_g / 100.0
         
         if pd.isna(data["market_cap"]):
             try:
@@ -467,11 +488,6 @@ def get_stock_full_optimized(stock_str, global_twse, global_rev, mkt_ret):
     elif pd.isna(data["rev_growth"]) or data["rev_growth"] == 0:
         mo_rev = get_revenue_yoy_mops(code)
         if pd.notna(mo_rev): data["rev_growth"] = mo_rev
-
-    # 如果有官方 eps_growth，優先用官方的。如果沒有，用財報推算出來的
-    eps_growth_val = info.get("earningsGrowth") if 'info' in locals() else None
-    if eps_growth_val is not None:
-        data["eps_growth"] = eps_growth_val * 100
 
     data["peg"] = calc_peg(data["pe"], data["eps_growth"])
     if pd.isna(data["peg"]) and not pd.isna(data["pe"]) and not pd.isna(data["eps_growth"]) and data["eps_growth"] != 0:
@@ -638,7 +654,6 @@ def call_ai(prompt):
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
     try:
-        # AI call does not need the custom yfinance session
         r = requests.post(url, headers=headers, json=data, timeout=60)
         if r.status_code == 200: return r.json()['candidates'][0]['content']['parts'][0]['text']
         else: return f"分析服務暫時無回應 (代碼: {r.status_code})"
@@ -680,7 +695,7 @@ def create_pdf(stock_data):
         ['綜合評分 (Score)', f"{stock_data.get('Score', 'N/A')}", '收盤價 (Price)', f"{stock_data.get('close_price', 'N/A')}"],
         ['夏普值 (Sharpe)', safe_str(stock_data.get('sharpe')), '波動率 (Volatility)', safe_str(stock_data.get('volatility')*100 if not pd.isna(stock_data.get('volatility')) else np.nan, "{:.1f}%")],
         ['Beta (風險係數)', safe_str(stock_data.get('beta'), "{:.2f}"), '最大回撤 (MDD)', safe_str(stock_data.get('mdd')*100 if not pd.isna(stock_data.get('mdd')) else np.nan, "{:.1f}%")],
-        ['ROE (權益報酬)', safe_str(stock_data.get('roe'), "{:.1f}%"), '毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.1f}%")],
+        ['ROE (權益報酬)', safe_str(stock_data.get('roe')*100 if not pd.isna(stock_data.get('roe')) else np.nan, "{:.1f}%"), '毛利率 (Gross Margin)', safe_str(stock_data.get('gross_margins'), "{:.1f}%")],
         ['營收 YoY (Rev Grw)', safe_str(stock_data.get('rev_growth'), "{:.1f}%"), 'EPS YoY (EPS Grw)', safe_str(stock_data.get('eps_growth'), "{:.1f}%")],
         ['本益比 (P/E)', safe_str(stock_data.get('pe')), 'PEG 估值', safe_str(stock_data.get('peg'))],
         ['殖利率 (Yield)', safe_str(stock_data.get('yield'), "{:.2f}%"), 'FCF 收益率 (FCF Yld)', safe_str(stock_data.get('fcf_yield'), "{:.2f}%")],
@@ -1167,185 +1182,294 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         # =========================================================
         st.markdown("---")
         st.subheader("🛠️ 戰略指揮中心：自選組合監控與多空情境推演")
-        regime = st.radio("🌍 切換總經市場情境", ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], horizontal=True)
         
         if not st.session_state['my_portfolio']:
-            st.info("💡 請在上方清單點選標的，並點擊【➕ 加入自選戰略組合】以啟用監控與推演功能。")
+            st.info("💡 目前您的自選戰略組合為空。請在上方「終端檢索清單」點選標的，並將其【➕ 加入自選戰略組合】以啟用監控與推演功能。")
         else:
-            my_port_df = final_df[final_df['代號'].isin(st.session_state['my_portfolio'])].copy()
+            regime = st.radio("🌍 切換總經市場情境 (Market Regime Engine)", ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], horizontal=True)
             
-            my_port_df['資產屬性'] = my_port_df.apply(lambda r: "🛑 剔除資產" if r.get('mdd',0) < -0.25 else ("🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else ("⚖️ 中性資產" if r.get('sharpe',0)>0 and r.get('volatility',1)<25 else "🟡 觀察資產"))), axis=1)
-            my_port_df['操作訊號'] = my_port_df.apply(lambda r: generate_custom_signal(r, "Bull" if "多頭" in regime else "Bear"), axis=1)
+            my_port_codes = list(st.session_state['my_portfolio'])
+            my_port_df = final_df[final_df['代號'].isin(my_port_codes)].copy()
             
-            st.dataframe(my_port_df[['代號', '名稱', '資產屬性', 'sharpe', 'beta', 'mdd', '操作訊號']].sort_values('sharpe', ascending=False), hide_index=True, use_container_width=True)
+            def assign_bucket(r):
+                s = r.get('sharpe', 0)
+                b = r.get('beta', 1.0)
+                v = r.get('volatility', 1.0)
+                mdd = r.get('mdd', 0)
+                if pd.isna(b): b = 1.0
+                if mdd < -0.25: return "🛑 剔除資產"
+                if s > 1.0 and b >= 1.0: return "🚀 成長型資產"
+                elif s > 1.0 and b < 1.0: return "🛡️ 防禦型資產"
+                elif s > 0 and v < 0.25: return "⚖️ 中性資產"
+                else: return "🟡 觀察資產"
+                
+            def get_signal(r):
+                tag = r.get('Quality', '')
+                return generate_custom_signal(r, "Bull" if "多頭" in regime else "Bear")
+                
+            my_port_df['資產屬性'] = my_port_df.apply(assign_bucket, axis=1)
+            my_port_df['操作訊號'] = my_port_df.apply(get_signal, axis=1)
             
-            counts = my_port_df['資產屬性'].value_counts()
-            if "多頭" in regime: t_grow, t_neu, t_def, t_cash, adv = 60, 25, 10, 5, "提高成長型資產配置至 60%，放大高 Sharpe 動能標的權重。"
-            else: t_grow, t_neu, t_def, t_cash, adv = 30, 30, 25, 15, "防禦優先，降低高 Beta 持倉，將防禦與中性資產拉高至 55%，並保留充裕現金。"
+            st.markdown("<h5 style='color: #F8FAFC;'>即時監控與交易訊號表</h5>", unsafe_allow_html=True)
+            st.dataframe(
+                my_port_df[['代號', '名稱', '資產屬性', 'sharpe', 'beta', 'mdd', '操作訊號']].sort_values('sharpe', ascending=False),
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "sharpe": st.column_config.NumberColumn("夏普值", format="%.2f"),
+                    "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+                    "mdd": st.column_config.NumberColumn("最大回撤", format="%.1f%%"),
+                }
+            )
             
-            st.markdown(f"<div class='cmd-box'><b>📝 情境推演建議：</b><br>{adv}</div>", unsafe_allow_html=True)
+            count_grow = len(my_port_df[my_port_df['資產屬性'] == "🚀 成長型資產"])
+            count_neu = len(my_port_df[my_port_df['資產屬性'] == "⚖️ 中性資產"])
+            count_def = len(my_port_df[my_port_df['資產屬性'] == "🛡️ 防禦型資產"])
+            count_bad = len(my_port_df[my_port_df['資產屬性'].isin(["🛑 剔除資產", "🟡 觀察資產"])])
+            
+            if "多頭" in regime:
+                t_grow, t_neu, t_def, t_cash = 60, 25, 10, 5
+                advice_text = "在多頭環境下，建議將**成長型資產配置提高至約 60%**，讓高 Sharpe 且具動能的標的持續放大獲利，同時避免過度分散。"
+            else:
+                t_grow, t_neu, t_def, t_cash = 30, 30, 25, 15
+                advice_text = "在空頭或震盪環境下，需優先控制回撤。建議主動降低高 Beta 標的持倉，**將防禦型與中性資產合計拉高至 55%**，並保留充裕現金。"
+            
+            st.markdown(f"<div class='cmd-box'><b>📝 情境推演建議：</b><br>{advice_text}</div>", unsafe_allow_html=True)
+            
             w_c1, w_c2, w_c3, w_c4 = st.columns(4)
-            for col, title, tgt, count in zip([w_c1, w_c2, w_c3, w_c4], ["🚀 成長型資產", "⚖️ 中性資產", "🛡️ 防禦型資產", "💵 現金部位"], [t_grow, t_neu, t_def, t_cash], [counts.get("🚀 成長型資產",0), counts.get("⚖️ 中性資產",0), counts.get("🛡️ 防禦型資產",0), "-"]):
-                col.markdown(f"<div style='background-color:#06090F; padding:15px; border-radius:4px; border:1px solid #1E293B;'><div style='color:#9CA3AF;'>{title}</div><div style='font-size:1.5rem; font-weight:bold; color:#F8FAFC;'>目標 {tgt}%</div><div style='color:#3B82F6;'>目前自選: {count}</div></div>", unsafe_allow_html=True)
+            
+            def render_bucket(col, title, current_count, target_pct):
+                warning = ""
+                if current_count == 0 and target_pct > 0:
+                    warning = f"<br><span style='color:#EF4444; font-size:0.8rem;'>⚠️ 缺乏此類資產，建議自清單納入</span>"
+                col.markdown(f"""
+                <div style='background-color:#06090F; padding:15px; border-radius:4px; border:1px solid #1E293B;'>
+                    <div style='color:#9CA3AF; font-size:0.9rem;'>{title}</div>
+                    <div style='font-size:1.5rem; font-weight:bold; color:#F8FAFC;'>目標 {target_pct}%</div>
+                    <div style='color:#3B82F6; font-size:0.85rem;'>目前自選檔數: {current_count} 檔</div>
+                    {warning}
+                </div>
+                """, unsafe_allow_html=True)
+
+            render_bucket(w_c1, "🚀 成長型資產", count_grow, t_grow)
+            render_bucket(w_c2, "⚖️ 中性資產", count_neu, t_neu)
+            render_bucket(w_c3, "🛡️ 防禦型資產", count_def, t_def)
+            render_bucket(w_c4, "💵 現金部位", "-", t_cash)
+            
+            if count_bad > 0:
+                st.warning(f"⚠️ 您的自選組合中有 {count_bad} 檔被判定為「劣勢/剔除」資產 (MDD 破防或夏普小於 0)，強烈建議依照上方訊號表進行減碼或停損！")
 
         # =========================================================
-        # 💼 系統嚴選：模型專屬效率前緣配置
+        # 💼 系統嚴選：自動化 10 檔模型專屬投資組合
         # =========================================================
         st.markdown("---")
-        st.subheader("💼 系統嚴選：模型專屬配置 (依總經多空動態調整)")
         
-        df_list = []
-        for c, h_df in hist_storage.items():
-            if h_df is not None and not h_df.empty and 'Close' in h_df.columns:
-                df_list.append(h_df['Close'].pct_change().rename(c))
-                
-        if df_list:
-            returns_df = pd.concat(df_list, axis=1).dropna(how='all').fillna(0)
-            cov_matrix = returns_df.cov() * 252 
-        else:
-            returns_df = pd.DataFrame()
-            cov_matrix = pd.DataFrame()
-        
-        if st.session_state['current_logic'] == "Quant":
+        if current_logic == "Quant":
+            st.subheader("💼 系統嚴選：【紀律長贏】效率前緣配置 (Automated MPT)")
+            st.caption("依據林哲群教授理論：MDD < -25% 剔除。強制將 MPT 組合波動率控制於 **10% ~ 15%**。系統使用「4-3-3 均衡降維演算法」，自動為您抽出 4檔成長 + 3檔防禦 + 3檔中性 的終極抗震組合。")
+            
+            df_list = []
+            for c, h_df in hist_storage.items():
+                if not h_df.empty and 'Close' in h_df.columns:
+                    ret = h_df['Close'].pct_change().rename(c)
+                    df_list.append(ret)
+            if df_list:
+                returns_df = pd.concat(df_list, axis=1).dropna(how='all').fillna(0)
+                cov_matrix = returns_df.cov() * 252 
+            else:
+                returns_df, cov_matrix = pd.DataFrame(), pd.DataFrame()
+            
             pool_df = final_df[(final_df['sharpe'] > 0) & (final_df['mdd'] >= -0.25)].copy()
-            if len(pool_df)==0: pool_df = final_df.head(10).copy()
-            pool_df['戰略定位'] = pool_df.apply(lambda r: "🚀 成長型資產" if r.get('sharpe',0)>1 and r.get('beta',1)>=1 else ("🛡️ 防禦型資產" if r.get('sharpe',0)>1 and r.get('beta',1)<1 else "⚖️ 中性資產"), axis=1)
-            
-            is_bull = "多頭" in regime
-            target_g = 5 if is_bull else 2
-            target_d = 2 if is_bull else 4
-            target_n = 3 if is_bull else 4
-            
-            f_codes = greedy_mpt_optimization(pool_df[pool_df['戰略定位']=="🚀 成長型資產"], returns_df, target_g, 'sharpe', target_vol_max=0.15)
-            f_codes = greedy_mpt_optimization(pool_df[pool_df['戰略定位']=="🛡️ 防禦型資產"], returns_df, target_d, 'sharpe', initial_selected=f_codes)
-            f_codes = greedy_mpt_optimization(pool_df[pool_df['戰略定位']=="⚖️ 中性資產"], returns_df, target_n, 'sharpe', initial_selected=f_codes)
-            if len(f_codes)<10: f_codes.extend(greedy_mpt_optimization(pool_df[~pool_df['代號'].isin(f_codes)], returns_df, 10-len(f_codes), 'sharpe', initial_selected=f_codes))
-            
-            port_df = pool_df[pool_df['代號'].isin(f_codes)].copy()
-            
-            def get_weight_text(row):
-                t = row['戰略定位']
-                if is_bull: return "10%~15%" if t == "🚀 成長型資產" else ("5%~8%" if t == "🛡️ 防禦型資產" else "8%~10%")
-                else: return "5%~8%" if t == "🚀 成長型資產" else ("12%~15%" if t == "🛡️ 防禦型資產" else "8%~12%")
-            
-            port_df['建議權重'] = port_df.apply(get_weight_text, axis=1)
-            
-            c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
-            with c1:
-                st.dataframe(port_df[['代號', '名稱', '戰略定位', 'sharpe', 'mdd', '建議權重']], hide_index=True, use_container_width=True)
-            with c2:
-                port_codes = port_df['代號'].tolist()
-                true_vol = 0
-                avg_sharpe = port_df['sharpe'].mean()
-                avg_vol = port_df['volatility'].mean() * 100
-                avg_beta = port_df['beta'].mean()
+            if len(pool_df) == 0: pool_df = final_df.head(10).copy()
                 
-                if not cov_matrix.empty and len(port_codes) > 1:
-                    valid_codes = [c for c in port_codes if c in cov_matrix.columns]
-                    if len(valid_codes) == len(port_codes):
-                        def get_num_weight(row):
-                            t = row['戰略定位']
-                            if is_bull: return 0.12 if t == "🚀 成長型資產" else (0.05 if t == "🛡️ 防禦型資產" else 0.10)
-                            else: return 0.05 if t == "🚀 成長型資產" else (0.125 if t == "🛡️ 防禦型資產" else 0.10)
+            def classify_quant_bucket(r):
+                s = r.get('sharpe', 0)
+                b = r.get('beta', 1.0)
+                v = r.get('volatility', 1.0)
+                if pd.isna(b): b = 1.0
+                if s > 1.0 and b >= 1.0: return "🚀 成長型資產"
+                elif s > 1.0 and b < 1.0: return "🛡️ 防禦型資產"
+                elif s > 0 and v < 0.25: return "⚖️ 中性資產"
+                else: return "🟡 其他觀察"
+            
+            pool_df['戰略定位'] = pool_df.apply(classify_quant_bucket, axis=1)
+            
+            grow_pool = pool_df[pool_df['戰略定位'] == "🚀 成長型資產"]
+            def_pool = pool_df[pool_df['戰略定位'] == "🛡️ 防禦型資產"]
+            neu_pool = pool_df[pool_df['戰略定位'] == "⚖️ 中性資產"]
+            
+            final_codes = greedy_mpt_optimization(grow_pool, returns_df, target_n=4, metric_col='sharpe', target_vol_max=0.15)
+            final_codes = greedy_mpt_optimization(def_pool, returns_df, target_n=3, metric_col='sharpe', initial_selected=final_codes, target_vol_max=0.15)
+            final_codes = greedy_mpt_optimization(neu_pool, returns_df, target_n=3, metric_col='sharpe', initial_selected=final_codes, target_vol_max=0.15)
+            
+            if len(final_codes) < 10:
+                remaining_pool = pool_df[~pool_df['代號'].isin(final_codes)]
+                extra_codes = greedy_mpt_optimization(remaining_pool, returns_df, target_n=10-len(final_codes), metric_col='sharpe', initial_selected=final_codes, target_vol_max=0.15)
+                final_codes.extend(extra_codes)
+                
+            port_df = pool_df[pool_df['代號'].isin(final_codes)].sort_values(by=['戰略定位', 'sharpe'], ascending=[False, False])
+            
+            if len(port_df) > 0:
+                c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
+                with c1:
+                    def get_suggested_weight(row):
+                        tag = row.get('戰略定位', '')
+                        s = row.get('sharpe', 0)
+                        v = row.get('volatility', 1.0)
+                        if tag == "🚀 成長型資產": return "12% ~ 15%" if (s > 2.0 and v < 0.3) else "8% ~ 12%"
+                        elif tag == "🛡️ 防禦型資產": return "8% ~ 12%"
+                        else: return "5% ~ 8%"
                         
-                        raw_w = np.array([get_num_weight(r) for _, r in port_df.iterrows()])
-                        weights = raw_w / np.sum(raw_w) if np.sum(raw_w) > 0 else np.ones(len(raw_w))/len(raw_w)
-                        true_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix.loc[valid_codes, valid_codes], weights))) * 100
-                
-                vol_color = "#10B981" if true_vol <= 15 else "#EF4444"
-                st.markdown(f"""
-                <div style='background-color:#1E293B; padding:15px; border-radius:4px; border:1px solid #334155;'>
-                    <h4 style='margin-top:0; color:#F8FAFC; border-bottom:1px solid #334155; padding-bottom:10px;'>MPT 效率前緣檢驗</h4>
-                    <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
-                        <span style='color:#9CA3AF;'>單檔平均波動率</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_vol:.1f}%</span>
+                    port_display = port_df[['代號', '名稱', '戰略定位', 'sharpe', 'volatility', 'beta']].copy()
+                    port_display['建議權重'] = port_df.apply(get_suggested_weight, axis=1)
+                    st.dataframe(
+                        port_display, hide_index=True, use_container_width=True,
+                        column_config={
+                            "戰略定位": st.column_config.TextColumn("戰略配置定位"),
+                            "sharpe": st.column_config.NumberColumn("夏普值", format="%.2f"),
+                            "volatility": st.column_config.NumberColumn("波動率", format="%.2f"),
+                            "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+                        }
+                    )
+                    
+                with c2:
+                    def get_numeric_weight(row):
+                        tag = row.get('戰略定位', '')
+                        s = row.get('sharpe', 0)
+                        v = row.get('volatility', 1.0)
+                        if tag == "🚀 成長型資產": return 0.135 if (s > 2.0 and v < 0.3) else 0.10
+                        elif tag == "🛡️ 防禦型資產": return 0.10
+                        else: return 0.065
+                        
+                    avg_sharpe = port_df['sharpe'].mean()
+                    avg_vol = port_df['volatility'].mean() * 100
+                    avg_beta = port_df['beta'].mean()
+                    
+                    port_codes = port_df['代號'].tolist()
+                    true_vol = avg_vol 
+                    if not cov_matrix.empty and len(port_codes) > 1:
+                        valid_codes = [c for c in port_codes if c in cov_matrix.columns]
+                        if len(valid_codes) == len(port_codes):
+                            raw_w = np.array(port_df.apply(get_numeric_weight, axis=1))
+                            weights = raw_w / np.sum(raw_w)
+                            port_variance = np.dot(weights.T, np.dot(cov_matrix.loc[valid_codes, valid_codes], weights))
+                            true_vol = np.sqrt(port_variance) * 100
+                    
+                    vol_color = "#10B981" if true_vol <= 15 else "#EF4444"
+                    st.markdown(f"""
+                    <div style='background-color:#1E293B; padding:15px; border-radius:4px; border:1px solid #334155;'>
+                        <h4 style='margin-top:0; color:#F8FAFC; border-bottom:1px solid #334155; padding-bottom:10px;'>MPT 效率前緣檢驗</h4>
+                        <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                            <span style='color:#9CA3AF;'>單檔平均波動率</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_vol:.1f}%</span>
+                        </div>
+                        <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                            <span style='color:#F8FAFC; font-weight:600;'>動態權重組合波動率</span><span style='color:{vol_color}; font-weight:bold; font-size:1.3rem;'>{true_vol:.1f}%</span>
+                        </div>
+                        <div style='font-size:0.8rem; color:#64748B; margin-bottom:12px;'>* 已依建議權重加權共變異數</div>
+                        <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                            <span style='color:#9CA3AF;'>組合總體 Beta</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_beta:.2f}</span>
+                        </div>
+                        <div style='display:flex; justify-content:space-between;'>
+                            <span style='color:#9CA3AF;'>組合平均夏普值</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_sharpe:.2f}</span>
+                        </div>
                     </div>
-                    <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
-                        <span style='color:#F8FAFC; font-weight:600;'>動態權重組合波動率</span><span style='color:{vol_color}; font-weight:bold; font-size:1.3rem;'>{true_vol:.1f}%</span>
-                    </div>
-                    <div style='font-size:0.8rem; color:#64748B; margin-bottom:12px;'>* 已依多空動態權重加權共變異數</div>
-                    <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
-                        <span style='color:#9CA3AF;'>組合總體 Beta</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_beta:.2f}</span>
-                    </div>
-                    <div style='display:flex; justify-content:space-between;'>
-                        <span style='color:#9CA3AF;'>組合平均夏普值</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_sharpe:.2f}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            with c3:
-                if not returns_df.empty and len(port_codes) > 1:
-                    v_codes = [c for c in port_codes if c in returns_df.columns]
-                    if len(v_codes) > 1:
-                        corr_mat = returns_df[v_codes].corr()
-                        corr_mat.columns = [str(c).split('.')[0] for c in v_codes]
-                        corr_mat.index = [str(c).split('.')[0] for c in v_codes]
-                        fig_corr = px.imshow(corr_mat, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, title="組合資產關聯熱力圖")
-                        fig_corr.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#9CA3AF', size=11), margin=dict(t=40, b=20, l=20, r=20), height=380)
-                        fig_corr.update_xaxes(type='category')
-                        fig_corr.update_yaxes(type='category')
-                        st.plotly_chart(fig_corr, use_container_width=True)
+                    """, unsafe_allow_html=True)
+                    
+                with c3:
+                    if not returns_df.empty and len(port_codes) > 1:
+                        valid_codes = [c for c in port_codes if c in returns_df.columns]
+                        if len(valid_codes) > 1:
+                            corr_matrix_port = returns_df[valid_codes].corr()
+                            short_codes = [c.replace('.TW', '').replace('.TWO', '') for c in valid_codes]
+                            corr_matrix_port.columns = short_codes
+                            corr_matrix_port.index = short_codes
+                            
+                            st.markdown("<div style='font-size:0.85rem; color:#9CA3AF; margin-bottom:5px;'>🔍 提示：滑鼠移至圖表右上角，點擊「⤢」可全螢幕放大</div>", unsafe_allow_html=True)
+                            fig_corr = px.imshow(corr_matrix_port, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, title="組合資產關聯熱力圖")
+                            fig_corr.update_layout(
+                                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                                font=dict(color='#9CA3AF', size=11), margin=dict(t=40, b=20, l=20, r=20), height=380,
+                                coloraxis_showscale=False
+                            )
+                            fig_corr.update_xaxes(type='category')
+                            fig_corr.update_yaxes(type='category')
+                            st.plotly_chart(fig_corr, use_container_width=True)
+
         else:
-            st.caption("依據巴菲特價值投資哲學：MDD < -25% 無情剔除！嚴選具備「高 ROE、高毛利、充沛自由現金流」的優質資產。系統將依據公司 ROE 的強弱，自動進行資金的集中最佳化權重分配。")
-            pool_df = final_df[(final_df['roe'] > 15) & (final_df['gross_margins'] > 40) & (final_df['mdd'] >= -0.25)].copy()
-            if len(pool_df)<10: pool_df = final_df[final_df['mdd'] >= -0.25].nlargest(10, 'Score').copy()
-            pool_df['戰略定位'] = pool_df.apply(lambda r: "🚀 成長護城河" if r.get('eps_growth',0)>15 else "💰 穩健價值", axis=1)
+            st.subheader("💼 系統嚴選：【巴菲特護城河】長期集中價值配置")
+            st.caption("依據巴菲特價值投資哲學：MDD < -25% 無情剔除！無視市場短期波動與 Beta，專注於企業長期經濟護城河。嚴選具備「高 ROE、高毛利、充沛自由現金流」的優質資產。")
             
-            is_bull = "多頭" in regime
-            target_g = 6 if is_bull else 3
-            target_v = 4 if is_bull else 7
+            pool_df = final_df[(final_df['roe'] > 0.15) & (final_df['gross_margins'] > 40) & (final_df['mdd'] >= -0.25)].copy()
+            if len(pool_df) < 10: pool_df = final_df[final_df['mdd'] >= -0.25].nlargest(10, 'Score').copy()
             
-            pool_g = pool_df[pool_df['戰略定位'] == "🚀 成長護城河"].sort_values('Score', ascending=False).head(target_g)
-            pool_v = pool_df[pool_df['戰略定位'] == "💰 穩健價值"].sort_values('Score', ascending=False).head(target_v)
-            port_df = pd.concat([pool_g, pool_v])
-            if len(port_df) < 10:
-                rem = pool_df[~pool_df['代號'].isin(port_df['代號'])].sort_values('Score', ascending=False).head(10 - len(port_df))
-                port_df = pd.concat([port_df, rem])
+            def classify_buffett(r):
+                g = r.get('eps_growth', 0)
+                if pd.isna(g): g = 0
+                return "🚀 成長護城河 (高EPS增長)" if g > 15.0 else "💰 穩健價值 (高ROE收息)"
             
-            valid_roe = port_df['roe'].apply(lambda x: x if pd.notna(x) and x > 0 else 0.1)
-            if not is_bull:
-                valid_roe = valid_roe * port_df['戰略定位'].apply(lambda x: 1.5 if x == "💰 穩健價值" else 1.0)
-            
-            total_wt = valid_roe.sum()
-            port_df['建議權重'] = (valid_roe / total_wt * 100).apply(lambda x: f"{x:.1f}%") if total_wt > 0 else "10.0%"
-            
-            c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
-            with c1:
-                st.dataframe(port_df[['代號', '名稱', '戰略定位', 'roe', 'gross_margins', 'pe', '建議權重']], hide_index=True, use_container_width=True)
-            with c2:
-                avg_roe = port_df['roe'].mean()
-                avg_gm = port_df['gross_margins'].mean()
-                avg_fcf = port_df['fcf_yield'].mean()
-                avg_pe = port_df['pe'].mean()
-                st.markdown(f"""
-                <div style='background-color:#1E293B; padding:15px; border-radius:4px; border:1px solid #334155;'>
-                    <h4 style='margin-top:0; color:#F8FAFC; border-bottom:1px solid #334155; padding-bottom:10px;'>護城河總體檢驗 (Moat Quality)</h4>
-                    <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
-                        <span style='color:#9CA3AF;'>組合平均 ROE</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_roe:.1f}%</span>
+            pool_df['戰略定位'] = pool_df.apply(classify_buffett, axis=1)
+            port_df = pool_df.sort_values(by='Score', ascending=False).head(10)
+            port_df = port_df.sort_values(by=['戰略定位', 'roe'], ascending=[False, False])
+
+            if len(port_df) > 0:
+                c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
+                with c1:
+                    port_display = port_df[['代號', '名稱', '戰略定位', 'roe', 'gross_margins', 'fcf_yield', 'pe']].copy()
+                    port_display['建議權重'] = f"{100.0/len(port_df):.1f}%"
+                    
+                    st.dataframe(
+                        port_display, hide_index=True, use_container_width=True,
+                        column_config={
+                            "戰略定位": st.column_config.TextColumn("戰略配置定位"),
+                            "roe": st.column_config.NumberColumn("ROE", format="%.2f"),
+                            "gross_margins": st.column_config.NumberColumn("毛利率", format="%.2f"),
+                            "fcf_yield": st.column_config.NumberColumn("FCF收益", format="%.2f"),
+                            "pe": st.column_config.NumberColumn("本益比", format="%.2f"),
+                        }
+                    )
+                    
+                with c2:
+                    avg_roe = port_df['roe'].mean() * 100
+                    avg_gm = port_df['gross_margins'].mean()
+                    avg_fcf = port_df['fcf_yield'].mean()
+                    avg_pe = port_df['pe'].mean()
+                    
+                    st.markdown(f"""
+                    <div style='background-color:#1E293B; padding:15px; border-radius:4px; border:1px solid #334155;'>
+                        <h4 style='margin-top:0; color:#F8FAFC; border-bottom:1px solid #334155; padding-bottom:10px;'>護城河總體檢驗 (Moat Quality)</h4>
+                        <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                            <span style='color:#9CA3AF;'>組合平均 ROE</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_roe:.1f}%</span>
+                        </div>
+                        <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                            <span style='color:#9CA3AF;'>組合平均毛利率</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_gm:.1f}%</span>
+                        </div>
+                        <div style='display:flex; justify-content:space-between; margin-bottom:12px;'>
+                            <span style='color:#9CA3AF;'>組合 FCF 收益率</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_fcf:.2f}%</span>
+                        </div>
+                        <div style='display:flex; justify-content:space-between;'>
+                            <span style='color:#9CA3AF;'>組合平均本益比</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_pe:.1f}x</span>
+                        </div>
                     </div>
-                    <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
-                        <span style='color:#9CA3AF;'>組合平均毛利率</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_gm:.1f}%</span>
-                    </div>
-                    <div style='display:flex; justify-content:space-between; margin-bottom:12px;'>
-                        <span style='color:#9CA3AF;'>組合 FCF 收益率</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_fcf:.2f}%</span>
-                    </div>
-                    <div style='display:flex; justify-content:space-between;'>
-                        <span style='color:#9CA3AF;'>組合平均本益比</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_pe:.1f}x</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            with c3:
-                moat_df = port_df[['代號', '名稱', 'roe', 'gross_margins']].copy()
-                moat_df['short_name'] = moat_df['代號'].astype(str).str.replace('.TW', '').str.replace('.TWO', '')
-                
-                fig_bar = go.Figure(data=[
-                    go.Bar(name='ROE (%)', x=moat_df['short_name'], y=moat_df['roe'], marker_color='#10B981'),
-                    go.Bar(name='毛利率 (%)', x=moat_df['short_name'], y=moat_df['gross_margins'], marker_color='#3B82F6')
-                ])
-                fig_bar.update_layout(
-                    title="組合企業護城河指標 (Quality Metrics)",
-                    barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                    font=dict(color='#9CA3AF', size=11), margin=dict(t=40, b=20, l=20, r=20), height=300,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
-                fig_bar.update_xaxes(type='category', showgrid=False, linecolor='#334155')
-                fig_bar.update_yaxes(showgrid=True, gridcolor='#1E293B')
-                st.plotly_chart(fig_bar, use_container_width=True)
+                    """, unsafe_allow_html=True)
+                    
+                with c3:
+                    moat_df = port_df[['代號', '名稱', 'roe', 'gross_margins']].copy()
+                    moat_df['roe'] = moat_df['roe'] * 100
+                    moat_df['short_name'] = moat_df['代號'].astype(str).str.replace('.TW', '').str.replace('.TWO', '')
+                    
+                    fig_bar = go.Figure(data=[
+                        go.Bar(name='ROE (%)', x=moat_df['short_name'], y=moat_df['roe'], marker_color='#10B981'),
+                        go.Bar(name='毛利率 (%)', x=moat_df['short_name'], y=moat_df['gross_margins'], marker_color='#3B82F6')
+                    ])
+                    fig_bar.update_layout(
+                        title="組合企業護城河指標 (Quality Metrics)",
+                        barmode='group',
+                        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                        font=dict(color='#9CA3AF', size=11), margin=dict(t=40, b=20, l=20, r=20), height=300,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    fig_bar.update_xaxes(type='category', showgrid=False, linecolor='#334155')
+                    fig_bar.update_yaxes(showgrid=True, gridcolor='#1E293B')
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+elif not st.session_state['scan_finished']:
+    st.info("👈 請在左側設定篩選維度，並點擊「啟動終端運算」。")
