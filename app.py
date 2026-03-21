@@ -172,31 +172,13 @@ def get_tw_stock_list():
     industry_map = {}
     code_to_industry = {}
     
-    # ✅ 加入產業數字轉中文對照表
-    twse_ind_map = {
-        "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
-        "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
-        "11": "橡膠工業", "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅",
-        "17": "金融保險", "18": "貿易百貨", "19": "綜合", "20": "其他產業", "21": "化學工業",
-        "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
-        "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
-        "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
-        "34": "電子商務業", "80": "管理股票",
-        "1": "水泥工業", "2": "食品工業", "3": "塑膠工業", "4": "紡織纖維", "5": "電機機械",
-        "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
-    }
-    
     try:
         res_twse = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", timeout=10, verify=False)
         if res_twse.status_code == 200:
             for item in res_twse.json():
                 code = str(item.get('公司代號', '')).strip()
                 name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind_raw = str(item.get('產業別', '其他')).strip()
-                
-                # ✅ 將數字板塊翻譯成中文
-                ind = twse_ind_map.get(ind_raw, ind_raw)
-                if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
+                ind = str(item.get('產業別', '其他')).strip()
                 
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TW"
@@ -213,11 +195,7 @@ def get_tw_stock_list():
             for item in res_tpex.json():
                 code = str(item.get('公司代號', '')).strip()
                 name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind_raw = str(item.get('產業別', '其他')).strip()
-                
-                # ✅ 將數字板塊翻譯成中文
-                ind = twse_ind_map.get(ind_raw, ind_raw)
-                if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
+                ind = str(item.get('產業別', '其他')).strip()
                 
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TWO"
@@ -238,11 +216,7 @@ def get_tw_stock_list():
                 if full not in stock_map:
                     stock_map[full] = f"{full} {info.name}"
                     group = info.group if info.group else info.type
-                    
-                    # ✅ 備援庫的數字板塊也翻譯成中文
-                    group = twse_ind_map.get(group, group)
-                    if not group or group.isdigit() or group.lower() == "none": group = "其他產業"
-                    
+                    if not group: group = "其他"
                     if group not in industry_map: industry_map[group] = []
                     if full not in industry_map[group]: industry_map[group].append(full)
                     code_to_industry[code] = group
@@ -278,20 +252,6 @@ def get_stock_data(symbol):
 
         def g(k): return info.get(k)
         
-        # ✅ 精準修復：EPS YoY 備援計算 (避免 Yahoo 不給 YoY)
-        eps_growth_val = g('earningsGrowth')
-        if eps_growth_val is None:
-            try:
-                fin = ticker.quarterly_financials
-                bal = ticker.quarterly_balance_sheet
-                if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
-                    eps_series = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
-                    eps_series = eps_series.dropna()
-                    if len(eps_series) >= 5:
-                        # 真正的 YoY：(最新季 - 去年同期) / 去年同期
-                        eps_growth_val = (eps_series.iloc[0] - eps_series.iloc[4]) / abs(eps_series.iloc[4])
-            except: pass
-        
         price = g('currentPrice') or g('previousClose')
         if (price is None or pd.isna(price)) and not hist.empty:
             price = float(hist['Close'].iloc[-1])
@@ -302,7 +262,7 @@ def get_stock_data(symbol):
             'peg': g('pegRatio'),
             'pb': g('priceToBook'),
             'rev_growth': g('revenueGrowth'),
-            'eps_growth': eps_growth_val, # 套用備援過的 YoY
+            'eps_growth': g('earningsGrowth'),
             'trailing_eps': g('trailingEps'), 
             'gross_margins': g('grossMargins'),
             'yield': g('dividendYield'),
@@ -397,12 +357,7 @@ def batch_scan_stocks(stock_list):
                     if not pd.isna(raw_eps): eps_growth = raw_eps * 100
                     raw_margin = get_val('gross_margins')
                     if not pd.isna(raw_margin): margins = raw_margin * 100
-                    
                     peg = get_val('peg')
-                    # ✅ 精準修復：如果 Yahoo 沒給 PEG，手動算出 PEG
-                    if pd.isna(peg) and not pd.isna(pe) and not pd.isna(eps_growth) and eps_growth != 0:
-                        peg = pe / eps_growth
-                        
                     beta_val = get_val('beta')
                     de_ratio = get_val('debt_to_equity')
                     m_cap = get_val('market_cap')
@@ -821,6 +776,13 @@ with st.sidebar:
         index=0, label_visibility="collapsed"
     )
     st.session_state['current_logic'] = "Quant" if "量化" in logic_choice_tw else "Buffett"
+    
+    st.subheader("總經市場情境切換")
+    regime = st.radio(
+        "選擇市場情境", 
+        ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"],
+        index=0, label_visibility="collapsed"
+    )
     st.markdown("---")
     
     scan_mode = st.radio("篩選維度", ["市場焦點策略", "產業族群板塊", "台灣 ETF 專區", "自訂代碼輸入"])
@@ -879,7 +841,7 @@ with st.sidebar:
 
     target_stocks = list(dict.fromkeys(target_stocks)) 
 
-    if st.button("🚀 啟動終端運算", type="primary", use_container_width=True):
+    if st.button("🚀 啟點終端運算", type="primary", use_container_width=True):
         st.session_state['scan_finished'] = False
         st.session_state['panel_page'] = 1 
         with st.spinner(f"正在擷取並運算 {len(target_stocks)} 檔標的數據..."):
@@ -1147,8 +1109,6 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         if not st.session_state['my_portfolio']:
             st.info("💡 目前您的自選戰略組合為空。請在上方「終端檢索清單」點選標的，並將其【➕ 加入自選戰略組合】以啟用監控與推演功能。")
         else:
-            regime = st.radio("🌍 切換總經市場情境 (Market Regime Engine)", ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], horizontal=True)
-            
             my_port_codes = list(st.session_state['my_portfolio'])
             my_port_df = final_df[final_df['代號'].isin(my_port_codes)].copy()
             
