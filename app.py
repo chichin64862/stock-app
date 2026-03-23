@@ -175,30 +175,13 @@ def get_tw_stock_list():
     industry_map = {}
     code_to_industry = {}
     
-    # ✅ 加入產業數字轉中文對照表
-    twse_ind_map = {
-        "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
-        "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
-        "11": "橡膠工業", "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅",
-        "17": "金融保險", "18": "貿易百貨", "19": "綜合", "20": "其他產業", "21": "化學工業",
-        "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
-        "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
-        "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
-        "34": "電子商務業", "80": "管理股票",
-        "1": "水泥工業", "2": "食品工業", "3": "塑膠工業", "4": "紡織纖維", "5": "電機機械",
-        "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
-    }
-    
     try:
         res_twse = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", timeout=10, verify=False)
         if res_twse.status_code == 200:
             for item in res_twse.json():
                 code = str(item.get('公司代號', '')).strip()
                 name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind_raw = str(item.get('產業別', '其他')).strip()
-                
-                ind = twse_ind_map.get(ind_raw, ind_raw)
-                if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
+                ind = str(item.get('產業別', '其他')).strip()
                 
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TW"
@@ -215,10 +198,7 @@ def get_tw_stock_list():
             for item in res_tpex.json():
                 code = str(item.get('公司代號', '')).strip()
                 name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind_raw = str(item.get('產業別', '其他')).strip()
-                
-                ind = twse_ind_map.get(ind_raw, ind_raw)
-                if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
+                ind = str(item.get('產業別', '其他')).strip()
                 
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TWO"
@@ -226,6 +206,26 @@ def get_tw_stock_list():
                     if ind not in industry_map: industry_map[ind] = []
                     if full not in industry_map[ind]: industry_map[ind].append(full)
                     code_to_industry[code] = ind
+    except: pass
+
+    # ✅ 整合使用者提供的興櫃 API 邏輯
+    try:
+        url_esb = "https://www.tpex.org.tw/openapi/v1/tpex_esb_latest_statistics"
+        headers_esb = {"User-Agent": "Mozilla/5.0"}
+        res_esb = requests.get(url_esb, headers=headers_esb, verify=False, timeout=10)
+        if res_esb.status_code == 200:
+            for item in res_esb.json():
+                code = str(item.get("SecuritiesCompanyCode", "")).strip()
+                name = str(item.get("CompanyName", "")).strip()
+                
+                if len(code) == 4 and code.isdigit():
+                    full = f"{code}.TWO"
+                    if full not in stock_map:
+                        stock_map[full] = f"{full} {name}"
+                        ind = "興櫃"
+                        if ind not in industry_map: industry_map[ind] = []
+                        industry_map[ind].append(full)
+                        code_to_industry[code] = ind
     except: pass
 
     # 備援與 ETF 補齊 (ETF 不在上述上市櫃基本資料內)
@@ -239,10 +239,7 @@ def get_tw_stock_list():
                 if full not in stock_map:
                     stock_map[full] = f"{full} {info.name}"
                     group = info.group if info.group else info.type
-                    
-                    group = twse_ind_map.get(group, group)
-                    if not group or group.isdigit() or group.lower() == "none": group = "其他產業"
-                    
+                    if not group: group = "其他"
                     if group not in industry_map: industry_map[group] = []
                     if full not in industry_map[group]: industry_map[group].append(full)
                     code_to_industry[code] = group
@@ -278,18 +275,6 @@ def get_stock_data(symbol):
 
         def g(k): return info.get(k)
         
-        eps_growth_val = g('earningsGrowth')
-        if eps_growth_val is None:
-            try:
-                fin = ticker.quarterly_financials
-                bal = ticker.quarterly_balance_sheet
-                if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
-                    eps_series = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
-                    eps_series = eps_series.dropna()
-                    if len(eps_series) >= 5:
-                        eps_growth_val = (eps_series.iloc[0] - eps_series.iloc[4]) / abs(eps_series.iloc[4])
-            except: pass
-        
         price = g('currentPrice') or g('previousClose')
         if (price is None or pd.isna(price)) and not hist.empty:
             price = float(hist['Close'].iloc[-1])
@@ -300,7 +285,7 @@ def get_stock_data(symbol):
             'peg': g('pegRatio'),
             'pb': g('priceToBook'),
             'rev_growth': g('revenueGrowth'),
-            'eps_growth': eps_growth_val, 
+            'eps_growth': g('earningsGrowth'),
             'trailing_eps': g('trailingEps'), 
             'gross_margins': g('grossMargins'),
             'yield': g('dividendYield'),
@@ -316,7 +301,7 @@ def get_stock_data(symbol):
 
 def sanitize_data(df):
     if df.empty: return df
-    if 'yield' in df.columns: df['yield'] = df['yield'].apply(lambda x: x/100 if pd.notna(x) and x > 20 else x)
+    if 'yield' in df.columns: df['yield'] = df['yield'].apply(lambda x: x/100 if x > 20 else x)
     return df
 
 def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
@@ -340,8 +325,6 @@ def batch_scan_stocks(stock_list):
     results = []
     history_map = {} 
     RISK_FREE_RATE = 0.015 
-    
-    twse_data, rev_data, mkt_ret = fetch_global_market_data()
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         # 解耦後，直接傳入 symbol
@@ -388,38 +371,16 @@ def batch_scan_stocks(stock_list):
                         v = y_data.get(key)
                         return float(v) if v is not None else np.nan
 
-                    pe = get_val('pe')
-                    if pd.isna(pe) and code in twse_data:
-                        tw_pe = twse_data[code].get('pe', np.nan)
-                        if pd.notna(tw_pe): pe = tw_pe
-                        
-                    pb = get_val('pb')
-                    if pd.isna(pb) and code in twse_data:
-                        tw_pb = twse_data[code].get('pb', np.nan)
-                        if pd.notna(tw_pb): pb = tw_pb
-                        
-                    roe = get_val('roe')
-                    
+                    pe = get_val('pe'); pb = get_val('pb'); roe = get_val('roe')
                     raw_dy = get_val('yield')
-                    if pd.isna(raw_dy) and code in twse_data:
-                        raw_dy = twse_data[code].get('yield', np.nan)
                     if not pd.isna(raw_dy): dy = raw_dy * 100 
-                    
                     raw_rev = get_val('rev_growth')
-                    if pd.isna(raw_rev) and code in rev_data:
-                        raw_rev = rev_data[code]
                     if not pd.isna(raw_rev): rev_growth = raw_rev * 100
-                    
                     raw_eps = get_val('eps_growth')
                     if not pd.isna(raw_eps): eps_growth = raw_eps * 100
-                    
                     raw_margin = get_val('gross_margins')
                     if not pd.isna(raw_margin): margins = raw_margin * 100
-                    
                     peg = get_val('peg')
-                    if pd.isna(peg) and pd.notna(pe) and pd.notna(eps_growth) and eps_growth != 0:
-                        peg = pe / (eps_growth / 100.0)
-                        
                     beta_val = get_val('beta')
                     de_ratio = get_val('debt_to_equity')
                     m_cap = get_val('market_cap')
@@ -427,7 +388,7 @@ def batch_scan_stocks(stock_list):
                     if not pd.isna(m_cap) and not pd.isna(fcf) and m_cap > 0:
                         fcf_yield = (fcf / m_cap) * 100
                     t_eps = get_val('trailing_eps')
-                    if pd.isna(t_eps) and pd.notna(pe) and pe > 0 and pd.notna(price):
+                    if pd.isna(t_eps) and not pd.isna(pe) and pe > 0 and not pd.isna(price):
                         t_eps = price / pe
                     if not pd.isna(price) and not pd.isna(t_eps):
                         implied_g = calculate_implied_growth(price, t_eps)
@@ -655,7 +616,7 @@ def create_pdf(stock_data):
     h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue)
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
     
-    logic_name = "量化風控模型" if st.session_state['current_logic'] == "Quant" else "价值護城河模型"
+    logic_name = "量化風控模型" if st.session_state['current_logic'] == "Quant" else "價值護城河模型"
     story.append(Paragraph(f"台股量化與價值分析終端 - 綜合洞察報告 [{logic_name}]", title_style))
     story.append(Paragraph(f"產出時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
@@ -1011,7 +972,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             with st.container():
                 industry_tag = f"<span class='tag tag-sector'>{row['industry']}</span>"
                 q_tag = row['Quality']
-                if q_tag in ["成長型資Asset", "防禦型資產", "護城河優良", "Quality"]: quality_tag = f"<span class='tag tag-moat'>💎 {q_tag}</span>"
+                if q_tag in ["成長型資產", "防禦型資產", "護城河優良", "Quality"]: quality_tag = f"<span class='tag tag-moat'>💎 {q_tag}</span>"
                 elif q_tag in ["中性資產"]: quality_tag = f"<span class='tag tag-logic'>⚖️ {q_tag}</span>"
                 elif q_tag in ["風險報酬不對等", "財務風險", "回撤過大 (剔除)"]: quality_tag = f"<span class='tag tag-risk'>⚠️ {q_tag}</span>"
                 else: quality_tag = ""
@@ -1159,15 +1120,14 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         # 🛠️ 戰略指揮中心：自選組合監控與多空情境推演
         # =========================================================
         st.markdown("---")
+        
+        # ✅ 使用 session_state 來儲存，確保即使收合，戰略指揮中心也能讀到相同的情境值
+        if 'regime_radio' not in st.session_state:
+            st.session_state['regime_radio'] = "📈 多頭市場 (Bull Market) - 放大獲利"
+        regime = st.session_state['regime_radio']
+
         st.subheader("🛠️ 戰略指揮中心：自選組合監控與多空情境推演")
         
-        # ✅ 精準修復 1：歸位多空按鈕！放回它原本該在的地方，並且獨立於「自選為空」的迴圈之外，以連動 MPT 模型
-        regime = st.radio(
-            "🌍 切換總經市場情境 (多空市場選擇，自動調整下方配置權重)", 
-            ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], 
-            horizontal=True
-        )
-
         if not st.session_state['my_portfolio']:
             st.info("💡 目前您的自選戰略組合為空。請在上方「終端檢索清單」點選標的，並將其【➕ 加入自選戰略組合】以啟用監控與推演功能。")
         else:
@@ -1238,6 +1198,14 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         # =========================================================
         st.markdown("---")
         
+        # ✅ 精準歸位 1：將多空市場按鈕放回投資組合上方
+        regime = st.radio(
+            "🌍 切換總經市場情境 (多空市場選擇，自動調整下方配置權重)", 
+            ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], 
+            horizontal=True,
+            key='regime_radio'
+        )
+        
         if current_logic == "Quant":
             st.subheader("💼 系統嚴選：【紀律長贏】效率前緣配置 (Automated MPT)")
             st.caption("依據林哲群教授理論：MDD < -25% 剔除。強制將 MPT 組合波動率控制於 **10% ~ 15%**。系統使用「4-3-3 均衡降維演算法」，自動為您抽出 4檔成長 + 3檔防禦 + 3檔中性 的終極抗震組合。")
@@ -1272,15 +1240,9 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             def_pool = pool_df[pool_df['戰略定位'] == "🛡️ 防禦型資產"]
             neu_pool = pool_df[pool_df['戰略定位'] == "⚖️ 中性資產"]
             
-            # ✅ 接收剛才外部的 regime 多空市場狀態
-            is_bull = "多頭" in regime
-            target_g = 5 if is_bull else 2
-            target_d = 2 if is_bull else 4
-            target_n = 3 if is_bull else 4
-            
-            final_codes = greedy_mpt_optimization(grow_pool, returns_df, target_n=target_g, metric_col='sharpe', target_vol_max=0.15)
-            final_codes = greedy_mpt_optimization(def_pool, returns_df, target_n=target_d, metric_col='sharpe', initial_selected=final_codes, target_vol_max=0.15)
-            final_codes = greedy_mpt_optimization(neu_pool, returns_df, target_n=target_n, metric_col='sharpe', initial_selected=final_codes, target_vol_max=0.15)
+            final_codes = greedy_mpt_optimization(grow_pool, returns_df, target_n=4, metric_col='sharpe', target_vol_max=0.15)
+            final_codes = greedy_mpt_optimization(def_pool, returns_df, target_n=3, metric_col='sharpe', initial_selected=final_codes, target_vol_max=0.15)
+            final_codes = greedy_mpt_optimization(neu_pool, returns_df, target_n=3, metric_col='sharpe', initial_selected=final_codes, target_vol_max=0.15)
             
             if len(final_codes) < 10:
                 remaining_pool = pool_df[~pool_df['代號'].isin(final_codes)]
@@ -1294,8 +1256,11 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 with c1:
                     def get_suggested_weight(row):
                         tag = row.get('戰略定位', '')
-                        if is_bull: return "10%~15%" if tag == "🚀 成長型資產" else ("5%~8%" if tag == "🛡️ 防禦型資產" else "8%~10%")
-                        else: return "5%~8%" if tag == "🚀 成長型資產" else ("12%~15%" if tag == "🛡️ 防禦型資產" else "8%~12%")
+                        s = row.get('sharpe', 0)
+                        v = row.get('volatility', 1.0)
+                        if tag == "🚀 成長型資產": return "12% ~ 15%" if (s > 2.0 and v < 0.3) else "8% ~ 12%"
+                        elif tag == "🛡️ 防禦型資產": return "8% ~ 12%"
+                        else: return "5% ~ 8%"
                         
                     port_display = port_df[['代號', '名稱', '戰略定位', 'sharpe', 'volatility', 'beta']].copy()
                     port_display['建議權重'] = port_df.apply(get_suggested_weight, axis=1)
@@ -1312,8 +1277,11 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 with c2:
                     def get_numeric_weight(row):
                         tag = row.get('戰略定位', '')
-                        if is_bull: return 0.12 if tag == "🚀 成長型資產" else (0.05 if tag == "🛡️ 防禦型資產" else 0.10)
-                        else: return 0.05 if tag == "🚀 成長型資產" else (0.125 if tag == "🛡️ 防禦型資產" else 0.10)
+                        s = row.get('sharpe', 0)
+                        v = row.get('volatility', 1.0)
+                        if tag == "🚀 成長型資產": return 0.135 if (s > 2.0 and v < 0.3) else 0.10
+                        elif tag == "🛡️ 防禦型資產": return 0.10
+                        else: return 0.065
                         
                     avg_sharpe = port_df['sharpe'].mean()
                     avg_vol = port_df['volatility'].mean() * 100
@@ -1339,7 +1307,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
                             <span style='color:#F8FAFC; font-weight:600;'>動態權重組合波動率</span><span style='color:{vol_color}; font-weight:bold; font-size:1.3rem;'>{true_vol:.1f}%</span>
                         </div>
-                        <div style='font-size:0.8rem; color:#64748B; margin-bottom:12px;'>* 已依多空動態權重加權共變異數</div>
+                        <div style='font-size:0.8rem; color:#64748B; margin-bottom:12px;'>* 已依建議權重加權共變異數</div>
                         <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
                             <span style='color:#9CA3AF;'>組合總體 Beta</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_beta:.2f}</span>
                         </div>
@@ -1382,72 +1350,69 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 return "🚀 成長護城河 (高EPS增長)" if g > 15.0 else "💰 穩健價值 (高ROE收息)"
             
             pool_df['戰略定位'] = pool_df.apply(classify_buffett, axis=1)
-            
-            # ✅ 接收剛才外部的 regime 多空市場狀態
-            is_bull = "多頭" in regime
-            target_g = 6 if is_bull else 3
-            target_v = 4 if is_bull else 7
-            
-            pool_g = pool_df[pool_df['戰略定位'] == "🚀 成長護城河"].sort_values('Score', ascending=False).head(target_g)
-            pool_v = pool_df[pool_df['戰略定位'] == "💰 穩健價值"].sort_values('Score', ascending=False).head(target_v)
-            port_df = pd.concat([pool_g, pool_v])
-            if len(port_df) < 10:
-                rem = pool_df[~pool_df['代號'].isin(port_df['代號'])].sort_values('Score', ascending=False).head(10 - len(port_df))
-                port_df = pd.concat([port_df, rem])
-            
-            valid_roe = port_df['roe'].apply(lambda x: x if pd.notna(x) and x > 0 else 0.1)
-            if not is_bull:
-                valid_roe = valid_roe * port_df['戰略定位'].apply(lambda x: 1.5 if x == "💰 穩健價值" else 1.0)
-            
-            total_wt = valid_roe.sum()
-            port_df['建議權重'] = (valid_roe / total_wt * 100).apply(lambda x: f"{x:.1f}%") if total_wt > 0 else "10.0%"
-            
-            c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
-            with c1:
-                st.dataframe(port_df[['代號', '名稱', '戰略定位', 'roe', 'gross_margins', 'pe', '建議權重']], hide_index=True, use_container_width=True)
-            with c2:
-                avg_roe = port_df['roe'].mean() * 100
-                avg_gm = port_df['gross_margins'].mean()
-                avg_fcf = port_df['fcf_yield'].mean()
-                avg_pe = port_df['pe'].mean()
-                
-                st.markdown(f"""
-                <div style='background-color:#1E293B; padding:15px; border-radius:4px; border:1px solid #334155;'>
-                    <h4 style='margin-top:0; color:#F8FAFC; border-bottom:1px solid #334155; padding-bottom:10px;'>護城河總體檢驗 (Moat Quality)</h4>
-                    <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
-                        <span style='color:#9CA3AF;'>組合平均 ROE</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_roe:.1f}%</span>
+            port_df = pool_df.sort_values(by='Score', ascending=False).head(10)
+            port_df = port_df.sort_values(by=['戰略定位', 'roe'], ascending=[False, False])
+
+            if len(port_df) > 0:
+                c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
+                with c1:
+                    port_display = port_df[['代號', '名稱', '戰略定位', 'roe', 'gross_margins', 'fcf_yield', 'pe']].copy()
+                    port_display['建議權重'] = f"{100.0/len(port_df):.1f}%"
+                    
+                    st.dataframe(
+                        port_display, hide_index=True, use_container_width=True,
+                        column_config={
+                            "戰略定位": st.column_config.TextColumn("戰略配置定位"),
+                            "roe": st.column_config.NumberColumn("ROE", format="%.2f"),
+                            "gross_margins": st.column_config.NumberColumn("毛利率", format="%.2f"),
+                            "fcf_yield": st.column_config.NumberColumn("FCF收益", format="%.2f"),
+                            "pe": st.column_config.NumberColumn("本益比", format="%.2f"),
+                        }
+                    )
+                    
+                with c2:
+                    avg_roe = port_df['roe'].mean() * 100
+                    avg_gm = port_df['gross_margins'].mean()
+                    avg_fcf = port_df['fcf_yield'].mean()
+                    avg_pe = port_df['pe'].mean()
+                    
+                    st.markdown(f"""
+                    <div style='background-color:#1E293B; padding:15px; border-radius:4px; border:1px solid #334155;'>
+                        <h4 style='margin-top:0; color:#F8FAFC; border-bottom:1px solid #334155; padding-bottom:10px;'>護城河總體檢驗 (Moat Quality)</h4>
+                        <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                            <span style='color:#9CA3AF;'>組合平均 ROE</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_roe:.1f}%</span>
+                        </div>
+                        <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
+                            <span style='color:#9CA3AF;'>組合平均毛利率</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_gm:.1f}%</span>
+                        </div>
+                        <div style='display:flex; justify-content:space-between; margin-bottom:12px;'>
+                            <span style='color:#9CA3AF;'>組合 FCF 收益率</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_fcf:.2f}%</span>
+                        </div>
+                        <div style='display:flex; justify-content:space-between;'>
+                            <span style='color:#9CA3AF;'>組合平均本益比</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_pe:.1f}x</span>
+                        </div>
                     </div>
-                    <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
-                        <span style='color:#9CA3AF;'>組合平均毛利率</span><span style='color:#10B981; font-weight:bold; font-size:1.1rem;'>{avg_gm:.1f}%</span>
-                    </div>
-                    <div style='display:flex; justify-content:space-between; margin-bottom:12px;'>
-                        <span style='color:#9CA3AF;'>組合 FCF 收益率</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_fcf:.2f}%</span>
-                    </div>
-                    <div style='display:flex; justify-content:space-between;'>
-                        <span style='color:#9CA3AF;'>組合平均本益比</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_pe:.1f}x</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-            with c3:
-                moat_df = port_df[['代號', '名稱', 'roe', 'gross_margins']].copy()
-                moat_df['roe'] = moat_df['roe'] * 100
-                moat_df['short_name'] = moat_df['代號'].astype(str).str.replace('.TW', '').str.replace('.TWO', '')
-                
-                fig_bar = go.Figure(data=[
-                    go.Bar(name='ROE (%)', x=moat_df['short_name'], y=moat_df['roe'], marker_color='#10B981'),
-                    go.Bar(name='毛利率 (%)', x=moat_df['short_name'], y=moat_df['gross_margins'], marker_color='#3B82F6')
-                ])
-                fig_bar.update_layout(
-                    title="組合企業護城河指標 (Quality Metrics)",
-                    barmode='group',
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                    font=dict(color='#9CA3AF', size=11), margin=dict(t=40, b=20, l=20, r=20), height=300,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
-                fig_bar.update_xaxes(type='category', showgrid=False, linecolor='#334155')
-                fig_bar.update_yaxes(showgrid=True, gridcolor='#1E293B')
-                st.plotly_chart(fig_bar, use_container_width=True)
+                    """, unsafe_allow_html=True)
+                    
+                with c3:
+                    moat_df = port_df[['代號', '名稱', 'roe', 'gross_margins']].copy()
+                    moat_df['roe'] = moat_df['roe'] * 100
+                    moat_df['short_name'] = moat_df['代號'].astype(str).str.replace('.TW', '').str.replace('.TWO', '')
+                    
+                    fig_bar = go.Figure(data=[
+                        go.Bar(name='ROE (%)', x=moat_df['short_name'], y=moat_df['roe'], marker_color='#10B981'),
+                        go.Bar(name='毛利率 (%)', x=moat_df['short_name'], y=moat_df['gross_margins'], marker_color='#3B82F6')
+                    ])
+                    fig_bar.update_layout(
+                        title="組合企業護城河指標 (Quality Metrics)",
+                        barmode='group',
+                        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                        font=dict(color='#9CA3AF', size=11), margin=dict(t=40, b=20, l=20, r=20), height=300,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    fig_bar.update_xaxes(type='category', showgrid=False, linecolor='#334155')
+                    fig_bar.update_yaxes(showgrid=True, gridcolor='#1E293B')
+                    st.plotly_chart(fig_bar, use_container_width=True)
 
 elif not st.session_state['scan_finished']:
     st.info("👈 請在左側設定篩選維度，並點擊「啟動終端運算」。")
