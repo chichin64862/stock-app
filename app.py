@@ -13,6 +13,8 @@ import time
 from datetime import datetime
 import urllib.request
 import html
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # --- 關閉 SSL 驗證警告 (針對證交所 API) ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -122,6 +124,7 @@ if 'history_storage' not in st.session_state: st.session_state['history_storage'
 if 'ai_results' not in st.session_state: st.session_state['ai_results'] = {}
 if 'current_logic' not in st.session_state: st.session_state['current_logic'] = "Quant" 
 if 'panel_page' not in st.session_state: st.session_state['panel_page'] = 1 
+if 'list_page' not in st.session_state: st.session_state['list_page'] = 1 
 if 'my_portfolio' not in st.session_state: st.session_state['my_portfolio'] = []
 
 # --- 4. API Key ---
@@ -172,31 +175,13 @@ def get_tw_stock_list():
     industry_map = {}
     code_to_industry = {}
     
-    # ✅ 加入產業數字轉中文對照表
-    twse_ind_map = {
-        "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
-        "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
-        "11": "橡膠工業", "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅",
-        "17": "金融保險", "18": "貿易百貨", "19": "綜合", "20": "其他產業", "21": "化學工業",
-        "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
-        "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
-        "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
-        "34": "電子商務業", "80": "管理股票",
-        "1": "水泥工業", "2": "食品工業", "3": "塑膠工業", "4": "紡織纖維", "5": "電機機械",
-        "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
-    }
-    
     try:
         res_twse = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", timeout=10, verify=False)
         if res_twse.status_code == 200:
             for item in res_twse.json():
                 code = str(item.get('公司代號', '')).strip()
                 name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind_raw = str(item.get('產業別', '其他')).strip()
-                
-                # ✅ 將數字板塊翻譯成中文
-                ind = twse_ind_map.get(ind_raw, ind_raw)
-                if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
+                ind = str(item.get('產業別', '其他')).strip()
                 
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TW"
@@ -213,11 +198,7 @@ def get_tw_stock_list():
             for item in res_tpex.json():
                 code = str(item.get('公司代號', '')).strip()
                 name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind_raw = str(item.get('產業別', '其他')).strip()
-                
-                # ✅ 將數字板塊翻譯成中文
-                ind = twse_ind_map.get(ind_raw, ind_raw)
-                if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
+                ind = str(item.get('產業別', '其他')).strip()
                 
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TWO"
@@ -225,6 +206,26 @@ def get_tw_stock_list():
                     if ind not in industry_map: industry_map[ind] = []
                     if full not in industry_map[ind]: industry_map[ind].append(full)
                     code_to_industry[code] = ind
+    except: pass
+
+    # ✅ 整合使用者提供的興櫃 API 邏輯
+    try:
+        url_esb = "https://www.tpex.org.tw/openapi/v1/tpex_esb_latest_statistics"
+        headers_esb = {"User-Agent": "Mozilla/5.0"}
+        res_esb = requests.get(url_esb, headers=headers_esb, verify=False, timeout=10)
+        if res_esb.status_code == 200:
+            for item in res_esb.json():
+                code = str(item.get("SecuritiesCompanyCode", "")).strip()
+                name = str(item.get("CompanyName", "")).strip()
+                
+                if len(code) == 4 and code.isdigit():
+                    full = f"{code}.TWO"
+                    if full not in stock_map:
+                        stock_map[full] = f"{full} {name}"
+                        ind = "興櫃"
+                        if ind not in industry_map: industry_map[ind] = []
+                        industry_map[ind].append(full)
+                        code_to_industry[code] = ind
     except: pass
 
     # 備援與 ETF 補齊 (ETF 不在上述上市櫃基本資料內)
@@ -238,11 +239,7 @@ def get_tw_stock_list():
                 if full not in stock_map:
                     stock_map[full] = f"{full} {info.name}"
                     group = info.group if info.group else info.type
-                    
-                    # ✅ 備援庫的數字板塊也翻譯成中文
-                    group = twse_ind_map.get(group, group)
-                    if not group or group.isdigit() or group.lower() == "none": group = "其他產業"
-                    
+                    if not group: group = "其他"
                     if group not in industry_map: industry_map[group] = []
                     if full not in industry_map[group]: industry_map[group].append(full)
                     code_to_industry[code] = group
@@ -278,20 +275,6 @@ def get_stock_data(symbol):
 
         def g(k): return info.get(k)
         
-        # ✅ 精準修復：EPS YoY 備援計算 (避免 Yahoo 不給 YoY)
-        eps_growth_val = g('earningsGrowth')
-        if eps_growth_val is None:
-            try:
-                fin = ticker.quarterly_financials
-                bal = ticker.quarterly_balance_sheet
-                if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
-                    eps_series = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
-                    eps_series = eps_series.dropna()
-                    if len(eps_series) >= 5:
-                        # 真正的 YoY：(最新季 - 去年同期) / 去年同期
-                        eps_growth_val = (eps_series.iloc[0] - eps_series.iloc[4]) / abs(eps_series.iloc[4])
-            except: pass
-        
         price = g('currentPrice') or g('previousClose')
         if (price is None or pd.isna(price)) and not hist.empty:
             price = float(hist['Close'].iloc[-1])
@@ -302,7 +285,7 @@ def get_stock_data(symbol):
             'peg': g('pegRatio'),
             'pb': g('priceToBook'),
             'rev_growth': g('revenueGrowth'),
-            'eps_growth': eps_growth_val, # 套用備援過的 YoY
+            'eps_growth': g('earningsGrowth'),
             'trailing_eps': g('trailingEps'), 
             'gross_margins': g('grossMargins'),
             'yield': g('dividendYield'),
@@ -397,12 +380,7 @@ def batch_scan_stocks(stock_list):
                     if not pd.isna(raw_eps): eps_growth = raw_eps * 100
                     raw_margin = get_val('gross_margins')
                     if not pd.isna(raw_margin): margins = raw_margin * 100
-                    
                     peg = get_val('peg')
-                    # ✅ 精準修復：如果 Yahoo 沒給 PEG，手動算出 PEG
-                    if pd.isna(peg) and not pd.isna(pe) and not pd.isna(eps_growth) and eps_growth != 0:
-                        peg = pe / eps_growth
-                        
                     beta_val = get_val('beta')
                     de_ratio = get_val('debt_to_equity')
                     m_cap = get_val('market_cap')
@@ -1142,13 +1120,17 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         # 🛠️ 戰略指揮中心：自選組合監控與多空情境推演
         # =========================================================
         st.markdown("---")
+        
+        # ✅ 使用 session_state 來儲存，確保即使收合，戰略指揮中心也能讀到相同的情境值
+        if 'regime_radio' not in st.session_state:
+            st.session_state['regime_radio'] = "📈 多頭市場 (Bull Market) - 放大獲利"
+        regime = st.session_state['regime_radio']
+
         st.subheader("🛠️ 戰略指揮中心：自選組合監控與多空情境推演")
         
         if not st.session_state['my_portfolio']:
             st.info("💡 目前您的自選戰略組合為空。請在上方「終端檢索清單」點選標的，並將其【➕ 加入自選戰略組合】以啟用監控與推演功能。")
         else:
-            regime = st.radio("🌍 切換總經市場情境 (Market Regime Engine)", ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], horizontal=True)
-            
             my_port_codes = list(st.session_state['my_portfolio'])
             my_port_df = final_df[final_df['代號'].isin(my_port_codes)].copy()
             
@@ -1182,19 +1164,11 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                 }
             )
             
-            count_grow = len(my_port_df[my_port_df['資產屬性'] == "🚀 成長型資產"])
-            count_neu = len(my_port_df[my_port_df['資產屬性'] == "⚖️ 中性資產"])
-            count_def = len(my_port_df[my_port_df['資產屬性'] == "🛡️ 防禦型資產"])
-            count_bad = len(my_port_df[my_port_df['資產屬性'].isin(["🛑 剔除資產", "🟡 觀察資產"])])
+            counts = my_port_df['資產屬性'].value_counts()
+            if "多頭" in regime: t_grow, t_neu, t_def, t_cash, adv = 60, 25, 10, 5, "提高成長型資產配置至 60%，放大高 Sharpe 動能標的權重。"
+            else: t_grow, t_neu, t_def, t_cash, adv = 30, 30, 25, 15, "防禦優先，降低高 Beta 持倉，將防禦與中性資產拉高至 55%，並保留充裕現金。"
             
-            if "多頭" in regime:
-                t_grow, t_neu, t_def, t_cash = 60, 25, 10, 5
-                advice_text = "在多頭環境下，建議將**成長型資產配置提高至約 60%**，讓高 Sharpe 且具動能的標的持續放大獲利，同時避免過度分散。"
-            else:
-                t_grow, t_neu, t_def, t_cash = 30, 30, 25, 15
-                advice_text = "在空頭或震盪環境下，需優先控制回撤。建議主動降低高 Beta 標的持倉，**將防禦型與中性資產合計拉高至 55%**，並保留充裕現金。"
-            
-            st.markdown(f"<div class='cmd-box'><b>📝 情境推演建議：</b><br>{advice_text}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='cmd-box'><b>📝 情境推演建議：</b><br>{adv}</div>", unsafe_allow_html=True)
             
             w_c1, w_c2, w_c3, w_c4 = st.columns(4)
             
@@ -1223,6 +1197,14 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         # 💼 系統嚴選：自動化 10 檔模型專屬投資組合
         # =========================================================
         st.markdown("---")
+        
+        # ✅ 精準歸位 1：將多空市場按鈕放回投資組合上方
+        regime = st.radio(
+            "🌍 切換總經市場情境 (多空市場選擇，自動調整下方配置權重)", 
+            ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], 
+            horizontal=True,
+            key='regime_radio'
+        )
         
         if current_logic == "Quant":
             st.subheader("💼 系統嚴選：【紀律長贏】效率前緣配置 (Automated MPT)")
