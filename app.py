@@ -13,6 +13,8 @@ import time
 from datetime import datetime
 import urllib.request
 import html
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # --- 關閉 SSL 驗證警告 (針對證交所 API) ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -173,13 +175,30 @@ def get_tw_stock_list():
     industry_map = {}
     code_to_industry = {}
     
+    # ✅ 加入產業數字轉中文對照表
+    twse_ind_map = {
+        "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
+        "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
+        "11": "橡膠工業", "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅",
+        "17": "金融保險", "18": "貿易百貨", "19": "綜合", "20": "其他產業", "21": "化學工業",
+        "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
+        "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
+        "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
+        "34": "電子商務業", "80": "管理股票",
+        "1": "水泥工業", "2": "食品工業", "3": "塑膠工業", "4": "紡織纖維", "5": "電機機械",
+        "6": "電器電纜", "7": "化學工業", "8": "玻璃陶瓷", "9": "造紙工業"
+    }
+    
     try:
         res_twse = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", timeout=10, verify=False)
         if res_twse.status_code == 200:
             for item in res_twse.json():
                 code = str(item.get('公司代號', '')).strip()
                 name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind = str(item.get('產業別', '其他')).strip()
+                ind_raw = str(item.get('產業別', '其他')).strip()
+                
+                ind = twse_ind_map.get(ind_raw, ind_raw)
+                if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
                 
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TW"
@@ -196,7 +215,10 @@ def get_tw_stock_list():
             for item in res_tpex.json():
                 code = str(item.get('公司代號', '')).strip()
                 name = str(item.get('公司簡稱', item.get('公司名稱', ''))).strip()
-                ind = str(item.get('產業別', '其他')).strip()
+                ind_raw = str(item.get('產業別', '其他')).strip()
+                
+                ind = twse_ind_map.get(ind_raw, ind_raw)
+                if ind.isdigit() or ind.lower() == "none": ind = "其他產業"
                 
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TWO"
@@ -217,7 +239,10 @@ def get_tw_stock_list():
                 if full not in stock_map:
                     stock_map[full] = f"{full} {info.name}"
                     group = info.group if info.group else info.type
-                    if not group: group = "其他"
+                    
+                    group = twse_ind_map.get(group, group)
+                    if not group or group.isdigit() or group.lower() == "none": group = "其他產業"
+                    
                     if group not in industry_map: industry_map[group] = []
                     if full not in industry_map[group]: industry_map[group].append(full)
                     code_to_industry[code] = group
@@ -253,6 +278,18 @@ def get_stock_data(symbol):
 
         def g(k): return info.get(k)
         
+        eps_growth_val = g('earningsGrowth')
+        if eps_growth_val is None:
+            try:
+                fin = ticker.quarterly_financials
+                bal = ticker.quarterly_balance_sheet
+                if "Net Income" in fin.index and "Ordinary Shares Number" in bal.index:
+                    eps_series = fin.loc["Net Income"] / bal.loc["Ordinary Shares Number"]
+                    eps_series = eps_series.dropna()
+                    if len(eps_series) >= 5:
+                        eps_growth_val = (eps_series.iloc[0] - eps_series.iloc[4]) / abs(eps_series.iloc[4])
+            except: pass
+        
         price = g('currentPrice') or g('previousClose')
         if (price is None or pd.isna(price)) and not hist.empty:
             price = float(hist['Close'].iloc[-1])
@@ -263,7 +300,7 @@ def get_stock_data(symbol):
             'peg': g('pegRatio'),
             'pb': g('priceToBook'),
             'rev_growth': g('revenueGrowth'),
-            'eps_growth': g('earningsGrowth'),
+            'eps_growth': eps_growth_val, 
             'trailing_eps': g('trailingEps'), 
             'gross_margins': g('grossMargins'),
             'yield': g('dividendYield'),
@@ -279,7 +316,7 @@ def get_stock_data(symbol):
 
 def sanitize_data(df):
     if df.empty: return df
-    if 'yield' in df.columns: df['yield'] = df['yield'].apply(lambda x: x/100 if x > 20 else x)
+    if 'yield' in df.columns: df['yield'] = df['yield'].apply(lambda x: x/100 if pd.notna(x) and x > 20 else x)
     return df
 
 def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
@@ -297,46 +334,6 @@ def calculate_implied_growth(price, eps, r=0.10, terminal_g=0.02, years=10):
         else: low = mid
     return (low + high) / 2
 
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_global_market_data():
-    twse_data = {}
-    rev_data = {}
-    mkt_ret = pd.Series(dtype=float)
-    
-    for mkt_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap14_L", "https://www.tpex.org.tw/openapi/v1/t187ap14_O"]:
-        try:
-            res = requests.get(mkt_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
-            if res.status_code == 200:
-                for item in res.json():
-                    pe = safe_float(item.get("本益比"))
-                    pb = safe_float(item.get("股價淨值比"))
-                    yld = safe_float(item.get("殖利率(%)"))
-                    twse_data[str(item.get("證券代號"))] = {
-                        "pe": pe if pd.notna(pe) and pe > 0 else np.nan,
-                        "pb": pb if pd.notna(pb) else np.nan,
-                        "yield": yld / 100.0 if pd.notna(yld) else np.nan
-                    }
-        except: pass
-
-    for rev_url in ["https://openapi.twse.com.tw/v1/opendata/t187ap05_L", "https://www.tpex.org.tw/openapi/v1/t187ap05_O"]:
-        try:
-            res_rev = requests.get(rev_url, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=10)
-            if res_rev.status_code == 200:
-                for item in res_rev.json():
-                    yoy_str = item.get("去年同月增減(%)", item.get("營業收入-去年同月增減(%)"))
-                    yoy = safe_float(yoy_str)
-                    code_str = str(item.get("公司代號", "")).strip()
-                    if pd.notna(yoy) and code_str:
-                        rev_data[code_str] = yoy / 100.0
-        except: pass
-
-    try:
-        market = yf.Ticker("^TWII").history(period="6mo")
-        if not market.empty: mkt_ret = market['Close'].pct_change().dropna()
-    except: pass
-
-    return twse_data, rev_data, mkt_ret
-
 # --- 7. 批量掃描 ---
 @st.cache_data(ttl=1800, show_spinner=False) # 縮短快取時間，強迫更新
 def batch_scan_stocks(stock_list):
@@ -344,7 +341,6 @@ def batch_scan_stocks(stock_list):
     history_map = {} 
     RISK_FREE_RATE = 0.015 
     
-    # ✅ 呼叫大盤與官方備援資料，為後續 P/E 與 PEG 缺失做準備
     twse_data, rev_data, mkt_ret = fetch_global_market_data()
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
@@ -393,7 +389,6 @@ def batch_scan_stocks(stock_list):
                         return float(v) if v is not None else np.nan
 
                     pe = get_val('pe')
-                    # ✅ 精準修復 1：Yahoo 若沒給 P/E，立刻拿證交所的真實 P/E 補上
                     if pd.isna(pe) and code in twse_data:
                         tw_pe = twse_data[code].get('pe', np.nan)
                         if pd.notna(tw_pe): pe = tw_pe
@@ -422,9 +417,8 @@ def batch_scan_stocks(stock_list):
                     if not pd.isna(raw_margin): margins = raw_margin * 100
                     
                     peg = get_val('peg')
-                    # ✅ 精準修復 2：Yahoo 沒給 PEG，直接使用標準公式 (本益比 / EPS成長率) 計算出真實 PEG
                     if pd.isna(peg) and pd.notna(pe) and pd.notna(eps_growth) and eps_growth != 0:
-                        peg = pe / eps_growth
+                        peg = pe / (eps_growth / 100.0)
                         
                     beta_val = get_val('beta')
                     de_ratio = get_val('debt_to_equity')
@@ -565,6 +559,7 @@ def calculate_score(df, logic_type="Quant"):
     df['Quality'] = quality_tags
     return df.sort_values('Score', ascending=False), df_norm
 
+# --- 9. 繪圖函數 ---
 def get_radar_data(df_norm_row):
     cats = {'價值估值': 0, '成長動能': 0, '趨勢強度': 0, '風險控管': 0, '財務體質': 0}
     counts = {'價值估值': 0, '成長動能': 0, '趨勢強度': 0, '風險控管': 0, '財務體質': 0}
@@ -621,6 +616,7 @@ def plot_trend_dashboard(title, history_df, ma_bias):
     )
     return fig
 
+# --- 10. AI 與 PDF ---
 def get_valid_model(key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
@@ -643,6 +639,7 @@ def call_ai(prompt):
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
     try:
+        # AI call does not need the custom yfinance session
         r = requests.post(url, headers=headers, json=data, timeout=60)
         if r.status_code == 200: return r.json()['candidates'][0]['content']['parts'][0]['text']
         else: return f"分析服務暫時無回應 (代碼: {r.status_code})"
@@ -658,7 +655,7 @@ def create_pdf(stock_data):
     h2_style = ParagraphStyle('H2', parent=styles['Heading2'], fontName=font_name, fontSize=14, spaceBefore=10, spaceAfter=10, textColor=colors.darkblue)
     normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
     
-    logic_name = "量化風控模型" if st.session_state['current_logic'] == "Quant" else "價值護城河模型"
+    logic_name = "量化風控模型" if st.session_state['current_logic'] == "Quant" else "价值護城河模型"
     story.append(Paragraph(f"台股量化與價值分析終端 - 綜合洞察報告 [{logic_name}]", title_style))
     story.append(Paragraph(f"產出時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Spacer(1, 10))
@@ -1014,7 +1011,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             with st.container():
                 industry_tag = f"<span class='tag tag-sector'>{row['industry']}</span>"
                 q_tag = row['Quality']
-                if q_tag in ["成長型資產", "防禦型資產", "護城河優良", "Quality"]: quality_tag = f"<span class='tag tag-moat'>💎 {q_tag}</span>"
+                if q_tag in ["成長型資Asset", "防禦型資產", "護城河優良", "Quality"]: quality_tag = f"<span class='tag tag-moat'>💎 {q_tag}</span>"
                 elif q_tag in ["中性資產"]: quality_tag = f"<span class='tag tag-logic'>⚖️ {q_tag}</span>"
                 elif q_tag in ["風險報酬不對等", "財務風險", "回撤過大 (剔除)"]: quality_tag = f"<span class='tag tag-risk'>⚠️ {q_tag}</span>"
                 else: quality_tag = ""
@@ -1164,7 +1161,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
         st.markdown("---")
         st.subheader("🛠️ 戰略指揮中心：自選組合監控與多空情境推演")
         
-        # ✅ 把按鈕乖乖放回「戰略指揮中心」的正下方，並從迴圈拉出確保完美連動
+        # ✅ 精準修復 1：歸位多空按鈕！放回它原本該在的地方，並且獨立於「自選為空」的迴圈之外，以連動 MPT 模型
         regime = st.radio(
             "🌍 切換總經市場情境 (多空市場選擇，自動調整下方配置權重)", 
             ["📈 多頭市場 (Bull Market) - 放大獲利", "📉 空頭/震盪市場 (Bear Market) - 著重防禦"], 
@@ -1275,7 +1272,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             def_pool = pool_df[pool_df['戰略定位'] == "🛡️ 防禦型資產"]
             neu_pool = pool_df[pool_df['戰略定位'] == "⚖️ 中性資產"]
             
-            # ✅ MPT 自動判讀上方點選的 "多空情境"，進行神經連動權重計算
+            # ✅ 接收剛才外部的 regime 多空市場狀態
             is_bull = "多頭" in regime
             target_g = 5 if is_bull else 2
             target_d = 2 if is_bull else 4
@@ -1342,7 +1339,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
                             <span style='color:#F8FAFC; font-weight:600;'>動態權重組合波動率</span><span style='color:{vol_color}; font-weight:bold; font-size:1.3rem;'>{true_vol:.1f}%</span>
                         </div>
-                        <div style='font-size:0.8rem; color:#64748B; margin-bottom:12px;'>* 已依建議權重加權共變異數</div>
+                        <div style='font-size:0.8rem; color:#64748B; margin-bottom:12px;'>* 已依多空動態權重加權共變異數</div>
                         <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
                             <span style='color:#9CA3AF;'>組合總體 Beta</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_beta:.2f}</span>
                         </div>
@@ -1386,7 +1383,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             
             pool_df['戰略定位'] = pool_df.apply(classify_buffett, axis=1)
             
-            # ✅ 價值投資模型自動判讀上方點選的 "多空情境"，進行神經連動權重計算
+            # ✅ 接收剛才外部的 regime 多空市場狀態
             is_bull = "多頭" in regime
             target_g = 6 if is_bull else 3
             target_v = 4 if is_bull else 7
