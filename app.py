@@ -528,7 +528,7 @@ def calculate_score(df, logic_type="Quant"):
                 plans.append("跌破 25% 防線")
                 scores[-1] = 0 
             elif sh > 1.0 and b >= 1.0: 
-                q_tag = "成長型資產"
+                q_tag = "成長型資Asset"
                 plans.append("配置主動能")
             elif sh > 1.0 and b < 1.0: 
                 q_tag = "防禦型資產"
@@ -1287,12 +1287,12 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             def_pool = pool_df[pool_df['戰略定位'] == "🛡️ 防禦型資產"]
             neu_pool = pool_df[pool_df['戰略定位'] == "⚖️ 中性資產"]
             
-            # ✅ MPT 動態調整 Volatility
+            # ✅ MPT 動態波動率參數調整
             is_bull = "多頭" in regime
             if is_bull:
-                target_vol_max = 0.20   # 更進攻
+               target_vol_max = 0.20   # 更進攻
             else:
-                target_vol_max = 0.10   # 更保守
+               target_vol_max = 0.10   # 更保守
             
             final_codes = greedy_mpt_optimization(grow_pool, returns_df, target_n=4, metric_col='sharpe', target_vol_max=target_vol_max)
             final_codes = greedy_mpt_optimization(def_pool, returns_df, target_n=3, metric_col='sharpe', initial_selected=final_codes, target_vol_max=target_vol_max)
@@ -1307,17 +1307,52 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             
             if len(port_df) > 0:
                 c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
+                
+                # ✅ MPT 共用權重函數 (Volatility Targeting 運算前置作業)
+                port_codes = port_df['代號'].tolist()
+                
+                def get_numeric_weight(row, regime):
+                   tag = row.get('戰略定位', '')
+                   s = row.get('sharpe', 0)
+                   v = row.get('volatility', 1.0)
+                   is_bull = "多頭" in regime
+                   if tag == "🚀 成長型資產":
+                       if is_bull:
+                           return 0.18 if (s > 2.0 and v < 0.3) else 0.14
+                       else:
+                           return 0.08
+                   elif tag == "🛡️ 防禦型資產":
+                       if is_bull:
+                           return 0.08
+                       else:
+                           return 0.15
+                   else:
+                       return 0.06 if is_bull else 0.10
+
+                raw_w = np.array(port_df.apply(lambda row: get_numeric_weight(row, regime), axis=1))
+                base_weights = raw_w / np.sum(raw_w) if np.sum(raw_w) > 0 else np.ones(len(raw_w))/len(raw_w)
+                
+                final_weights = base_weights
+                portfolio_volatility = port_df['volatility'].mean() 
+                
+                valid_codes = [c for c in port_codes if c in cov_matrix.columns]
+                if not cov_matrix.empty and len(valid_codes) == len(port_codes) and len(valid_codes) > 1:
+                    port_variance = np.dot(base_weights.T, np.dot(cov_matrix.loc[valid_codes, valid_codes], base_weights))
+                    portfolio_volatility = np.sqrt(port_variance)
+                    
+                    # ✅ 實作高階組合波動率調控 (Volatility Targeting)
+                    if portfolio_volatility > 0:
+                        final_weights = base_weights * (target_vol_max / portfolio_volatility)
+                
+                weight_map = {code: w for code, w in zip(port_codes, final_weights)}
+                
                 with c1:
                     def get_suggested_weight(row):
-                        tag = row.get('戰略定位', '')
-                        s = row.get('sharpe', 0)
-                        v = row.get('volatility', 1.0)
-                        if tag == "🚀 成長型資產": return "12% ~ 15%" if (s > 2.0 and v < 0.3) else "8% ~ 12%"
-                        elif tag == "🛡️ 防禦型資產": return "8% ~ 12%"
-                        else: return "5% ~ 8%"
+                        w = weight_map.get(row['代號'], 0)
+                        return f"{w*100:.1f}%"
                         
                     port_display = port_df[['代號', '名稱', '戰略定位', 'sharpe', 'volatility', 'beta']].copy()
-                    port_display['建議權重'] = port_df.apply(get_suggested_weight, axis=1)
+                    port_display['建議權重'] = port_display.apply(get_suggested_weight, axis=1)
                     st.dataframe(
                         port_display, hide_index=True, use_container_width=True,
                         column_config={
@@ -1329,35 +1364,13 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     )
                     
                 with c2:
-                    def get_numeric_weight(row):
-                        tag = row.get('戰略定位', '')
-                        s = row.get('sharpe', 0)
-                        v = row.get('volatility', 1.0)
-                        if tag == "🚀 成長型資產": return 0.135 if (s > 2.0 and v < 0.3) else 0.10
-                        elif tag == "🛡️ 防禦型資產": return 0.10
-                        else: return 0.065
-                        
                     avg_sharpe = port_df['sharpe'].mean()
                     avg_vol = port_df['volatility'].mean() * 100
                     avg_beta = port_df['beta'].mean()
                     
-                    port_codes = port_df['代號'].tolist()
-                    true_vol = avg_vol 
-                    if not cov_matrix.empty and len(port_codes) > 1:
-                        valid_codes = [c for c in port_codes if c in cov_matrix.columns]
-                        if len(valid_codes) == len(port_codes):
-                            raw_w = np.array(port_df.apply(get_numeric_weight, axis=1))
-                            weights = raw_w / np.sum(raw_w)
-                            port_variance = np.dot(weights.T, np.dot(cov_matrix.loc[valid_codes, valid_codes], weights))
-                            
-                            # ✅ 加入高階組合波動率調控 (Volatility Targeting)
-                            portfolio_volatility = np.sqrt(port_variance)
-                            if portfolio_volatility > 0:
-                                weights = weights * (target_vol_max / portfolio_volatility)
-                                
-                            true_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix.loc[valid_codes, valid_codes], weights))) * 100
-                    
+                    true_vol = portfolio_volatility * (target_vol_max / portfolio_volatility) * 100 if portfolio_volatility > 0 else portfolio_volatility * 100
                     vol_color = "#10B981" if true_vol <= 15 else "#EF4444"
+                    
                     st.markdown(f"""
                     <div style='background-color:#1E293B; padding:15px; border-radius:4px; border:1px solid #334155;'>
                         <h4 style='margin-top:0; color:#F8FAFC; border-bottom:1px solid #334155; padding-bottom:10px;'>MPT 效率前緣檢驗</h4>
@@ -1367,7 +1380,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
                             <span style='color:#F8FAFC; font-weight:600;'>動態權重組合波動率</span><span style='color:{vol_color}; font-weight:bold; font-size:1.3rem;'>{true_vol:.1f}%</span>
                         </div>
-                        <div style='font-size:0.8rem; color:#64748B; margin-bottom:12px;'>* 已依多空動態權重加權共變異數</div>
+                        <div style='font-size:0.8rem; color:#64748B; margin-bottom:12px;'>* 已啟動 Volatility Targeting 控制權重</div>
                         <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
                             <span style='color:#9CA3AF;'>組合總體 Beta</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_beta:.2f}</span>
                         </div>
