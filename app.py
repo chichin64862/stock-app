@@ -228,32 +228,25 @@ def get_tw_stock_list():
                     code_to_industry[code] = ind
     except: pass
 
-    # ✅ 正確：抓「完整興櫃公司清單」
+    # ✅ 整合使用者提供的興櫃 API 邏輯
     try:
-        url_esb = "https://www.tpex.org.tw/openapi/v1/tpex_esb_company_basic"
+        url_esb = "https://www.tpex.org.tw/openapi/v1/tpex_esb_latest_statistics"
         headers_esb = {"User-Agent": "Mozilla/5.0"}
         res_esb = requests.get(url_esb, headers=headers_esb, verify=False, timeout=10)
-
         if res_esb.status_code == 200:
             for item in res_esb.json():
                 code = str(item.get("SecuritiesCompanyCode", "")).strip()
                 name = str(item.get("CompanyName", "")).strip()
-
+                
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TWO"
-
-                    stock_map[full] = f"{full} {name}"
-
-                    ind = "興櫃"
-                    if ind not in industry_map:
-                        industry_map[ind] = []
-
-                    if full not in industry_map[ind]:
+                    if full not in stock_map:
+                        stock_map[full] = f"{full} {name}"
+                        ind = "興櫃"
+                        if ind not in industry_map: industry_map[ind] = []
                         industry_map[ind].append(full)
-
-                    code_to_industry[code] = ind
-    except:
-        pass
+                        code_to_industry[code] = ind
+    except: pass
 
     # 備援與 ETF 補齊 (ETF 不在上述上市櫃基本資料內)
     try:
@@ -535,7 +528,7 @@ def calculate_score(df, logic_type="Quant"):
                 plans.append("跌破 25% 防線")
                 scores[-1] = 0 
             elif sh > 1.0 and b >= 1.0: 
-                q_tag = "成長型資產"
+                q_tag = "成長型資Asset"
                 plans.append("配置主動能")
             elif sh > 1.0 and b < 1.0: 
                 q_tag = "防禦型資產"
@@ -1294,20 +1287,16 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             def_pool = pool_df[pool_df['戰略定位'] == "🛡️ 防禦型資產"]
             neu_pool = pool_df[pool_df['戰略定位'] == "⚖️ 中性資產"]
             
-            # ✅ 精準掛載第1個程式：多空動態切換波動率限制
+            # ✅ MPT 動態波動率參數調整
             is_bull = "多頭" in regime
             if is_bull:
-                target_vol_max = 0.20   # 更進攻
+               target_vol_max = 0.20   # 更進攻
             else:
-                target_vol_max = 0.10   # 更保守
+               target_vol_max = 0.10   # 更保守
             
-            target_g = 5 if is_bull else 2
-            target_d = 2 if is_bull else 4
-            target_n = 3 if is_bull else 4
-            
-            final_codes = greedy_mpt_optimization(grow_pool, returns_df, target_n=target_g, metric_col='sharpe', target_vol_max=target_vol_max)
-            final_codes = greedy_mpt_optimization(def_pool, returns_df, target_n=target_d, metric_col='sharpe', initial_selected=final_codes, target_vol_max=target_vol_max)
-            final_codes = greedy_mpt_optimization(neu_pool, returns_df, target_n=target_n, metric_col='sharpe', initial_selected=final_codes, target_vol_max=target_vol_max)
+            final_codes = greedy_mpt_optimization(grow_pool, returns_df, target_n=4, metric_col='sharpe', target_vol_max=target_vol_max)
+            final_codes = greedy_mpt_optimization(def_pool, returns_df, target_n=3, metric_col='sharpe', initial_selected=final_codes, target_vol_max=target_vol_max)
+            final_codes = greedy_mpt_optimization(neu_pool, returns_df, target_n=3, metric_col='sharpe', initial_selected=final_codes, target_vol_max=target_vol_max)
             
             if len(final_codes) < 10:
                 remaining_pool = pool_df[~pool_df['代號'].isin(final_codes)]
@@ -1319,26 +1308,26 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             if len(port_df) > 0:
                 c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
                 
-                # 在外部先行計算所有權重，確保 c1(表格) 與 c2(摘要) 數字 100% 同步
+                # ✅ MPT 共用權重函數 (Volatility Targeting 運算前置作業)
                 port_codes = port_df['代號'].tolist()
                 
                 def get_numeric_weight(row, regime):
-                    tag = row.get('戰略定位', '')
-                    s = row.get('sharpe', 0)
-                    v = row.get('volatility', 1.0)
-                    is_bull = "多頭" in regime
-                    if tag == "🚀 成長型資產":
-                        if is_bull:
-                            return 0.18 if (s > 2.0 and v < 0.3) else 0.14
-                        else:
-                            return 0.08
-                    elif tag == "🛡️ 防禦型資產":
-                        if is_bull:
-                            return 0.08
-                        else:
-                            return 0.15
-                    else:
-                        return 0.06 if is_bull else 0.10
+                   tag = row.get('戰略定位', '')
+                   s = row.get('sharpe', 0)
+                   v = row.get('volatility', 1.0)
+                   is_bull = "多頭" in regime
+                   if tag == "🚀 成長型資產":
+                       if is_bull:
+                           return 0.18 if (s > 2.0 and v < 0.3) else 0.14
+                       else:
+                           return 0.08
+                   elif tag == "🛡️ 防禦型資產":
+                       if is_bull:
+                           return 0.08
+                       else:
+                           return 0.15
+                   else:
+                       return 0.06 if is_bull else 0.10
 
                 raw_w = np.array(port_df.apply(lambda row: get_numeric_weight(row, regime), axis=1))
                 base_weights = raw_w / np.sum(raw_w) if np.sum(raw_w) > 0 else np.ones(len(raw_w))/len(raw_w)
@@ -1351,7 +1340,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     port_variance = np.dot(base_weights.T, np.dot(cov_matrix.loc[valid_codes, valid_codes], base_weights))
                     portfolio_volatility = np.sqrt(port_variance)
                     
-                    # ✅ 精準掛載第2個程式：波動率目標控制 (Volatility Targeting)
+                    # ✅ 實作高階組合波動率調控 (Volatility Targeting)
                     if portfolio_volatility > 0:
                         final_weights = base_weights * (target_vol_max / portfolio_volatility)
                 
