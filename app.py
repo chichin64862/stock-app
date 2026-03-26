@@ -13,6 +13,8 @@ import time
 from datetime import datetime
 import urllib.request
 import html
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # --- 關閉 SSL 驗證警告 (針對證交所 API) ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -177,7 +179,7 @@ def get_tw_stock_list():
     twse_ind_map = {
         "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
         "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
-        "11": "橡膠工業", "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅",
+        "11": "橡 বিপুল業", "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅",
         "17": "金融保險", "18": "貿易百貨", "19": "綜合", "20": "其他產業", "21": "化學工業",
         "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業",
         "26": "光電業", "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業",
@@ -228,25 +230,61 @@ def get_tw_stock_list():
                     code_to_industry[code] = ind
     except: pass
 
-    # ✅ 整合使用者提供的興櫃 API 邏輯
+    # ✅ 興櫃完整清單（官方 + 備援雙來源）
     try:
-        url_esb = "https://www.tpex.org.tw/openapi/v1/tpex_esb_latest_statistics"
-        headers_esb = {"User-Agent": "Mozilla/5.0"}
-        res_esb = requests.get(url_esb, headers=headers_esb, verify=False, timeout=10)
+        headers = {"User-Agent": "Mozilla/5.0"}
+
+        # === 主來源：興櫃公司基本資料 ===
+        url_esb = "https://www.tpex.org.tw/openapi/v1/tpex_esb_company_basic"
+        res_esb = requests.get(url_esb, headers=headers, verify=False, timeout=10)
+
         if res_esb.status_code == 200:
             for item in res_esb.json():
-                code = str(item.get("SecuritiesCompanyCode", "")).strip()
-                name = str(item.get("CompanyName", "")).strip()
-                
+
+                # ⚠️ 正確欄位（你原本有機率抓錯）
+                code = str(item.get("SecuritiesCompanyCode") or item.get("公司代號") or "").strip()
+                name = str(item.get("CompanyName") or item.get("公司名稱") or "").strip()
+
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TWO"
+
+                    stock_map[full] = f"{full} {name}"
+
+                    ind = "興櫃"
+                    if ind not in industry_map:
+                        industry_map[ind] = []
+
+                    if full not in industry_map[ind]:
+                        industry_map[ind].append(full)
+
+                    code_to_industry[code] = ind
+
+        # === 🔥 關鍵補漏：用另一支 API 補「遺失公司」 ===
+        url_esb2 = "https://www.tpex.org.tw/openapi/v1/tpex_esb_capitals_rank"
+        res_esb2 = requests.get(url_esb2, headers=headers, verify=False, timeout=10)
+
+        if res_esb2.status_code == 200:
+            for item in res_esb2.json():
+
+                code = str(item.get("SecuritiesCompanyCode", "")).strip()
+                name = str(item.get("CompanyName", "")).strip()
+
+                if len(code) == 4 and code.isdigit():
+                    full = f"{code}.TWO"
+
+                    # 只補缺的
                     if full not in stock_map:
                         stock_map[full] = f"{full} {name}"
+
                         ind = "興櫃"
-                        if ind not in industry_map: industry_map[ind] = []
+                        if ind not in industry_map:
+                            industry_map[ind] = []
+
                         industry_map[ind].append(full)
                         code_to_industry[code] = ind
-    except: pass
+
+    except:
+        pass
 
     # 備援與 ETF 補齊 (ETF 不在上述上市櫃基本資料內)
     try:
@@ -528,7 +566,7 @@ def calculate_score(df, logic_type="Quant"):
                 plans.append("跌破 25% 防線")
                 scores[-1] = 0 
             elif sh > 1.0 and b >= 1.0: 
-                q_tag = "成長型資Asset"
+                q_tag = "成長型資產"
                 plans.append("配置主動能")
             elif sh > 1.0 and b < 1.0: 
                 q_tag = "防禦型資產"
@@ -1287,16 +1325,20 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             def_pool = pool_df[pool_df['戰略定位'] == "🛡️ 防禦型資產"]
             neu_pool = pool_df[pool_df['戰略定位'] == "⚖️ 中性資產"]
             
-            # ✅ MPT 動態波動率參數調整
+            # ✅ MPT 動態目標波動率 (Dynamic Risk Budgeting)
             is_bull = "多頭" in regime
             if is_bull:
-               target_vol_max = 0.20   # 更進攻
+                target_vol_max = 0.20   # 更進攻
             else:
-               target_vol_max = 0.10   # 更保守
+                target_vol_max = 0.10   # 更保守
+                
+            target_g = 5 if is_bull else 2
+            target_d = 2 if is_bull else 4
+            target_n = 3 if is_bull else 4
             
-            final_codes = greedy_mpt_optimization(grow_pool, returns_df, target_n=4, metric_col='sharpe', target_vol_max=target_vol_max)
-            final_codes = greedy_mpt_optimization(def_pool, returns_df, target_n=3, metric_col='sharpe', initial_selected=final_codes, target_vol_max=target_vol_max)
-            final_codes = greedy_mpt_optimization(neu_pool, returns_df, target_n=3, metric_col='sharpe', initial_selected=final_codes, target_vol_max=target_vol_max)
+            final_codes = greedy_mpt_optimization(grow_pool, returns_df, target_n=target_g, metric_col='sharpe', target_vol_max=target_vol_max)
+            final_codes = greedy_mpt_optimization(def_pool, returns_df, target_n=target_d, metric_col='sharpe', initial_selected=final_codes, target_vol_max=target_vol_max)
+            final_codes = greedy_mpt_optimization(neu_pool, returns_df, target_n=target_n, metric_col='sharpe', initial_selected=final_codes, target_vol_max=target_vol_max)
             
             if len(final_codes) < 10:
                 remaining_pool = pool_df[~pool_df['代號'].isin(final_codes)]
@@ -1308,26 +1350,26 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             if len(port_df) > 0:
                 c1, c2, c3 = st.columns([1.35, 0.9, 1.25])
                 
-                # ✅ MPT 共用權重函數 (Volatility Targeting 運算前置作業)
+                # 計算組合總波動率，前置作業為了 C1 與 C2 能同步
                 port_codes = port_df['代號'].tolist()
                 
                 def get_numeric_weight(row, regime):
-                   tag = row.get('戰略定位', '')
-                   s = row.get('sharpe', 0)
-                   v = row.get('volatility', 1.0)
-                   is_bull = "多頭" in regime
-                   if tag == "🚀 成長型資產":
-                       if is_bull:
-                           return 0.18 if (s > 2.0 and v < 0.3) else 0.14
-                       else:
-                           return 0.08
-                   elif tag == "🛡️ 防禦型資產":
-                       if is_bull:
-                           return 0.08
-                       else:
-                           return 0.15
-                   else:
-                       return 0.06 if is_bull else 0.10
+                    tag = row.get('戰略定位', '')
+                    s = row.get('sharpe', 0)
+                    v = row.get('volatility', 1.0)
+                    is_bull = "多頭" in regime
+                    if tag == "🚀 成長型資產":
+                        if is_bull:
+                            return 0.18 if (s > 2.0 and v < 0.3) else 0.14
+                        else:
+                            return 0.08
+                    elif tag == "🛡️ 防禦型資產":
+                        if is_bull:
+                            return 0.08
+                        else:
+                            return 0.15
+                    else:
+                        return 0.06 if is_bull else 0.10
 
                 raw_w = np.array(port_df.apply(lambda row: get_numeric_weight(row, regime), axis=1))
                 base_weights = raw_w / np.sum(raw_w) if np.sum(raw_w) > 0 else np.ones(len(raw_w))/len(raw_w)
@@ -1340,7 +1382,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     port_variance = np.dot(base_weights.T, np.dot(cov_matrix.loc[valid_codes, valid_codes], base_weights))
                     portfolio_volatility = np.sqrt(port_variance)
                     
-                    # ✅ 實作高階組合波動率調控 (Volatility Targeting)
+                    # ✅ 波動率目標控制 (Volatility Targeting)
                     if portfolio_volatility > 0:
                         final_weights = base_weights * (target_vol_max / portfolio_volatility)
                 
@@ -1368,6 +1410,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                     avg_vol = port_df['volatility'].mean() * 100
                     avg_beta = port_df['beta'].mean()
                     
+                    # 計算 Volatility Targeting 後的真實組合波動率
                     true_vol = portfolio_volatility * (target_vol_max / portfolio_volatility) * 100 if portfolio_volatility > 0 else portfolio_volatility * 100
                     vol_color = "#10B981" if true_vol <= 15 else "#EF4444"
                     
@@ -1380,7 +1423,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
                         <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
                             <span style='color:#F8FAFC; font-weight:600;'>動態權重組合波動率</span><span style='color:{vol_color}; font-weight:bold; font-size:1.3rem;'>{true_vol:.1f}%</span>
                         </div>
-                        <div style='font-size:0.8rem; color:#64748B; margin-bottom:12px;'>* 已啟動 Volatility Targeting 控制權重</div>
+                        <div style='font-size:0.8rem; color:#64748B; margin-bottom:12px;'>* 已依多空情境啟用 Volatility Targeting</div>
                         <div style='display:flex; justify-content:space-between; margin-bottom:8px;'>
                             <span style='color:#9CA3AF;'>組合總體 Beta</span><span style='color:#F8FAFC; font-weight:bold; font-size:1.1rem;'>{avg_beta:.2f}</span>
                         </div>
