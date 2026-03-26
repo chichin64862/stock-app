@@ -175,7 +175,7 @@ def get_tw_stock_list():
     industry_map = {}
     code_to_industry = {}
     
-    # ✅ 加入產業數字轉中文對照表
+    #✅ 加入產業數字轉中文對照表
     twse_ind_map = {
         "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
         "06": "電器電纜", "07": "化學工業", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業",
@@ -240,12 +240,14 @@ def get_tw_stock_list():
 
         if res_esb.status_code == 200:
             for item in res_esb.json():
+
                 # ⚠️ 正確欄位（你原本有機率抓錯）
                 code = str(item.get("SecuritiesCompanyCode") or item.get("公司代號") or "").strip()
                 name = str(item.get("CompanyName") or item.get("公司名稱") or "").strip()
 
                 if len(code) == 4 and code.isdigit():
                     full = f"{code}.TWO"
+
                     stock_map[full] = f"{full} {name}"
 
                     ind = "興櫃"
@@ -263,6 +265,7 @@ def get_tw_stock_list():
 
         if res_esb2.status_code == 200:
             for item in res_esb2.json():
+
                 code = str(item.get("SecuritiesCompanyCode", "")).strip()
                 name = str(item.get("CompanyName", "")).strip()
 
@@ -279,6 +282,7 @@ def get_tw_stock_list():
 
                         industry_map[ind].append(full)
                         code_to_industry[code] = ind
+
     except:
         pass
 
@@ -1321,7 +1325,7 @@ if st.session_state['scan_finished'] and st.session_state['raw_data'] is not Non
             def_pool = pool_df[pool_df['戰略定位'] == "🛡️ 防禦型資產"]
             neu_pool = pool_df[pool_df['戰略定位'] == "⚖️ 中性資產"]
             
-            # ✅ 精準掛載第1個程式：多空動態切換波動率限制
+            # ✅ 新增：精準導入多空動態波動率控制
             is_bull = "多頭" in regime
             if is_bull:
                 target_vol_max = 0.20   # 更進攻
